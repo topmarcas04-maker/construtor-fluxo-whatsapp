@@ -24,6 +24,8 @@ export async function GET() {
         conversation: {
           with: {
             messages: {
+              // Sem o arquivo (áudio/foto): a lista só precisa do texto da última mensagem
+              columns: { id: true, body: true, direction: true, sentAt: true, messageType: true, sender: true },
               orderBy: (m, { desc }) => [desc(m.sentAt)],
               limit: 1,
             },
