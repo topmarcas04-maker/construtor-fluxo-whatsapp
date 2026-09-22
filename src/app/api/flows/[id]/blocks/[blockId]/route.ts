@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { db } from "@/db/client";
 import { flowBlocks } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -5,8 +6,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string; blockId: string } }
+  ctx: { params: Promise<{ id: string; blockId: string }> }
 ) {
+  const params = await ctx.params;
   try {
     const { positionX, positionY, config } = await request.json();
 
@@ -29,8 +31,9 @@ export async function PATCH(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string; blockId: string } }
+  ctx: { params: Promise<{ id: string; blockId: string }> }
 ) {
+  const params = await ctx.params;
   try {
     await db.delete(flowBlocks).where(eq(flowBlocks.id, params.blockId));
     return NextResponse.json({ success: true });

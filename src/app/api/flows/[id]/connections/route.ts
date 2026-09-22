@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { db } from "@/db/client";
 import { flowConnections } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -5,8 +6,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  ctx: { params: Promise<{ id: string }> }
 ) {
+  const params = await ctx.params;
   try {
     const { fromBlockId, toBlockId, label, conditionKey, conditionValue } =
       await request.json();
@@ -41,8 +43,9 @@ export async function POST(
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  ctx: { params: Promise<{ id: string }> }
 ) {
+  const params = await ctx.params;
   try {
     const connections = await db
       .select()

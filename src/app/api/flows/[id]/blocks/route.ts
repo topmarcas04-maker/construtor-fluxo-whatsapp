@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { flowBlocks } from "@/db/schema";
@@ -13,7 +14,8 @@ interface Params {
  * POST /api/flows/[id]/blocks
  * Create a new block in a flow
  */
-export async function POST(req: NextRequest, { params }: Params) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string; }> }) {
+  const params = await ctx.params;
   try {
     const { id } = params;
     const body = await req.json();

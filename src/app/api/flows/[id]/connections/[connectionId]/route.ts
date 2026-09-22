@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { db } from "@/db/client";
 import { flowConnections } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -5,8 +6,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string; connectionId: string } }
+  ctx: { params: Promise<{ id: string; connectionId: string }> }
 ) {
+  const params = await ctx.params;
   try {
     await db.delete(flowConnections).where(eq(flowConnections.id, params.connectionId));
     return NextResponse.json({ success: true });
@@ -17,8 +19,9 @@ export async function DELETE(
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string; connectionId: string } }
+  ctx: { params: Promise<{ id: string; connectionId: string }> }
 ) {
+  const params = await ctx.params;
   try {
     const { label, conditionKey, conditionValue } = await request.json();
 

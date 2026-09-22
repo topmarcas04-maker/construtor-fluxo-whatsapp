@@ -1,11 +1,4 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {
-  typescript: {
-    tsconfigPath: './tsconfig.json',
-  },
-  experimental: {
-    turbopack: false,
-  },
-};
+const nextConfig = {};
 
 module.exports = nextConfig;

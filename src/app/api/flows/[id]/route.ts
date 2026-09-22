@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { flows, flowBlocks, flowConnections, flowTriggers } from "@/db/schema";
@@ -13,7 +14,8 @@ interface Params {
  * GET /api/flows/[id]
  * Get a specific flow with all its blocks, connections, and triggers
  */
-export async function GET(req: NextRequest, { params }: Params) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string; }> }) {
+  const params = await ctx.params;
   try {
     const { id } = params;
 
@@ -44,7 +46,8 @@ export async function GET(req: NextRequest, { params }: Params) {
  * PATCH /api/flows/[id]
  * Update a flow
  */
-export async function PATCH(req: NextRequest, { params }: Params) {
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string; }> }) {
+  const params = await ctx.params;
   try {
     const { id } = params;
     const body = await req.json();
@@ -76,7 +79,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
  * DELETE /api/flows/[id]
  * Delete a flow (cascades to blocks, connections, triggers)
  */
-export async function DELETE(req: NextRequest, { params }: Params) {
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string; }> }) {
+  const params = await ctx.params;
   try {
     const { id } = params;
 

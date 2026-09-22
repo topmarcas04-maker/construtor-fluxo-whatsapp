@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { flows, flowBlocks, flowConnections, flowTriggers } from "@/db/schema";
