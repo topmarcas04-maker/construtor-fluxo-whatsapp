@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { Sidebar } from "@/components/layout/Sidebar";
 
 export const metadata: Metadata = {
   title: "Construtor de Fluxo WhatsApp",
-  description: "Visual flow builder for WhatsApp automation",
+  description: "SDR com IA para WhatsApp — Resplen Motors",
 };
 
 export default function RootLayout({
@@ -14,14 +15,10 @@ export default function RootLayout({
   return (
     <html lang="pt-BR">
       <body className="bg-gray-50">
-        <nav className="bg-white shadow">
-          <div className="max-w-7xl mx-auto px-4 py-4">
-            <h1 className="text-2xl font-bold text-blue-600">Flow Builder</h1>
-          </div>
-        </nav>
-        <main className="max-w-7xl mx-auto px-4 py-8">
-          {children}
-        </main>
+        <div className="flex h-screen overflow-hidden">
+          <Sidebar />
+          <main className="flex-1 overflow-y-auto">{children}</main>
+        </div>
       </body>
     </html>
   );

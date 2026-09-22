@@ -1,6 +1,13 @@
 @import "tailwindcss";
 @config "../../tailwind.config.ts";
 
+:root {
+  --sidebar-bg: #0f2d3d;
+  --sidebar-active: #1c5169;
+  --accent: #1c8ca8;
+  --accent-dark: #146a80;
+}
+
 * {
   margin: 0;
   padding: 0;

@@ -151,6 +151,13 @@ async function handleIncomingMessage(msg: any) {
         })
         .returning();
       conversation = newConv;
+
+      // Cria automaticamente o card de lead no funil do SDR (Primeiro contato)
+      await db.insert(leads).values({
+        conversationId: conversation.id,
+        cardName: "Lead",
+        stage: "FIRST_CONTACT",
+      });
     }
 
     // 2. Registrar mensagem
@@ -162,6 +169,10 @@ async function handleIncomingMessage(msg: any) {
       whatsappMessageId: msg.key.id,
       sentAt: new Date(),
     });
+    await db
+      .update(conversations)
+      .set({ lastMessageAt: new Date() })
+      .where(eq(conversations.id, conversation.id));
 
     // 3. Encontrar fluxo ativo para esta conversa
     let state = await db.query.conversationStates.findFirst({
@@ -550,6 +561,53 @@ function startStatusServer() {
         res.writeHead(200, { "Content-Type": "text/plain" });
         return res.end("ok");
       }
+
+      // API interna usada pelo app Next.js (SDR): status da conexão e envio
+      // manual de mensagens pelo inbox. Protegida pelo mesmo token do QR
+      // quando QR_ACCESS_TOKEN está configurado.
+      const internalToken = req.headers["x-internal-token"];
+      const isAuthorized = !token || internalToken === token;
+
+      if (url.pathname === "/status.json") {
+        if (!isAuthorized) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ error: "unauthorized" }));
+        }
+        const qrDataUrl = currentQr
+          ? await QRCode.toDataURL(currentQr, { width: 320 })
+          : null;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        return res.end(
+          JSON.stringify({
+            connected: Boolean(connectedPhone),
+            phone: connectedPhone,
+            qrDataUrl,
+          })
+        );
+      }
+
+      if (url.pathname === "/send" && req.method === "POST") {
+        if (!isAuthorized) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ error: "unauthorized" }));
+        }
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const { phoneJid, text } = JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}");
+          if (!phoneJid || !text) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({ error: "phoneJid e text são obrigatórios" }));
+          }
+          const result = await sendMessage(phoneJid, text);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify(result));
+        } catch (error) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ error: String(error) }));
+        }
+      }
+
       if (token && url.searchParams.get("token") !== token) {
         res.writeHead(401, { "Content-Type": "text/html; charset=utf-8" });
         return res.end("<h2>Acesso negado. Use ?token=SUA_SENHA no final do endereco.</h2>");

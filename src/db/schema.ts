@@ -74,7 +74,14 @@ export const leadStageEnum = pgEnum("lead_stage", [
   "NEGOTIATING",
   "CLOSED_WON",
   "CLOSED_LOST",
+  // Estágios do funil de SDR (inbox de leads via WhatsApp)
+  "FIRST_CONTACT",
+  "SECOND_CONTACT",
+  "HOT_LEAD",
+  "SALE",
 ]);
+
+export const saleTypeEnum = pgEnum("sale_type", ["ANY", "WHOLESALE", "RETAIL"]);
 
 // ============================================================================
 // FLOWS & BUILDER
@@ -210,10 +217,12 @@ export const leads = pgTable(
       .notNull()
       .references(() => conversations.id, { onDelete: "cascade" }),
     cardName: varchar("card_name", { length: 200 }),
-    stage: leadStageEnum("stage").notNull().default("PROSPECT"),
+    stage: leadStageEnum("stage").notNull().default("FIRST_CONTACT"),
     city: varchar("city", { length: 120 }),
     email: varchar("email", { length: 200 }),
     phone: varchar("phone", { length: 40 }),
+    /** Vendedor responsável pelo lead (atribuído manualmente ou por regra de distribuição) */
+    sellerId: uuid("seller_id").references(() => sellers.id, { onDelete: "set null" }),
     /** Valor da venda em reais */
     dealValue: doublePrecision("deal_value"),
     /** Se a venda foi fechada */
@@ -228,8 +237,74 @@ export const leads = pgTable(
     uniqueIndex("leads_conversation_id_idx").on(table.conversationId),
     index("leads_stage_idx").on(table.stage),
     index("leads_closed_idx").on(table.closed),
+    index("leads_seller_id_idx").on(table.sellerId),
   ]
 );
+
+// ============================================================================
+// SDR — VENDEDORES, ETIQUETAS, DISTRIBUIÇÃO, RESPOSTAS RÁPIDAS, IA
+// ============================================================================
+
+export const sellers = pgTable("sellers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 150 }).notNull(),
+  phone: varchar("phone", { length: 40 }),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const tags = pgTable("tags", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 60 }).notNull(),
+  color: varchar("color", { length: 20 }).notNull().default("blue"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const leadTags = pgTable(
+  "lead_tags",
+  {
+    leadId: uuid("lead_id")
+      .notNull()
+      .references(() => leads.id, { onDelete: "cascade" }),
+    tagId: uuid("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    uniqueIndex("lead_tags_lead_id_tag_id_idx").on(table.leadId, table.tagId),
+    index("lead_tags_tag_id_idx").on(table.tagId),
+  ]
+);
+
+export const distributionRules = pgTable(
+  "distribution_rules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Cidade/bairro. Vazio = qualquer região. */
+    region: varchar("region", { length: 120 }),
+    saleType: saleTypeEnum("sale_type").notNull().default("ANY"),
+    sellerId: uuid("seller_id")
+      .notNull()
+      .references(() => sellers.id, { onDelete: "cascade" }),
+    priority: integer("priority").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("distribution_rules_priority_idx").on(table.priority)]
+);
+
+export const quickReplies = pgTable("quick_replies", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  shortcut: varchar("shortcut", { length: 60 }).notNull(),
+  message: text("message").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const aiSettings = pgTable("ai_settings", {
+  id: varchar("id", { length: 20 }).primaryKey().default("default"),
+  systemPrompt: text("system_prompt").notNull().default(""),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 // ============================================================================
 // FLOW EXECUTION
@@ -316,10 +391,36 @@ export const conversationsRelations = relations(conversations, ({ many }) => ({
   states: many(conversationStates),
 }));
 
-export const leadsRelations = relations(leads, ({ one }) => ({
+export const leadsRelations = relations(leads, ({ one, many }) => ({
   conversation: one(conversations, {
     fields: [leads.conversationId],
     references: [conversations.id],
+  }),
+  seller: one(sellers, {
+    fields: [leads.sellerId],
+    references: [sellers.id],
+  }),
+  leadTags: many(leadTags),
+}));
+
+export const sellersRelations = relations(sellers, ({ many }) => ({
+  leads: many(leads),
+  rules: many(distributionRules),
+}));
+
+export const tagsRelations = relations(tags, ({ many }) => ({
+  leadTags: many(leadTags),
+}));
+
+export const leadTagsRelations = relations(leadTags, ({ one }) => ({
+  lead: one(leads, { fields: [leadTags.leadId], references: [leads.id] }),
+  tag: one(tags, { fields: [leadTags.tagId], references: [tags.id] }),
+}));
+
+export const distributionRulesRelations = relations(distributionRules, ({ one }) => ({
+  seller: one(sellers, {
+    fields: [distributionRules.sellerId],
+    references: [sellers.id],
   }),
 }));
 

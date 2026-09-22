@@ -38,7 +38,7 @@ export default function BuilderPage() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-2xl mx-auto p-8">
       <h1 className="text-3xl font-bold text-gray-900 mb-8">Criar Novo Fluxo</h1>
 
       <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow p-8 space-y-6">
