@@ -29,6 +29,15 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       return NextResponse.json({ error: "Este lead é de outro vendedor" }, { status: 403 });
     }
 
+    // Campos do card precisam da permissão de editar; pausar/ativar a IA é livre para quem atende
+    const editsCard = Object.keys(body).some((k) => k !== "aiPaused");
+    if (editsCard && !auth.user.canEditLeads) {
+      return NextResponse.json(
+        { error: "Você não tem permissão para editar os cards. Peça ao administrador." },
+        { status: 403 }
+      );
+    }
+
     const ownTag = async (tagId: string) =>
       Boolean(await db.query.tags.findFirst({ where: and(eq(tags.id, tagId), eq(tags.accountId, auth.accountId)) }));
     if (body.addTagId && (await ownTag(body.addTagId))) {

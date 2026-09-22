@@ -43,5 +43,6 @@ export function accountValues(
     values.aiSource = s;
   }
   if (body.active !== undefined) values.active = Boolean(body.active);
+  if (body.leadEdit !== undefined) values.leadEdit = Boolean(body.leadEdit);
   return { values } as const;
 }

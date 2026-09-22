@@ -33,6 +33,8 @@ interface Account {
   modules: string[];
   aiSource: "OWN" | "PARENT" | "NONE";
   hasOwnKey: boolean;
+  leadEdit: boolean;
+  waState: string | null;
   active: boolean;
   createdAt: string;
   stats: { users: number; children: number; leads: number; admin_email: string | null } | null;
@@ -50,6 +52,7 @@ type Form = {
   active: boolean;
   modules: string[];
   aiSource: "OWN" | "PARENT" | "NONE";
+  leadEdit: boolean;
   adminName: string;
   adminEmail: string;
   adminPassword: string;
@@ -131,6 +134,7 @@ export function AccountsScreen() {
       active: true,
       modules: grantable.map((m) => m.key),
       aiSource: "PARENT",
+      leadEdit: false,
       adminName: "",
       adminEmail: "",
       adminPassword: "",
@@ -151,6 +155,7 @@ export function AccountsScreen() {
       active: a.active,
       modules: a.modules,
       aiSource: a.aiSource,
+      leadEdit: a.leadEdit,
       adminName: "",
       adminEmail: "",
       adminPassword: "",
@@ -177,6 +182,7 @@ export function AccountsScreen() {
         active: form.active,
         modules: form.modules,
         aiSource: form.aiSource,
+        leadEdit: form.leadEdit,
       };
       if (isNew) body.admin = { name: form.adminName || form.responsible, email: form.adminEmail, password: form.adminPassword };
       const res = await fetch(isNew ? "/api/accounts" : `/api/accounts/${(editing as Account).id}`, {
@@ -333,7 +339,18 @@ export function AccountsScreen() {
                       <p>{a.stats?.users ?? 0} usuários</p>
                       {isPartners && <p>{a.stats?.children ?? 0} clientes</p>}
                     </td>
-                    <td className="px-5 py-3.5">{a.active ? <Badge tone="green">Ativo</Badge> : <Badge>Inativo</Badge>}</td>
+                    <td className="px-5 py-3.5">
+                      <div className="flex flex-col items-start gap-1">
+                        {a.active ? <Badge tone="green">Ativo</Badge> : <Badge>Inativo</Badge>}
+                        {a.waState === "connected" ? (
+                          <Badge tone="green">WhatsApp on</Badge>
+                        ) : a.waState === "reconnecting" || a.waState === "logged_out" ? (
+                          <Badge tone="red">WhatsApp caiu</Badge>
+                        ) : (
+                          <Badge>Sem WhatsApp</Badge>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-5 py-3.5 text-right">
                       <div className="flex justify-end gap-1">
                         <Button variant="secondary" onClick={() => enter(a)} title="Entrar no painel desta conta" className="px-3">
@@ -490,6 +507,21 @@ export function AccountsScreen() {
               </div>
               <p className="mt-2 text-xs text-slate-400">{AI_SOURCE_LABEL[form.aiSource]}</p>
             </section>
+
+            {!isPartners && (
+              <section className="rounded-xl border border-slate-200 p-4">
+                <p className="mb-1 font-semibold text-slate-800">Editar cards dos leads</p>
+                <p className="mb-3 text-sm text-slate-500">
+                  Se desligado, o cliente vê e conversa com os leads, mas não muda estágio, vendedor, valor, etiquetas nem os
+                  dados do card. Você (ou quem acessar pelo botão Acessar) continua podendo editar.
+                </p>
+                <Toggle
+                  checked={form.leadEdit}
+                  onChange={(v) => setForm({ ...form, leadEdit: v })}
+                  label={form.leadEdit ? "Cliente pode editar os cards" : "Só você edita os cards"}
+                />
+              </section>
+            )}
 
             <section className="grid gap-4">
               <Field label="Observações">

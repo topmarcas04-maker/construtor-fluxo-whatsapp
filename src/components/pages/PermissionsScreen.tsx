@@ -324,6 +324,23 @@ export function PermissionsScreen() {
             )}
           </div>
 
+          {form.role === "SELLER" && (
+            <div className="md:col-span-2 rounded-lg border border-slate-200 p-3">
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  className="accent-[var(--accent)]"
+                  checked={form.permissions.includes("editar-leads")}
+                  onChange={() => togglePerm("editar-leads")}
+                />
+                <span>
+                  <b>Pode editar os cards dos leads</b> (estágio, vendedor, valor, etiquetas e dados).{" "}
+                  <span className="text-slate-500">Sem isso, o vendedor só conversa e vê.</span>
+                </span>
+              </label>
+            </div>
+          )}
+
           <div className="md:col-span-2">
             <Toggle
               checked={form.active}

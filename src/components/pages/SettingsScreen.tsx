@@ -21,7 +21,7 @@ import {
   ErrorNote,
 } from "@/components/ui";
 
-type TabKey = "ia" | "vendedores" | "distribuicao" | "etiquetas" | "respostas";
+type TabKey = "ia" | "whatsapp" | "vendedores" | "distribuicao" | "etiquetas" | "respostas";
 
 interface Rule {
   id: string;
@@ -42,6 +42,8 @@ interface AiSettings {
   businessHours: string | null;
   reminderMessage: string;
   reminderMinutesBefore: number;
+  signMessages: boolean;
+  alertPhone: string | null;
   integration: {
     source: "OWN" | "PARENT" | "NONE";
     ownKeyHint: string | null;
@@ -310,6 +312,85 @@ function AiTab() {
             </>
           ) : saving ? (
             "Salvando..."
+          ) : (
+            "Salvar"
+          )}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+function WhatsAppPrefsTab() {
+  const [sign, setSign] = useState<boolean | null>(null);
+  const [phone, setPhone] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/sdr/settings")
+      .then((r) => r.json())
+      .then((s: AiSettings) => {
+        setSign(s.signMessages !== false);
+        setPhone(s.alertPhone || "");
+      });
+  }, []);
+
+  if (sign === null) return <p className="p-6 text-sm text-slate-400">Carregando...</p>;
+
+  const save = async () => {
+    setError(null);
+    try {
+      await api("/api/sdr/settings", "PUT", { signMessages: sign, alertPhone: phone });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="space-y-6 p-6">
+      <div className="rounded-xl border border-slate-200 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-2xl">
+            <p className="font-semibold text-slate-900">Mostrar o nome de quem está atendendo</p>
+            <p className="mt-1 text-sm text-slate-600">
+              As mensagens enviadas pelo painel saem com o nome do vendedor em negrito no começo. O cliente vê assim no
+              WhatsApp:
+            </p>
+            <div className="mt-3 inline-block rounded-xl rounded-br-sm bg-[#d9fdd3] px-3 py-2 text-sm text-slate-800 shadow-sm">
+              <b>Fernando:</b>
+              <br />
+              Olá! Tudo bem? Posso te ajudar?
+            </div>
+          </div>
+          <Toggle checked={sign} onChange={setSign} label={sign ? "Ligado" : "Desligado"} />
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 p-5">
+        <p className="font-semibold text-slate-900">Alerta de WhatsApp desconectado</p>
+        <p className="mt-1 mb-3 text-sm text-slate-600">
+          Se o WhatsApp desta conta cair (celular sem internet, saiu pelo celular), enviamos um aviso para este número. O
+          aviso sai pelo WhatsApp de quem cadastrou esta conta. Além disso, aparece uma faixa vermelha no painel.
+        </p>
+        <Input
+          className="max-w-sm"
+          placeholder="WhatsApp com DDD (ex.: 35999998888)"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+        />
+      </div>
+
+      <ErrorNote message={error} />
+      <div className="flex justify-end">
+        <Button onClick={save}>
+          {saved ? (
+            <>
+              <Check size={16} /> Salvo
+            </>
           ) : (
             "Salvar"
           )}
@@ -695,6 +776,7 @@ export function SettingsScreen() {
           onChange={setTab}
           tabs={[
             { key: "ia", label: "Atendimento IA" },
+            { key: "whatsapp", label: "WhatsApp" },
             { key: "vendedores", label: "Vendedores" },
             { key: "distribuicao", label: "Distribuição" },
             { key: "etiquetas", label: "Etiquetas" },
@@ -702,6 +784,7 @@ export function SettingsScreen() {
           ]}
         />
         {tab === "ia" && <AiTab />}
+        {tab === "whatsapp" && <WhatsAppPrefsTab />}
         {tab === "vendedores" && <SellersTab />}
         {tab === "distribuicao" && <RulesTab />}
         {tab === "etiquetas" && <TagsTab />}

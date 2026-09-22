@@ -104,6 +104,8 @@ export async function PUT(req: NextRequest) {
   if (typeof body.handoffMessage === "string") set.handoffMessage = body.handoffMessage;
   if (typeof body.reminderMessage === "string") set.reminderMessage = body.reminderMessage;
   if (typeof body.businessHours === "string") set.businessHours = body.businessHours;
+  if (typeof body.signMessages === "boolean") set.signMessages = body.signMessages;
+  if (body.alertPhone !== undefined) set.alertPhone = String(body.alertPhone || "").replace(/\D/g, "").slice(0, 20) || null;
   if (body.reminderMinutesBefore !== undefined) {
     set.reminderMinutesBefore = Math.max(0, Math.min(1440, Number(body.reminderMinutesBefore) || 0));
   }

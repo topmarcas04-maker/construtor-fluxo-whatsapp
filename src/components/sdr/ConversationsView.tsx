@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Send, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell } from "lucide-react";
+import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell } from "lucide-react";
 import type { Lead, Message, QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import {
   TAG_DOT_CLASSES,
@@ -12,6 +12,8 @@ import {
   timeLabel,
 } from "@/lib/types/sdr";
 import { LeadPanel } from "./LeadPanel";
+import { MessageMedia, mediaCaption } from "./MessageMedia";
+import { Composer, type OutgoingPayload } from "./Composer";
 
 interface Props {
   leads: Lead[];
@@ -22,6 +24,8 @@ interface Props {
   onLeadUpdated: () => void;
   selectedLeadId: string | null;
   onSelectLead: (leadId: string) => void;
+  /** Pode editar o card (estágio, vendedor, dados) */
+  canEdit: boolean;
 }
 
 type Filter = "todos" | "ia" | "vendedor" | "quentes";
@@ -72,11 +76,10 @@ export function ConversationsView({
   onLeadUpdated,
   selectedLeadId,
   onSelectLead,
+  canEdit,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("todos");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -135,28 +138,21 @@ export function ConversationsView({
     if (res.ok) setMessages(await res.json());
   };
 
-  const handleSend = async () => {
-    if (!selectedLead || !draft.trim()) return;
-    setSending(true);
+  const handleSend = async (payload: OutgoingPayload) => {
+    if (!selectedLead) return false;
     setSendError(null);
-    const text = draft;
-    setDraft("");
-    try {
-      const res = await fetch(`/api/sdr/conversations/${selectedLead.conversationId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setSendError(data.error || "Não foi possível enviar");
-        setDraft(text);
-      }
-      await reloadMessages();
-      onLeadUpdated();
-    } finally {
-      setSending(false);
+    const res = await fetch(`/api/sdr/conversations/${selectedLead.conversationId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setSendError(data.error || "Não foi possível enviar");
     }
+    await reloadMessages();
+    onLeadUpdated();
+    return res.ok;
   };
 
   const patchLead = async (fields: Record<string, unknown>) => {
@@ -168,13 +164,6 @@ export function ConversationsView({
     });
     onLeadUpdated();
   };
-
-  // Respostas rápidas: digite "/" + atalho
-  const slashQuery = draft.startsWith("/") ? draft.slice(1).toLowerCase() : null;
-  const suggestions =
-    slashQuery !== null
-      ? quickReplies.filter((q) => q.shortcut.toLowerCase().startsWith(slashQuery)).slice(0, 6)
-      : [];
 
   const FILTERS: { key: Filter; label: string }[] = [
     { key: "todos", label: "Todos" },
@@ -282,6 +271,8 @@ export function ConversationsView({
             <div className="flex flex-wrap items-center gap-2">
               <select
                 value={funnelColumn(selectedLead.stage)}
+                disabled={!canEdit}
+                title={canEdit ? undefined : "Sem permissão para editar o card"}
                 onChange={(e) => patchLead({ stage: e.target.value })}
                 className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
               >
@@ -345,13 +336,16 @@ export function ConversationsView({
                             </>
                           ) : (
                             <>
-                              <UserRound size={11} /> Equipe
+                              <UserRound size={11} /> {msg.authorName || "Equipe"}
                             </>
                           )}
                         </p>
                       )}
-                      {msg.mediaDataUrl ? (
-                        <p className="italic opacity-80">[mídia]</p>
+                      {msg.messageType && msg.messageType !== "text" ? (
+                        <div className="space-y-1.5">
+                          <MessageMedia msg={msg} out={out} />
+                          {mediaCaption(msg) && <p className="whitespace-pre-wrap break-words">{mediaCaption(msg)}</p>}
+                        </div>
                       ) : (
                         <p className="whitespace-pre-wrap break-words">{msg.body}</p>
                       )}
@@ -365,50 +359,12 @@ export function ConversationsView({
             )}
           </div>
 
-          <div className="relative border-t border-slate-200 bg-white px-6 py-3">
-            {suggestions.length > 0 && (
-              <div className="absolute bottom-full left-6 right-6 mb-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
-                {suggestions.map((q) => (
-                  <button
-                    key={q.id}
-                    onClick={() => setDraft(q.message)}
-                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
-                  >
-                    <b className="text-[var(--accent)]">/{q.shortcut}</b>{" "}
-                    <span className="text-slate-600">{q.message.slice(0, 80)}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+          <div className="border-t border-slate-200 bg-white px-6 py-3">
             {sendError && <p className="mb-2 text-sm text-red-600">{sendError}</p>}
             {!selectedLead.aiPaused && !selectedLead.seller && (
-              <p className="mb-2 text-xs text-slate-400">
-                Se você enviar uma mensagem, a IA pausa e você assume a conversa.
-              </p>
+              <p className="mb-2 text-xs text-slate-400">Se você enviar uma mensagem, a IA pausa e você assume a conversa.</p>
             )}
-            <div className="flex items-end gap-2">
-              <textarea
-                rows={1}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-                placeholder="Mensagem  (digite / para respostas rápidas)"
-                className="max-h-40 min-h-[44px] flex-1 resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-[15px] outline-none focus:border-[var(--accent)] focus:bg-white"
-              />
-              <button
-                onClick={handleSend}
-                disabled={sending || !draft.trim()}
-                className="btn-primary flex h-11 w-11 items-center justify-center rounded-full"
-                aria-label="Enviar"
-              >
-                <Send size={18} />
-              </button>
-            </div>
+            <Composer quickReplies={quickReplies} onSend={handleSend} />
           </div>
         </div>
       )}
@@ -416,7 +372,7 @@ export function ConversationsView({
       {/* Ficha do lead */}
       {selectedLead && (
         <div className="hidden min-h-0 overflow-y-auto border-l border-slate-200 bg-white xl:block">
-          <LeadPanel lead={selectedLead} tags={tags} sellers={sellers} onPatch={patchLead} />
+          <LeadPanel lead={selectedLead} tags={tags} sellers={sellers} onPatch={patchLead} canEdit={canEdit} />
         </div>
       )}
     </div>

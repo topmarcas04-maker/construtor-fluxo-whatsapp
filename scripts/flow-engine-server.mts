@@ -12,6 +12,7 @@
 
 import {
   makeWASocket,
+  downloadMediaMessage,
   DisconnectReason,
   Browsers,
   initAuthCreds,
@@ -43,6 +44,8 @@ import { runSdrAgent, pickSeller, type AgentDecision } from "../src/lib/ai/sdrAg
 import { resolveAiKey } from "../src/lib/tenancy/aiKey";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
+import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 
 dotenv.config({ path: ".env.local" });
 
@@ -60,6 +63,11 @@ const AI_DEBOUNCE_MS = Number(process.env.AI_DEBOUNCE_MS || 6000);
 const SELFTEST = process.env.FLOW_ENGINE_SELFTEST === "1";
 
 type Sender = "AI" | "HUMAN" | "AUTO";
+
+/** Mídia maior que isso não é guardada no banco (só o aviso "[vídeo]" etc.) */
+const MAX_STORED_MEDIA = 12 * 1024 * 1024;
+/** Mensagens recuperadas depois de uma queda: a IA só responde se forem recentes */
+const AI_RECOVERY_WINDOW_MS = 12 * 3600e3;
 type Sock = ReturnType<typeof makeWASocket>;
 
 interface Session {
@@ -70,6 +78,8 @@ interface Session {
   qr: string | null;
   qrCount: number;
   stopping: boolean;
+  /** Desde quando está caído tentando reconectar */
+  downSince: number | null;
 }
 
 const sessions = new Map<string, Session>();
@@ -142,13 +152,77 @@ async function hasSavedLogin(accountId: string) {
 }
 
 // ============================================================================
+// SITUAÇÃO DO WHATSAPP (gravada no banco para o painel mostrar avisos)
+// ============================================================================
+
+async function setWaState(accountId: string, state: string, phone: string | null) {
+  try {
+    const set: Record<string, unknown> = { waState: state, waStateAt: new Date() };
+    if (phone) set.waPhone = phone;
+    if (state === "connected") set.waLastSeenAt = new Date();
+    await db.update(accounts).set(set).where(eq(accounts.id, accountId));
+  } catch (e) {
+    console.error("[WhatsApp] setWaState:", e);
+  }
+}
+
+async function touchLastSeen(accountId: string) {
+  await db.update(accounts).set({ waLastSeenAt: new Date() }).where(eq(accounts.id, accountId)).catch(() => {});
+}
+
+async function getLastSeen(accountId: string) {
+  const a = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId), columns: { waLastSeenAt: true } });
+  return a?.waLastSeenAt || null;
+}
+
+/** Contas que já receberam alerta desta queda (evita mandar vários) */
+const alertSent = new Set<string>();
+
+/** Avisa por WhatsApp que o número de uma conta caiu, usando o WhatsApp da conta acima (parceiro/master) */
+async function sendDisconnectAlert(accountId: string, loggedOut: boolean) {
+  if (alertSent.has(accountId)) return;
+  alertSent.add(accountId);
+  try {
+    const acc = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
+    if (!acc) return;
+    const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
+    const target = (settings?.alertPhone || acc.phone || "").replace(/\D/g, "");
+    // Procura uma conta acima com WhatsApp conectado para enviar o alerta
+    let senderId: string | null = acc.parentId;
+    let senderSession: Session | undefined;
+    for (let i = 0; senderId && i < 6; i++) {
+      const sess = sessions.get(senderId);
+      if (sess?.state === "connected") {
+        senderSession = sess;
+        break;
+      }
+      const parent = await db.query.accounts.findFirst({ where: eq(accounts.id, senderId), columns: { parentId: true } });
+      senderId = parent?.parentId || null;
+    }
+    if (!senderSession?.sock || target.length < 10) {
+      console.log(`[Alerta] ${acc.name}: WhatsApp caiu, mas não há como avisar por WhatsApp (sem telefone de alerta ou sem conta acima conectada)`);
+      return;
+    }
+    const jid = `${target.length <= 11 ? "55" + target : target}@s.whatsapp.net`;
+    const text = loggedOut
+      ? `⚠️ *${acc.name}*: o WhatsApp foi desconectado do sistema (saiu pelo celular). A IA e os lembretes pararam. Entre no painel → WhatsApp → Gerar QR Code e leia com o celular da empresa.`
+      : `⚠️ *${acc.name}*: o WhatsApp está sem conexão com o sistema há alguns minutos. Verifique se o celular da empresa está ligado e com internet. Se não voltar sozinho, entre no painel → WhatsApp.`;
+    const r = await senderSession.sock.sendMessage(jid, { text });
+    if (r?.key?.id) rememberSent(r.key.id);
+    console.log(`[Alerta] enviado para ${target} sobre ${acc.name}`);
+  } catch (e) {
+    console.error("[Alerta] falhou:", e);
+  }
+}
+
+// ============================================================================
 // CONEXÕES (UMA POR CONTA)
 // ============================================================================
 
 function getSession(accountId: string): Session {
   let s = sessions.get(accountId);
   if (!s) {
-    s = { accountId, sock: null, state: "idle", phone: null, qr: null, qrCount: 0, stopping: false };
+    s = { accountId, sock: null, state: "idle", phone: null, qr: null, qrCount: 0, stopping: false, downSince: null };
     sessions.set(accountId, s);
   }
   return s;
@@ -172,6 +246,7 @@ async function startSession(accountId: string) {
     } as unknown as Sock;
     s.state = "connected";
     s.phone = "55000" + accountId.replace(/\D/g, "").slice(0, 8);
+    await setWaState(accountId, "connected", s.phone);
     return s;
   }
 
@@ -196,12 +271,17 @@ async function startSession(accountId: string) {
       s.qr = null;
       s.qrCount = 0;
       s.phone = sock.user?.id?.split(":")[0] || null;
+      s.downSince = null;
       console.log(`✅ [WhatsApp ${accountId.slice(0, 8)}] conectado: ${s.phone}`);
+      await setWaState(accountId, "connected", s.phone);
+      alertSent.delete(accountId);
     }
     if (connection === "close") {
       const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
+      const wasConnected = s.state === "connected";
       s.sock = null;
       s.phone = null;
+      if (wasConnected) await touchLastSeen(accountId);
       if (s.stopping) {
         s.state = "idle";
         return;
@@ -211,11 +291,18 @@ async function startSession(accountId: string) {
         await clearAuth(accountId);
         s.state = "idle";
         s.qr = null;
+        await setWaState(accountId, "logged_out", null);
+        await sendDisconnectAlert(accountId, true);
         return;
+      }
+      if (wasConnected || !s.downSince) {
+        s.downSince = s.downSince || Date.now();
+        await setWaState(accountId, "reconnecting", null);
       }
       // QR expirou sem ninguém ler: para (a pessoa clica em "Gerar QR Code" de novo)
       if (!(await hasSavedLogin(accountId)) && s.qrCount >= 5) {
         console.log(`[WhatsApp ${accountId.slice(0, 8)}] QR expirou sem leitura — aguardando novo pedido`);
+        await setWaState(accountId, "idle", null);
         s.state = "idle";
         s.qr = null;
         s.qrCount = 0;
@@ -226,9 +313,17 @@ async function startSession(accountId: string) {
     }
   });
 
+  // Momento a partir do qual mensagens "atrasadas" (chegaram com o motor fora do ar) são recuperadas
+  const recoverFrom = await getLastSeen(accountId);
+
   sock.ev.on("messages.upsert", async (m) => {
-    if (m.type !== "notify") return;
     for (const msg of m.messages) {
+      if (m.type !== "notify") {
+        // "append" = mensagens entregues depois de uma queda/reconexão.
+        // Só recupera o que chegou depois da última vez que o motor estava conectado.
+        const ts = Number(msg.messageTimestamp || 0) * 1000;
+        if (!recoverFrom || !ts || ts < recoverFrom.getTime() - 120e3) continue;
+      }
       if (msg.key.fromMe) await handleOwnPhoneMessage(accountId, msg);
       else await handleIncomingMessage(accountId, msg);
     }
@@ -248,11 +343,18 @@ async function stopSession(accountId: string, logout: boolean) {
   s.state = "idle";
   s.qr = null;
   s.phone = null;
+  s.downSince = null;
   if (logout) await clearAuth(accountId);
+  await setWaState(accountId, "idle", null);
 }
 
 /** Reabre as conexões salvas (ao iniciar e de tempos em tempos) */
 async function syncSessions() {
+  // Marca "visto por último" das contas conectadas e avisa quedas longas (> 5 min)
+  for (const s of sessions.values()) {
+    if (s.state === "connected" && !SELFTEST) await touchLastSeen(s.accountId);
+    if (s.downSince && Date.now() - s.downSince > 5 * 60e3) await sendDisconnectAlert(s.accountId, false);
+  }
   const rows = await db
     .select({ id: accounts.id })
     .from(accounts)
@@ -307,6 +409,56 @@ function extractText(message: any): { text: string; type: string } | null {
   if (m.locationMessage) return { text: "[localização]", type: "location" };
   if (m.contactMessage) return { text: "[contato]", type: "contact" };
   return null;
+}
+
+/** Tipos de mídia que baixamos e guardamos para mostrar no painel */
+const MEDIA_KINDS: Record<string, string> = {
+  imageMessage: "image",
+  audioMessage: "audio",
+  videoMessage: "video",
+  documentMessage: "document",
+  stickerMessage: "sticker",
+};
+
+function unwrap(message: any) {
+  return (
+    message?.ephemeralMessage?.message ||
+    message?.viewOnceMessage?.message ||
+    message?.viewOnceMessageV2?.message ||
+    message?.documentWithCaptionMessage?.message ||
+    message
+  );
+}
+
+/** Baixa a mídia (áudio, foto, vídeo, documento) e devolve como data URL para guardar */
+async function downloadMedia(accountId: string, msg: any) {
+  if (SELFTEST && msg.__testMedia) return msg.__testMedia; // só no teste local
+  const m = unwrap(msg.message);
+  const key = Object.keys(MEDIA_KINDS).find((k) => m?.[k]);
+  if (!key) return null;
+  const info = m[key];
+  const size = Number(info.fileLength || 0);
+  if (size && size > MAX_STORED_MEDIA) return { skipped: true as const };
+  try {
+    const sock = sessions.get(accountId)?.sock;
+    const buffer = (await downloadMediaMessage(
+      { ...msg, message: m },
+      "buffer",
+      {},
+      sock ? { reuploadRequest: sock.updateMediaMessage, logger: undefined as any } : (undefined as any)
+    )) as Buffer;
+    if (!buffer || buffer.length > MAX_STORED_MEDIA) return { skipped: true as const };
+    const mime = String(info.mimetype || "application/octet-stream").split(";")[0].trim();
+    return {
+      dataUrl: `data:${mime};base64,${buffer.toString("base64")}`,
+      mime,
+      fileName: info.fileName || null,
+      seconds: Number(info.seconds || 0) || null,
+    };
+  } catch (e) {
+    console.warn("[Mídia] não consegui baixar:", (e as Error)?.message || e);
+    return null;
+  }
 }
 
 /** Número de telefone real (o WhatsApp novo às vezes manda um ID "@lid" no lugar) */
@@ -368,14 +520,19 @@ async function handleIncomingMessage(accountId: string, msg: any) {
       await db.update(leads).set({ phone }).where(eq(leads.id, existingLead.id));
     }
 
+    const media = extracted.type !== "text" ? await downloadMedia(accountId, msg) : null;
+    const sentAt = msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000) : new Date();
     await db.insert(messages).values({
       conversationId: conversation.id,
       direction: "IN",
       body: extracted.text,
       messageType: extracted.type,
       whatsappMessageId: msg.key.id,
-      sentAt: msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000) : new Date(),
+      sentAt,
       sender: "LEAD",
+      mediaDataUrl: media && "dataUrl" in media ? media.dataUrl : null,
+      mediaMimeType: media && "mime" in media ? media.mime : null,
+      mediaFileName: media && "fileName" in media ? media.fileName : null,
     });
     await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
     await db.update(leads).set({ updatedAt: new Date() }).where(eq(leads.conversationId, conversation.id));
@@ -383,7 +540,8 @@ async function handleIncomingMessage(accountId: string, msg: any) {
     console.log(`[Mensagem ${accountId.slice(0, 8)}] ${phoneJid}: "${extracted.text.slice(0, 60)}"`);
 
     const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
-    if (settings?.enabled) scheduleAi(accountId, conversation.id);
+    // Mensagem muito antiga (recuperada depois de uma queda longa): a IA não responde
+    if (settings?.enabled && Date.now() - sentAt.getTime() < AI_RECOVERY_WINDOW_MS) scheduleAi(accountId, conversation.id);
   } catch (error) {
     console.error("[Error] handleIncomingMessage:", error);
   }
@@ -410,14 +568,19 @@ async function handleOwnPhoneMessage(accountId: string, msg: any) {
     const dup = await db.query.messages.findFirst({ where: eq(messages.whatsappMessageId, msg.key.id) });
     if (dup) return;
 
+    const media = extracted.type !== "text" ? await downloadMedia(accountId, msg) : null;
     await db.insert(messages).values({
       conversationId: conversation.id,
       direction: "OUT",
       body: extracted.text,
       messageType: extracted.type,
       whatsappMessageId: msg.key.id,
-      sentAt: new Date(),
+      sentAt: msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000) : new Date(),
       sender: "HUMAN",
+      authorName: "Celular da empresa",
+      mediaDataUrl: media && "dataUrl" in media ? media.dataUrl : null,
+      mediaMimeType: media && "mime" in media ? media.mime : null,
+      mediaFileName: media && "fileName" in media ? media.fileName : null,
     });
     await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
     await db.update(leads).set({ aiPaused: true, updatedAt: new Date() }).where(eq(leads.conversationId, conversation.id));
@@ -426,12 +589,20 @@ async function handleOwnPhoneMessage(accountId: string, msg: any) {
   }
 }
 
+/** Coloca "*Nome:*" no começo da mensagem, se a conta usa assinatura */
+async function signed(accountId: string, text: string, authorName?: string | null) {
+  if (!authorName) return text;
+  const st = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId), columns: { signMessages: true } });
+  if (st && st.signMessages === false) return text;
+  return `*${authorName}:*\n${text}`;
+}
+
 /** Envia texto pelo WhatsApp da conta e registra no histórico */
-async function sendText(accountId: string, phoneJid: string, text: string, sender: Sender) {
+async function sendText(accountId: string, phoneJid: string, text: string, sender: Sender, authorName?: string | null) {
   const s = sessions.get(accountId);
   if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
   try {
-    const response = await s.sock.sendMessage(phoneJid, { text });
+    const response = await s.sock.sendMessage(phoneJid, { text: await signed(accountId, text, authorName) });
     if (response?.key?.id) rememberSent(response.key.id);
     const conv = await db.query.conversations.findFirst({
       where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
@@ -445,6 +616,7 @@ async function sendText(accountId: string, phoneJid: string, text: string, sende
         whatsappMessageId: response?.key?.id,
         sentAt: new Date(),
         sender,
+        authorName: authorName || null,
       });
       await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
     }
@@ -452,6 +624,108 @@ async function sendText(accountId: string, phoneJid: string, text: string, sende
   } catch (error) {
     console.error("[Error] sendText:", error);
     return { error: String(error) };
+  }
+}
+
+// ----------------------------------------------------------------------------
+// ENVIO DE MÍDIA (foto, áudio gravado no painel, documento)
+// ----------------------------------------------------------------------------
+
+function ffmpegPath() {
+  try {
+    const req = createRequire(import.meta.url);
+    const p = req("ffmpeg-static") as string | null;
+    if (p) return p;
+  } catch {}
+  return "ffmpeg";
+}
+
+/** Converte o áudio gravado no navegador (webm) para o formato de áudio do WhatsApp (ogg/opus) */
+function toOggOpus(input: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const p = spawn(ffmpegPath(), [
+      "-hide_banner", "-loglevel", "error",
+      "-i", "pipe:0",
+      "-vn", "-ac", "1", "-ar", "48000", "-c:a", "libopus", "-b:a", "32k",
+      "-f", "ogg", "pipe:1",
+    ]);
+    const out: Buffer[] = [];
+    let err = "";
+    p.stdout.on("data", (d) => out.push(d));
+    p.stderr.on("data", (d) => (err += d));
+    p.on("error", reject);
+    p.on("close", (code) => (code === 0 ? resolve(Buffer.concat(out)) : reject(new Error(err || `ffmpeg saiu com ${code}`))));
+    p.stdin.on("error", () => {});
+    p.stdin.end(input);
+  });
+}
+
+interface MediaPayload {
+  kind: "image" | "audio" | "document";
+  base64: string;
+  mimetype: string;
+  fileName?: string | null;
+  caption?: string | null;
+}
+
+async function sendMedia(accountId: string, phoneJid: string, media: MediaPayload, sender: Sender, authorName?: string | null) {
+  const s = sessions.get(accountId);
+  if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
+  try {
+    let buffer = Buffer.from(media.base64, "base64");
+    if (!buffer.length) return { error: "Arquivo vazio" };
+    let mime = media.mimetype || "application/octet-stream";
+    const caption = media.caption?.trim() ? await signed(accountId, media.caption.trim(), authorName) : undefined;
+    let content: any;
+    let body: string;
+
+    if (media.kind === "audio") {
+      if (!/ogg/.test(mime)) buffer = await toOggOpus(buffer);
+      mime = "audio/ogg; codecs=opus";
+      content = { audio: buffer, mimetype: mime, ptt: true };
+      body = "[áudio]";
+    } else if (media.kind === "image") {
+      content = { image: buffer, mimetype: mime, caption };
+      body = media.caption?.trim() || "[imagem]";
+    } else {
+      content = { document: buffer, mimetype: mime, fileName: media.fileName || "arquivo", caption };
+      body = media.caption?.trim() || `[documento] ${media.fileName || ""}`.trim();
+    }
+
+    // Áudio não tem legenda: se a conta assina as mensagens, manda o nome antes
+    if (media.kind === "audio" && authorName) {
+      const withSign = await signed(accountId, "🎤 áudio", authorName);
+      if (withSign !== "🎤 áudio") {
+        const r0 = await s.sock.sendMessage(phoneJid, { text: withSign });
+        if (r0?.key?.id) rememberSent(r0.key.id);
+      }
+    }
+
+    const response = await s.sock.sendMessage(phoneJid, content);
+    if (response?.key?.id) rememberSent(response.key.id);
+    const conv = await db.query.conversations.findFirst({
+      where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
+    });
+    if (conv) {
+      await db.insert(messages).values({
+        conversationId: conv.id,
+        direction: "OUT",
+        body,
+        messageType: media.kind,
+        whatsappMessageId: response?.key?.id,
+        sentAt: new Date(),
+        sender,
+        authorName: authorName || null,
+        mediaDataUrl: buffer.length <= MAX_STORED_MEDIA ? `data:${mime.split(";")[0]};base64,${buffer.toString("base64")}` : null,
+        mediaMimeType: mime.split(";")[0],
+        mediaFileName: media.fileName || null,
+      });
+      await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
+    }
+    return { success: true, messageId: response?.key?.id };
+  } catch (error) {
+    console.error("[Error] sendMedia:", error);
+    return { error: (error as Error)?.message || String(error) };
   }
 }
 
@@ -899,7 +1173,15 @@ function startApiServer() {
         if (url.pathname === "/send") {
           if (!body.phoneJid || !body.text) return json(res, 400, { error: "phoneJid e text são obrigatórios" });
           const sender: Sender = body.sender === "AI" ? "AI" : body.sender === "AUTO" ? "AUTO" : "HUMAN";
-          const r = await sendText(acc.id, body.phoneJid, String(body.text), sender);
+          const r = await sendText(acc.id, body.phoneJid, String(body.text), sender, body.authorName || null);
+          return json(res, "error" in r ? 502 : 200, r);
+        }
+        if (url.pathname === "/send-media") {
+          const media = body.media as MediaPayload | undefined;
+          if (!body.phoneJid || !media?.base64 || !["image", "audio", "document"].includes(media.kind)) {
+            return json(res, 400, { error: "Mídia inválida" });
+          }
+          const r = await sendMedia(acc.id, body.phoneJid, media, "HUMAN", body.authorName || null);
           return json(res, "error" in r ? 502 : 200, r);
         }
         return json(res, 404, { error: "not found" });

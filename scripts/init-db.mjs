@@ -371,6 +371,17 @@ CREATE TABLE IF NOT EXISTS appointments (
 );
 CREATE INDEX IF NOT EXISTS appointments_account_starts_idx ON appointments (account_id, starts_at);
 CREATE INDEX IF NOT EXISTS appointments_lead_id_idx ON appointments (lead_id);
+
+-- Mídia, assinatura, situação do WhatsApp e permissão de editar cards
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS author_name varchar(150);
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS wa_state varchar(20);
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS wa_phone varchar(40);
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS wa_state_at timestamptz;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS wa_last_seen_at timestamptz;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS lead_edit boolean NOT NULL DEFAULT false;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS sign_messages boolean NOT NULL DEFAULT true;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS alert_phone varchar(40);
+CREATE INDEX IF NOT EXISTS messages_whatsapp_message_id_idx ON messages (whatsapp_message_id);
 `;
 
 const client = new pg.Client({ connectionString: url });

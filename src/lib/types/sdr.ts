@@ -53,10 +53,13 @@ export interface Message {
   body: string;
   messageType: string | null;
   sentAt: string;
-  mediaDataUrl: string | null;
+  /** Endereço para carregar o áudio/foto/vídeo/documento */
+  mediaUrl: string | null;
   mediaMimeType: string | null;
   mediaFileName: string | null;
   sender: "LEAD" | "AI" | "HUMAN" | "FLOW" | "AUTO" | null;
+  /** Nome de quem enviou pelo painel */
+  authorName: string | null;
 }
 
 export interface QuickReply {

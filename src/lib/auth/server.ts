@@ -23,6 +23,9 @@ export interface CurrentAccount {
   type: "MASTER" | "PARTNER" | "CLIENT";
   parentId: string | null;
   slug: string;
+  /** Situação do WhatsApp gravada pelo motor */
+  waState: string | null;
+  waEnabled: boolean;
 }
 
 export interface CurrentUser {
@@ -42,10 +45,23 @@ export interface CurrentUser {
   modules: string[];
   /** Pode visualizar contas abaixo (administrador) */
   canManage: boolean;
+  /** Pode editar os cards dos leads (estágio, vendedor, valor, etiquetas, dados) */
+  canEditLeads: boolean;
 }
 
+/** Permissão extra (não é menu) que o administrador dá a um vendedor */
+export const EDIT_LEADS_PERMISSION = "editar-leads";
+
 function toAccount(a: NonNullable<Awaited<ReturnType<typeof getAccount>>>): CurrentAccount {
-  return { id: a.id, name: a.name, type: a.type as CurrentAccount["type"], parentId: a.parentId, slug: a.slug };
+  return {
+    id: a.id,
+    name: a.name,
+    type: a.type as CurrentAccount["type"],
+    parentId: a.parentId,
+    slug: a.slug,
+    waState: a.waState,
+    waEnabled: a.waEnabled,
+  };
 }
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
@@ -71,6 +87,11 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     const perms = (user.permissions as string[]) || [];
     const modules = isAdmin || actingAs ? accountModules : accountModules.filter((m) => perms.includes(m));
 
+    // Editar cards: Master/Parceiro sempre; Cliente só se quem cadastrou liberou (ou se é o parceiro/master acessando).
+    // Dentro da conta: administradores, ou vendedores com a permissão "editar-leads".
+    const accountAllows = acting.type !== "CLIENT" || acting.leadEdit || actingAs;
+    const userAllows = isAdmin || actingAs || perms.includes(EDIT_LEADS_PERMISSION);
+
     return {
       id: user.id,
       name: user.name,
@@ -83,6 +104,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       actingAs,
       modules,
       canManage: isAdmin,
+      canEditLeads: accountAllows && userAllows,
     };
   } catch (err) {
     console.error("[auth] getCurrentUser:", err);

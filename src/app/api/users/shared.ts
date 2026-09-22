@@ -29,7 +29,9 @@ export function userValues(body: Record<string, unknown>, partial = false) {
   }
   if (body.permissions !== undefined) {
     if (!Array.isArray(body.permissions)) return { error: "Permissões inválidas" } as const;
-    values.permissions = body.permissions.filter((p) => (ALL_MODULE_KEYS as string[]).includes(String(p)));
+    values.permissions = body.permissions.filter(
+      (p) => (ALL_MODULE_KEYS as string[]).includes(String(p)) || String(p) === "editar-leads"
+    );
   } else if (!partial) {
     values.permissions = DEFAULT_PERMISSIONS[(values.role as RoleKey) || "SELLER"];
   }

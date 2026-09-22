@@ -48,11 +48,13 @@ export function LeadPanel({
   tags,
   sellers,
   onPatch,
+  canEdit,
 }: {
   lead: Lead;
   tags: Tag[];
   sellers: Seller[];
   onPatch: (fields: Record<string, unknown>) => void;
+  canEdit: boolean;
 }) {
   const leadTagIds = new Set(lead.tags.map((t) => t.id));
   const [note, setNote] = useState(lead.note || "");
@@ -146,6 +148,12 @@ export function LeadPanel({
         />
       </div>
 
+      <fieldset disabled={!canEdit} className="space-y-5 disabled:opacity-70">
+      {!canEdit && (
+        <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          Somente leitura: você não tem permissão para editar os cards.
+        </p>
+      )}
       <div>
         <span className={labelCls}>Nome</span>
         <BlurInput
@@ -240,6 +248,7 @@ export function LeadPanel({
           className={inputCls}
         />
       </div>
+      </fieldset>
     </div>
   );
 }

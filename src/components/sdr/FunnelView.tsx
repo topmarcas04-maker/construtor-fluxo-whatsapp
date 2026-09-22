@@ -10,6 +10,7 @@ interface Props {
   sellers: Seller[];
   onLeadUpdated: () => void;
   onOpenConversation: (leadId: string) => void;
+  canEdit: boolean;
 }
 
 const COLUMN_COLORS: Record<string, string> = {
@@ -23,7 +24,7 @@ function currency(value: number) {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-export function FunnelView({ leads, sellers, onLeadUpdated, onOpenConversation }: Props) {
+export function FunnelView({ leads, sellers, onLeadUpdated, onOpenConversation, canEdit }: Props) {
   const [dragOver, setDragOver] = useState<string | null>(null);
 
   const patchLead = async (leadId: string, fields: Record<string, unknown>) => {
@@ -48,6 +49,7 @@ export function FunnelView({ leads, sellers, onLeadUpdated, onOpenConversation }
               dragOver === column.stage ? "border-[var(--accent)] bg-[var(--accent)]/5" : "border-slate-200"
             }`}
             onDragOver={(e) => {
+              if (!canEdit) return;
               e.preventDefault();
               setDragOver(column.stage);
             }}
@@ -77,9 +79,9 @@ export function FunnelView({ leads, sellers, onLeadUpdated, onOpenConversation }
                 return (
                   <div
                     key={lead.id}
-                    draggable
+                    draggable={canEdit}
                     onDragStart={(e) => e.dataTransfer.setData("text/lead-id", lead.id)}
-                    className="cursor-grab rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm transition hover:shadow-md active:cursor-grabbing"
+                    className={`${canEdit ? "cursor-grab active:cursor-grabbing" : ""} rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm transition hover:shadow-md`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-2">
@@ -132,6 +134,7 @@ export function FunnelView({ leads, sellers, onLeadUpdated, onOpenConversation }
 
                     <div className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-3">
                       <select
+                        disabled={!canEdit}
                         value={lead.seller?.id || ""}
                         onChange={(e) => patchLead(lead.id, { sellerId: e.target.value || null })}
                         className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600"

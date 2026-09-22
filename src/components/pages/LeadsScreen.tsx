@@ -19,6 +19,7 @@ export function LeadsScreen() {
   const [view, setView] = useState<ViewMode>("conversas");
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [canEdit, setCanEdit] = useState(false);
 
   const loadLeads = useCallback(async () => {
     try {
@@ -34,6 +35,9 @@ export function LeadsScreen() {
 
   useEffect(() => {
     loadLeads();
+    fetch("/api/auth/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((u) => setCanEdit(Boolean(u?.canEditLeads)));
     Promise.all([
       fetch("/api/sdr/tags").then((r) => (r.ok ? r.json() : [])),
       fetch("/api/sdr/sellers").then((r) => (r.ok ? r.json() : [])),
@@ -127,12 +131,14 @@ export function LeadsScreen() {
             onLeadUpdated={loadLeads}
             selectedLeadId={selectedLeadId}
             onSelectLead={setSelectedLeadId}
+            canEdit={canEdit}
           />
         ) : (
           <FunnelView
             leads={filtered}
             sellers={sellers}
             onLeadUpdated={loadLeads}
+            canEdit={canEdit}
             onOpenConversation={(leadId) => {
               setSelectedLeadId(leadId);
               setView("conversas");

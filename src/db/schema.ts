@@ -117,6 +117,14 @@ export const accounts = pgTable(
     aiApiKeyEnc: text("ai_api_key_enc"),
     /** Manter o WhatsApp desta conta conectado no motor */
     waEnabled: boolean("wa_enabled").notNull().default(false),
+    /** Situação do WhatsApp, gravada pelo motor: connected | reconnecting | logged_out | idle */
+    waState: varchar("wa_state", { length: 20 }),
+    waPhone: varchar("wa_phone", { length: 40 }),
+    waStateAt: timestamp("wa_state_at", { withTimezone: true }),
+    /** Última vez que o motor viu o WhatsApp conectado (para recuperar mensagens perdidas) */
+    waLastSeenAt: timestamp("wa_last_seen_at", { withTimezone: true }),
+    /** Cliente pode editar os cards dos leads (definido por quem cadastrou) */
+    leadEdit: boolean("lead_edit").notNull().default(false),
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -250,6 +258,8 @@ export const messages = pgTable(
     mediaFileName: varchar("media_file_name", { length: 255 }),
     /** Quem enviou: LEAD, AI (atendente virtual), HUMAN (vendedor pelo painel/celular) ou FLOW */
     sender: varchar("sender", { length: 20 }),
+    /** Nome de quem enviou pelo painel (vendedor/atendente) */
+    authorName: varchar("author_name", { length: 150 }),
   },
   (table) => [
     index("messages_conversation_id_idx").on(table.conversationId),
@@ -386,6 +396,10 @@ export const aiSettings = pgTable("ai_settings", {
   reminderMessage: text("reminder_message"),
   /** Minutos antes do horário para enviar o lembrete (0 = na hora) */
   reminderMinutesBefore: integer("reminder_minutes_before").notNull().default(0),
+  /** Colocar o nome de quem enviou no começo das mensagens do painel */
+  signMessages: boolean("sign_messages").notNull().default(true),
+  /** WhatsApp que recebe alertas (ex.: WhatsApp desconectado) */
+  alertPhone: varchar("alert_phone", { length: 40 }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

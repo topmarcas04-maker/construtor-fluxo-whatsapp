@@ -62,11 +62,28 @@ export function sendWhatsappMessage(
   accountId: string,
   phoneJid: string,
   text: string,
-  sender: "HUMAN" | "AI" | "AUTO" = "HUMAN"
+  sender: "HUMAN" | "AI" | "AUTO" = "HUMAN",
+  authorName: string | null = null
 ) {
   return call<{ success: boolean }>(
     `/send`,
-    { method: "POST", body: JSON.stringify({ accountId, phoneJid, text, sender }) },
+    { method: "POST", body: JSON.stringify({ accountId, phoneJid, text, sender, authorName }) },
     20000
+  );
+}
+
+export interface OutgoingMedia {
+  kind: "image" | "audio" | "document";
+  base64: string;
+  mimetype: string;
+  fileName?: string | null;
+  caption?: string | null;
+}
+
+export function sendWhatsappMedia(accountId: string, phoneJid: string, media: OutgoingMedia, authorName: string | null) {
+  return call<{ success: boolean }>(
+    `/send-media`,
+    { method: "POST", body: JSON.stringify({ accountId, phoneJid, media, authorName }) },
+    60000
   );
 }
