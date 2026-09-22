@@ -27,11 +27,15 @@ export async function getEngineStatus(): Promise<EngineStatus | { error: string 
     const res = await fetch(`${baseUrl()}/status.json`, {
       headers: headers(),
       cache: "no-store",
+      signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return { error: `Motor respondeu ${res.status}` };
     return await res.json();
-  } catch {
-    return { error: "Não foi possível conectar ao motor de fluxo" };
+  } catch (err) {
+    const e = err as { message?: string; cause?: { code?: string; message?: string } };
+    const why = e?.cause?.code || e?.cause?.message || e?.message || "erro desconhecido";
+    const configured = process.env.FLOW_ENGINE_URL ? baseUrl() : "(FLOW_ENGINE_URL não configurada)";
+    return { error: `Não foi possível conectar ao motor de fluxo — tentei ${configured} (${why})` };
   }
 }
 
