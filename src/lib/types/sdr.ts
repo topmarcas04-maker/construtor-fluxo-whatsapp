@@ -30,6 +30,14 @@ export interface Lead {
   updatedAt: string;
   seller: Seller | null;
   tags: Tag[];
+  phone: string | null;
+  createdAt: string;
+  aiPaused: boolean;
+  aiSummary: string | null;
+  score: number | null;
+  interest: string | null;
+  saleType: "ANY" | "WHOLESALE" | "RETAIL";
+  note: string | null;
   conversation: {
     phoneJid: string;
     leadName: string | null;
@@ -48,6 +56,56 @@ export interface Message {
   mediaDataUrl: string | null;
   mediaMimeType: string | null;
   mediaFileName: string | null;
+  sender: "LEAD" | "AI" | "HUMAN" | "FLOW" | null;
+}
+
+export interface QuickReply {
+  id: string;
+  shortcut: string;
+  message: string;
+}
+
+export const SALE_TYPE_LABEL: Record<string, string> = {
+  ANY: "Não definido",
+  WHOLESALE: "Atacado (revenda)",
+  RETAIL: "Varejo (uso próprio)",
+};
+
+export const STAGE_LABEL: Record<string, string> = {
+  FIRST_CONTACT: "Primeiro contato",
+  SECOND_CONTACT: "Segundo contato",
+  HOT_LEAD: "Lead quente",
+  SALE: "Vendas",
+};
+
+/** Nome amigável do lead */
+export function leadDisplayName(lead: Lead) {
+  const name = lead.conversation.leadName || lead.cardName;
+  if (name && name !== "Lead") return name;
+  if (lead.phone) return formatPhone(lead.phone);
+  const jid = lead.conversation.phoneJid;
+  // IDs "@lid" do WhatsApp não são número de telefone
+  return jid.endsWith("@lid") ? "Contato do WhatsApp" : formatPhone(jid.split("@")[0]);
+}
+
+export function formatPhone(raw: string | null | undefined) {
+  const d = (raw || "").replace(/\D/g, "");
+  if (d.length === 13) return `(${d.slice(2, 4)}) ${d.slice(4, 9)}-${d.slice(9)}`;
+  if (d.length === 12) return `(${d.slice(2, 4)}) ${d.slice(4, 8)}-${d.slice(8)}`;
+  return d || "Sem número";
+}
+
+export function timeLabel(iso: string | null) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return "Ontem";
+  return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
 }
 
 /** Colunas do funil de SDR, na ordem em que aparecem na tela. */

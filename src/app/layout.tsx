@@ -1,24 +1,28 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { Sidebar } from "@/components/layout/Sidebar";
+import { AppShell } from "@/components/layout/AppShell";
+import { getBranding } from "@/lib/platform/settings";
+import { getCurrentUser } from "@/lib/auth/server";
 
-export const metadata: Metadata = {
-  title: "Construtor de Fluxo WhatsApp",
-  description: "SDR com IA para WhatsApp — Resplen Motors",
-};
+// Tudo depende do usuário logado e da identidade visual salva no banco
+export const dynamic = "force-dynamic";
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export async function generateMetadata(): Promise<Metadata> {
+  const branding = await getBranding();
+  return {
+    title: branding.displayName,
+    description: "SDR com IA para WhatsApp",
+  };
+}
+
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const [branding, user] = await Promise.all([getBranding(), getCurrentUser()]);
   return (
     <html lang="pt-BR">
-      <body className="bg-gray-50">
-        <div className="flex h-screen overflow-hidden">
-          <Sidebar />
-          <main className="flex-1 overflow-y-auto">{children}</main>
-        </div>
+      <body>
+        <AppShell branding={branding} user={user}>
+          {children}
+        </AppShell>
       </body>
     </html>
   );

@@ -198,6 +198,8 @@ export const messages = pgTable(
     mediaDataUrl: text("media_data_url"),
     mediaMimeType: varchar("media_mime_type", { length: 100 }),
     mediaFileName: varchar("media_file_name", { length: 255 }),
+    /** Quem enviou: LEAD, AI (atendente virtual), HUMAN (vendedor pelo painel/celular) ou FLOW */
+    sender: varchar("sender", { length: 20 }),
   },
   (table) => [
     index("messages_conversation_id_idx").on(table.conversationId),
@@ -230,6 +232,15 @@ export const leads = pgTable(
     /** Data em que a venda foi fechada */
     closedAt: timestamp("closed_at", { withTimezone: true }),
     note: text("note"),
+    /** Quando true a IA não responde mais este lead (vendedor assumiu) */
+    aiPaused: boolean("ai_paused").notNull().default(false),
+    /** Resumo da qualificação escrito pela IA */
+    aiSummary: text("ai_summary"),
+    /** Nota de qualificação 0–100 dada pela IA */
+    score: integer("score"),
+    /** O que o lead procura (modelo, uso, quantidade…) */
+    interest: varchar("interest", { length: 255 }),
+    saleType: saleTypeEnum("sale_type").notNull().default("ANY"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -303,6 +314,67 @@ export const quickReplies = pgTable("quick_replies", {
 export const aiSettings = pgTable("ai_settings", {
   id: varchar("id", { length: 20 }).primaryKey().default("default"),
   systemPrompt: text("system_prompt").notNull().default(""),
+  /** Liga/desliga o atendimento automático pela IA */
+  enabled: boolean("enabled").notNull().default(false),
+  model: varchar("model", { length: 80 }).notNull().default("claude-sonnet-4-5"),
+  /** Mensagem enviada ao lead quando a IA transfere para um vendedor. {vendedor} = nome */
+  handoffMessage: text("handoff_message"),
+  /** Avisar o vendedor no WhatsApp dele quando receber um lead */
+  notifySeller: boolean("notify_seller").notNull().default(true),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ============================================================================
+// SAAS: PARCEIROS, USUÁRIOS/PERMISSÕES E PLATAFORMA
+// ============================================================================
+
+export const partners = pgTable("partners", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 200 }).notNull(),
+  responsible: varchar("responsible", { length: 150 }),
+  email: varchar("email", { length: 200 }),
+  phone: varchar("phone", { length: 40 }),
+  city: varchar("city", { length: 120 }),
+  document: varchar("document", { length: 30 }),
+  /** Comissão em % */
+  commission: doublePrecision("commission"),
+  active: boolean("active").notNull().default(true),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const appUsers = pgTable(
+  "app_users",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: varchar("name", { length: 150 }).notNull(),
+    email: varchar("email", { length: 200 }).notNull(),
+    passwordHash: text("password_hash").notNull(),
+    /** MASTER (tudo), ADMIN, SELLER (vendedor), PARTNER (parceiro) */
+    role: varchar("role", { length: 20 }).notNull().default("SELLER"),
+    /** Módulos liberados: whatsapp, leads, configuracoes, parceiros, permissoes, plataforma */
+    permissions: jsonb("permissions").$type<string[]>().notNull().default([]),
+    sellerId: uuid("seller_id").references(() => sellers.id, { onDelete: "set null" }),
+    partnerId: uuid("partner_id").references(() => partners.id, { onDelete: "set null" }),
+    active: boolean("active").notNull().default(true),
+    lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("app_users_email_idx").on(table.email)]
+);
+
+export const platformSettings = pgTable("platform_settings", {
+  id: varchar("id", { length: 20 }).primaryKey().default("default"),
+  displayName: varchar("display_name", { length: 120 }).notNull().default("SDR WhatsApp"),
+  subtitle: varchar("subtitle", { length: 120 }),
+  /** Logo em data URL (PNG/SVG/JPG, até ~350 KB) */
+  logo: text("logo"),
+  menuBg: varchar("menu_bg", { length: 20 }).notNull().default("#155e75"),
+  menuText: varchar("menu_text", { length: 20 }).notNull().default("#ffffff"),
+  menuActive: varchar("menu_active", { length: 20 }).notNull().default("#ffffff"),
+  topBg: varchar("top_bg", { length: 20 }).notNull().default("#ffffff"),
+  topText: varchar("top_text", { length: 20 }).notNull().default("#0f172a"),
+  accent: varchar("accent", { length: 20 }).notNull().default("#155e75"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -401,6 +473,15 @@ export const leadsRelations = relations(leads, ({ one, many }) => ({
     references: [sellers.id],
   }),
   leadTags: many(leadTags),
+}));
+
+export const partnersRelations = relations(partners, ({ many }) => ({
+  users: many(appUsers),
+}));
+
+export const appUsersRelations = relations(appUsers, ({ one }) => ({
+  seller: one(sellers, { fields: [appUsers.sellerId], references: [sellers.id] }),
+  partner: one(partners, { fields: [appUsers.partnerId], references: [partners.id] }),
 }));
 
 export const sellersRelations = relations(sellers, ({ many }) => ({

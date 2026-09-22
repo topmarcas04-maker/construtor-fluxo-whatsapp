@@ -1,14 +1,15 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
-import { conversations, messages } from "@/db/schema";
+import { conversations, leads, messages } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { sendWhatsappMessage } from "@/lib/services/whatsapp/engineClient";
+import { requireUser } from "@/lib/auth/server";
 
-/**
- * GET /api/sdr/conversations/[id]/messages — histórico da conversa
- */
+/** GET — histórico da conversa */
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const auth = await requireUser("leads");
+  if (auth.error) return auth.error;
   const { id } = await ctx.params;
   try {
     const all = await db.query.messages.findMany({
@@ -18,57 +19,41 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     return NextResponse.json(all);
   } catch (error) {
     console.error("Error fetching messages:", error);
-    return NextResponse.json({ error: "Failed to fetch messages" }, { status: 500 });
+    return NextResponse.json({ error: "Falha ao carregar mensagens" }, { status: 500 });
   }
 }
 
 /**
- * POST /api/sdr/conversations/[id]/messages — envia mensagem manual (vendedor/master)
+ * POST — mensagem manual (vendedor/admin). Quando uma pessoa responde,
+ * a IA para de responder esse lead (pode ser religada no painel).
  * Body: { text: string }
  */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const auth = await requireUser("leads");
+  if (auth.error) return auth.error;
   const { id } = await ctx.params;
   try {
     const { text } = await req.json();
-    if (!text || !text.trim()) {
-      return NextResponse.json({ error: "text é obrigatório" }, { status: 400 });
+    if (!text || !String(text).trim()) {
+      return NextResponse.json({ error: "Digite uma mensagem" }, { status: 400 });
     }
 
-    const conversation = await db.query.conversations.findFirst({
-      where: eq(conversations.id, id),
-    });
+    const conversation = await db.query.conversations.findFirst({ where: eq(conversations.id, id) });
     if (!conversation) {
-      return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
+      return NextResponse.json({ error: "Conversa não encontrada" }, { status: 404 });
     }
 
-    const result = await sendWhatsappMessage(conversation.phoneJid, text);
+    await db.update(leads).set({ aiPaused: true, updatedAt: new Date() }).where(eq(leads.conversationId, id));
 
+    const result = await sendWhatsappMessage(conversation.phoneJid, String(text), "HUMAN");
     if ("error" in result) {
-      // Motor indisponível: ainda assim registra a mensagem no histórico,
-      // marcando que não foi entregue de fato pelo WhatsApp.
-      const [saved] = await db
-        .insert(messages)
-        .values({
-          conversationId: id,
-          direction: "OUT",
-          body: text,
-          messageType: "text",
-        })
-        .returning();
-      return NextResponse.json(
-        { message: saved, warning: result.error },
-        { status: 202 }
-      );
+      return NextResponse.json({ error: `Mensagem não enviada: ${result.error}` }, { status: 502 });
     }
 
-    await db
-      .update(conversations)
-      .set({ lastMessageAt: new Date() })
-      .where(eq(conversations.id, id));
-
+    await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, id));
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Error sending message:", error);
-    return NextResponse.json({ error: "Failed to send message" }, { status: 500 });
+    return NextResponse.json({ error: "Falha ao enviar mensagem" }, { status: 500 });
   }
 }

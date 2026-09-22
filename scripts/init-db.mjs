@@ -178,6 +178,62 @@ CREATE TABLE IF NOT EXISTS ai_settings (
 -- vez, já com o texto padrão da IA de triagem — não semeamos aqui pra não
 -- gravar um prompt vazio antes disso.
 
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT false;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS model varchar(80) NOT NULL DEFAULT 'claude-sonnet-4-5';
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS handoff_message text;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS notify_seller boolean NOT NULL DEFAULT true;
+
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender varchar(20);
+
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_paused boolean NOT NULL DEFAULT false;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_summary text;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS score integer;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS interest varchar(255);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS sale_type sale_type NOT NULL DEFAULT 'ANY';
+
+CREATE TABLE IF NOT EXISTS partners (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name varchar(200) NOT NULL,
+  responsible varchar(150),
+  email varchar(200),
+  phone varchar(40),
+  city varchar(120),
+  document varchar(30),
+  commission double precision,
+  active boolean NOT NULL DEFAULT true,
+  notes text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS app_users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name varchar(150) NOT NULL,
+  email varchar(200) NOT NULL,
+  password_hash text NOT NULL,
+  role varchar(20) NOT NULL DEFAULT 'SELLER',
+  permissions jsonb NOT NULL DEFAULT '[]'::jsonb,
+  seller_id uuid REFERENCES sellers(id) ON DELETE SET NULL,
+  partner_id uuid REFERENCES partners(id) ON DELETE SET NULL,
+  active boolean NOT NULL DEFAULT true,
+  last_login_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS app_users_email_idx ON app_users (email);
+
+CREATE TABLE IF NOT EXISTS platform_settings (
+  id varchar(20) PRIMARY KEY DEFAULT 'default',
+  display_name varchar(120) NOT NULL DEFAULT 'SDR WhatsApp',
+  subtitle varchar(120),
+  logo text,
+  menu_bg varchar(20) NOT NULL DEFAULT '#155e75',
+  menu_text varchar(20) NOT NULL DEFAULT '#ffffff',
+  menu_active varchar(20) NOT NULL DEFAULT '#ffffff',
+  top_bg varchar(20) NOT NULL DEFAULT '#ffffff',
+  top_text varchar(20) NOT NULL DEFAULT '#0f172a',
+  accent varchar(20) NOT NULL DEFAULT '#155e75',
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS conversation_states (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,

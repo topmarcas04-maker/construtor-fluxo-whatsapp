@@ -2,19 +2,38 @@
 @config "../../tailwind.config.ts";
 
 :root {
-  --sidebar-bg: #0f2d3d;
-  --sidebar-active: #1c5169;
-  --accent: #1c8ca8;
-  --accent-dark: #146a80;
+  --menu-bg: #155e75;
+  --menu-text: #ffffff;
+  --menu-active: #ffffff;
+  --top-bg: #ffffff;
+  --top-text: #0f172a;
+  --accent: #155e75;
 }
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+/* Item ativo do menu: pílula clara (mistura a cor de destaque com o fundo) */
+.sidebar-active {
+  background: color-mix(in srgb, var(--menu-active) 32%, transparent);
 }
+
+/* Botão/realce principal seguindo a cor da plataforma */
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover {
+  filter: brightness(0.92);
+}
+.btn-primary:disabled {
+  opacity: 0.55;
+}
+
+/* Obs.: o Tailwind v4 já zera margin/padding (preflight). Um reset "* { padding: 0 }"
+   fora de @layer anula TODAS as classes de espaçamento (p-4, px-6, gap...). */
 
 body {
+  background: #f8fafc;
+  color: #1f2937;
+  font-size: 15px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
     Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue",
     sans-serif;

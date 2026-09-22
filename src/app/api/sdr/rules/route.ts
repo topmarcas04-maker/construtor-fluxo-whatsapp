@@ -1,4 +1,5 @@
 export const dynamic = "force-dynamic";
+import { requireUser } from "@/lib/auth/server";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { distributionRules } from "@/db/schema";
@@ -8,10 +9,12 @@ import { distributionRules } from "@/db/schema";
  * POST /api/sdr/rules — cria regra
  */
 export async function GET() {
+  const auth = await requireUser(["leads", "configuracoes"]);
+  if (auth.error) return auth.error;
   try {
     const all = await db.query.distributionRules.findMany({
       with: { seller: true },
-      orderBy: (r, { asc }) => asc(r.priority),
+      orderBy: (r, { desc }) => desc(r.priority),
     });
     return NextResponse.json(all);
   } catch (error) {
@@ -21,6 +24,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireUser("configuracoes");
+  if (auth.error) return auth.error;
   try {
     const body = await req.json();
     const { region, saleType, sellerId, priority } = body;
