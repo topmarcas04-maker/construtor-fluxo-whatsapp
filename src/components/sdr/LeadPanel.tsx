@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Sparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Sparkles, CalendarPlus, Bot } from "lucide-react";
+import { AppointmentModal } from "@/components/agenda/AppointmentModal";
+import { type Appointment, STATUS_LABEL, STATUS_STYLE, spParts } from "@/components/agenda/types";
 import type { Lead, Seller, Tag } from "@/lib/types/sdr";
 import { TAG_COLOR_CLASSES, SALE_TYPE_LABEL } from "@/lib/types/sdr";
 
@@ -56,6 +58,20 @@ export function LeadPanel({
   const [note, setNote] = useState(lead.note || "");
   useEffect(() => setNote(lead.note || ""), [lead.id, lead.note]);
 
+  // Agendamentos deste lead
+  const [appts, setAppts] = useState<Appointment[]>([]);
+  const [modal, setModal] = useState<{ appointment: Appointment | null } | null>(null);
+  const modalDefaults = useMemo(() => ({ leadId: lead.id }), [lead.id]);
+  const loadAppts = useCallback(() => {
+    fetch(`/api/appointments?leadId=${lead.id}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setAppts)
+      .catch(() => {});
+  }, [lead.id]);
+  useEffect(() => {
+    loadAppts();
+  }, [loadAppts, lead.updatedAt]);
+
   return (
     <div className="space-y-5 p-5">
       <div>
@@ -86,6 +102,48 @@ export function LeadPanel({
         <p className="text-sm leading-relaxed text-slate-700">
           {lead.aiSummary || "A IA ainda não resumiu este atendimento."}
         </p>
+      </div>
+
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Agenda</span>
+          <button
+            onClick={() => setModal({ appointment: null })}
+            className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--accent)] hover:underline"
+          >
+            <CalendarPlus size={13} /> Agendar
+          </button>
+        </div>
+        {appts.length === 0 ? (
+          <p className="text-sm text-slate-400">Nada agendado.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {appts.slice(-4).map((a) => {
+              const p = spParts(a.startsAt);
+              return (
+                <button
+                  key={a.id}
+                  onClick={() => setModal({ appointment: a })}
+                  className="flex w-full items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-2 text-left text-sm hover:bg-slate-50"
+                >
+                  <span className="font-semibold text-slate-800">
+                    {p.date.split("-").reverse().slice(0, 2).join("/")} {p.time}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-slate-600">{a.title}</span>
+                  {a.createdBy === "AI" && <Bot size={13} className="text-violet-500" />}
+                  <span className={`rounded-full border px-1.5 text-[10px] ${STATUS_STYLE[a.status]}`}>{STATUS_LABEL[a.status]}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <AppointmentModal
+          open={modal !== null}
+          appointment={modal?.appointment || null}
+          defaults={modalDefaults}
+          onClose={() => setModal(null)}
+          onSaved={loadAppts}
+        />
       </div>
 
       <div>

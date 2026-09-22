@@ -256,6 +256,121 @@ CREATE TABLE IF NOT EXISTS flow_executions (
 );
 CREATE INDEX IF NOT EXISTS flow_executions_state_id_idx ON flow_executions (state_id);
 CREATE INDEX IF NOT EXISTS flow_executions_executed_at_idx ON flow_executions (executed_at);
+
+-- =====================================================================
+-- MULTIEMPRESA: Master -> Parceiro -> Cliente
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS accounts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  parent_id uuid REFERENCES accounts(id) ON DELETE CASCADE,
+  type varchar(10) NOT NULL,
+  name varchar(200) NOT NULL,
+  slug varchar(80) NOT NULL,
+  responsible varchar(150),
+  email varchar(200),
+  phone varchar(40),
+  city varchar(120),
+  document varchar(30),
+  commission double precision,
+  notes text,
+  modules jsonb NOT NULL DEFAULT '[]'::jsonb,
+  ai_source varchar(10) NOT NULL DEFAULT 'PARENT',
+  ai_api_key_enc text,
+  wa_enabled boolean NOT NULL DEFAULT false,
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS accounts_slug_idx ON accounts (slug);
+CREATE INDEX IF NOT EXISTS accounts_parent_id_idx ON accounts (parent_id);
+
+-- Conta Master (dona da plataforma): criada uma vez, recebe todos os dados que já existiam
+INSERT INTO accounts (type, name, slug, modules, ai_source, wa_enabled)
+SELECT 'MASTER',
+       COALESCE((SELECT subtitle FROM platform_settings WHERE id = 'default' AND subtitle IS NOT NULL LIMIT 1), 'Resplen Motors'),
+       'master', '[]'::jsonb, 'OWN', true
+WHERE NOT EXISTS (SELECT 1 FROM accounts WHERE type = 'MASTER');
+
+-- Parceiros cadastrados na versão anterior viram contas de parceiro (mesmo id)
+INSERT INTO accounts (id, parent_id, type, name, slug, responsible, email, phone, city, document, commission, notes, modules, ai_source, active, created_at)
+SELECT p.id, (SELECT id FROM accounts WHERE type = 'MASTER' LIMIT 1), 'PARTNER', p.name,
+       'p-' || substr(replace(p.id::text, '-', ''), 1, 10),
+       p.responsible, p.email, p.phone, p.city, p.document, p.commission, p.notes,
+       '["visao-geral","whatsapp","leads","agenda","configuracoes","parceiros","permissoes","plataforma"]'::jsonb,
+       'PARENT', p.active, p.created_at
+FROM partners p
+WHERE NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = p.id);
+
+CREATE TABLE IF NOT EXISTS wa_auth (
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  key varchar(255) NOT NULL,
+  value text NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS wa_auth_account_key_idx ON wa_auth (account_id, key);
+
+-- account_id em todas as tabelas de dados
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS account_id uuid REFERENCES accounts(id) ON DELETE CASCADE;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS account_id uuid REFERENCES accounts(id) ON DELETE CASCADE;
+ALTER TABLE sellers ADD COLUMN IF NOT EXISTS account_id uuid REFERENCES accounts(id) ON DELETE CASCADE;
+ALTER TABLE tags ADD COLUMN IF NOT EXISTS account_id uuid REFERENCES accounts(id) ON DELETE CASCADE;
+ALTER TABLE quick_replies ADD COLUMN IF NOT EXISTS account_id uuid REFERENCES accounts(id) ON DELETE CASCADE;
+ALTER TABLE distribution_rules ADD COLUMN IF NOT EXISTS account_id uuid REFERENCES accounts(id) ON DELETE CASCADE;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS account_id uuid REFERENCES accounts(id) ON DELETE CASCADE;
+
+-- Usuários antigos do tipo "Parceiro" passam a administrar a conta do parceiro
+UPDATE app_users SET account_id = partner_id, role = 'ADMIN',
+       permissions = '["visao-geral","whatsapp","leads","agenda","configuracoes","parceiros","permissoes","plataforma"]'::jsonb
+WHERE account_id IS NULL AND role = 'PARTNER' AND partner_id IN (SELECT id FROM accounts);
+
+UPDATE conversations SET account_id = (SELECT id FROM accounts WHERE type = 'MASTER' LIMIT 1) WHERE account_id IS NULL;
+UPDATE leads l SET account_id = c.account_id FROM conversations c WHERE l.account_id IS NULL AND c.id = l.conversation_id;
+UPDATE sellers SET account_id = (SELECT id FROM accounts WHERE type = 'MASTER' LIMIT 1) WHERE account_id IS NULL;
+UPDATE tags SET account_id = (SELECT id FROM accounts WHERE type = 'MASTER' LIMIT 1) WHERE account_id IS NULL;
+UPDATE quick_replies SET account_id = (SELECT id FROM accounts WHERE type = 'MASTER' LIMIT 1) WHERE account_id IS NULL;
+UPDATE distribution_rules SET account_id = (SELECT id FROM accounts WHERE type = 'MASTER' LIMIT 1) WHERE account_id IS NULL;
+UPDATE app_users SET account_id = (SELECT id FROM accounts WHERE type = 'MASTER' LIMIT 1) WHERE account_id IS NULL;
+UPDATE app_users SET role = 'ADMIN' WHERE role = 'PARTNER';
+
+-- Mesmo número pode conversar com empresas diferentes
+DROP INDEX IF EXISTS conversations_phone_jid_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS conversations_account_phone_idx ON conversations (account_id, phone_jid);
+CREATE INDEX IF NOT EXISTS leads_account_id_idx ON leads (account_id);
+CREATE INDEX IF NOT EXISTS sellers_account_id_idx ON sellers (account_id);
+
+-- Configurações de IA e visual passam a ser por conta (id = id da conta)
+ALTER TABLE ai_settings ALTER COLUMN id TYPE varchar(64);
+ALTER TABLE ai_settings ALTER COLUMN id DROP DEFAULT;
+UPDATE ai_settings SET id = (SELECT id::text FROM accounts WHERE type = 'MASTER' LIMIT 1) WHERE id = 'default';
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS scheduling_enabled boolean NOT NULL DEFAULT true;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS business_hours text;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS reminder_message text;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS reminder_minutes_before integer NOT NULL DEFAULT 0;
+
+ALTER TABLE platform_settings ALTER COLUMN id TYPE varchar(64);
+ALTER TABLE platform_settings ALTER COLUMN id DROP DEFAULT;
+UPDATE platform_settings SET id = (SELECT id::text FROM accounts WHERE type = 'MASTER' LIMIT 1) WHERE id = 'default';
+
+-- Agenda
+CREATE TABLE IF NOT EXISTS appointments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  lead_id uuid REFERENCES leads(id) ON DELETE SET NULL,
+  seller_id uuid REFERENCES sellers(id) ON DELETE SET NULL,
+  title varchar(200) NOT NULL,
+  notes text,
+  starts_at timestamptz NOT NULL,
+  duration_minutes integer NOT NULL DEFAULT 30,
+  status varchar(12) NOT NULL DEFAULT 'SCHEDULED',
+  reminder_enabled boolean NOT NULL DEFAULT true,
+  reminder_message text,
+  reminder_minutes_before integer NOT NULL DEFAULT 0,
+  reminder_sent_at timestamptz,
+  reminder_error text,
+  created_by varchar(10) NOT NULL DEFAULT 'HUMAN',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS appointments_account_starts_idx ON appointments (account_id, starts_at);
+CREATE INDEX IF NOT EXISTS appointments_lead_id_idx ON appointments (lead_id);
 `;
 
 const client = new pg.Client({ connectionString: url });

@@ -3,11 +3,14 @@ import { db } from "@/db/client";
 import { flowBlocks } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
+import { legacyGuard } from "@/lib/auth/legacy";
 
 export async function PATCH(
   request: NextRequest,
   ctx: { params: Promise<{ id: string; blockId: string }> }
 ) {
+  const denied = await legacyGuard();
+  if (denied) return denied;
   const params = await ctx.params;
   try {
     const { positionX, positionY, config } = await request.json();
@@ -33,6 +36,8 @@ export async function DELETE(
   request: NextRequest,
   ctx: { params: Promise<{ id: string; blockId: string }> }
 ) {
+  const denied = await legacyGuard();
+  if (denied) return denied;
   const params = await ctx.params;
   try {
     await db.delete(flowBlocks).where(eq(flowBlocks.id, params.blockId));

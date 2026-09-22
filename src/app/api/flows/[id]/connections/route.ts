@@ -3,11 +3,14 @@ import { db } from "@/db/client";
 import { flowConnections } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
+import { legacyGuard } from "@/lib/auth/legacy";
 
 export async function POST(
   request: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const denied = await legacyGuard();
+  if (denied) return denied;
   const params = await ctx.params;
   try {
     const { fromBlockId, toBlockId, label, conditionKey, conditionValue } =
@@ -45,6 +48,8 @@ export async function GET(
   request: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const denied = await legacyGuard();
+  if (denied) return denied;
   const params = await ctx.params;
   try {
     const connections = await db

@@ -9,5 +9,5 @@ export default async function Home() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const first = MODULES.find((m) => hasModule(user, m.key));
-  redirect(first?.href || "/leads");
+  redirect(first?.href || "/login");
 }

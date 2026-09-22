@@ -1,15 +1,14 @@
 /**
- * Cliente HTTP para o motor de fluxo (processo separado com Baileys).
- * Usado pelo app web (Next.js) para saber o status da conexão do WhatsApp
- * e para enviar mensagens manuais pelo inbox do SDR.
+ * Cliente HTTP para o motor do WhatsApp (processo separado com Baileys).
+ * O motor mantém um WhatsApp conectado por conta (Master, cada parceiro, cada cliente).
  */
 
-interface EngineStatus {
+export interface EngineStatus {
+  /** idle = não iniciado | starting | qr = aguardando leitura | connected */
+  state: "idle" | "starting" | "qr" | "connected";
   connected: boolean;
   phone: string | null;
   qrDataUrl: string | null;
-  /** true quando o motor tem a chave ANTHROPIC_API_KEY configurada */
-  aiReady?: boolean;
 }
 
 function baseUrl() {
@@ -24,40 +23,50 @@ function headers() {
   };
 }
 
-export async function getEngineStatus(): Promise<EngineStatus | { error: string }> {
+function describe(err: unknown) {
+  const e = err as { message?: string; cause?: { code?: string; message?: string } };
+  const why = e?.cause?.code || e?.cause?.message || e?.message || "erro desconhecido";
+  const where = process.env.FLOW_ENGINE_URL ? baseUrl() : "(FLOW_ENGINE_URL não configurada)";
+  return `Não foi possível falar com o motor do WhatsApp — tentei ${where} (${why})`;
+}
+
+async function call<T>(path: string, init?: RequestInit, timeoutMs = 8000): Promise<T | { error: string }> {
   try {
-    const res = await fetch(`${baseUrl()}/status.json`, {
+    const res = await fetch(`${baseUrl()}${path}`, {
+      ...init,
       headers: headers(),
       cache: "no-store",
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) return { error: `Motor respondeu ${res.status}` };
-    return await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: data?.error || `Motor respondeu ${res.status}` };
+    return data as T;
   } catch (err) {
-    const e = err as { message?: string; cause?: { code?: string; message?: string } };
-    const why = e?.cause?.code || e?.cause?.message || e?.message || "erro desconhecido";
-    const configured = process.env.FLOW_ENGINE_URL ? baseUrl() : "(FLOW_ENGINE_URL não configurada)";
-    return { error: `Não foi possível conectar ao motor de fluxo — tentei ${configured} (${why})` };
+    return { error: describe(err) };
   }
 }
 
-export async function sendWhatsappMessage(
+export function getEngineStatus(accountId: string) {
+  return call<EngineStatus>(`/status.json?account=${encodeURIComponent(accountId)}`);
+}
+
+export function connectWhatsapp(accountId: string) {
+  return call<EngineStatus>(`/connect`, { method: "POST", body: JSON.stringify({ accountId }) }, 15000);
+}
+
+export function logoutWhatsapp(accountId: string) {
+  return call<{ ok: boolean }>(`/logout`, { method: "POST", body: JSON.stringify({ accountId }) }, 15000);
+}
+
+export function sendWhatsappMessage(
+  accountId: string,
   phoneJid: string,
   text: string,
-  sender: "HUMAN" | "AI" | "FLOW" = "HUMAN"
+  sender: "HUMAN" | "AI" | "AUTO" = "HUMAN"
 ) {
-  try {
-    const res = await fetch(`${baseUrl()}/send`, {
-      method: "POST",
-      headers: headers(),
-      body: JSON.stringify({ phoneJid, text, sender }),
-      signal: AbortSignal.timeout(20000),
-      cache: "no-store",
-    });
-    const data = await res.json();
-    if (!res.ok) return { error: data?.error || `Motor respondeu ${res.status}` };
-    return data;
-  } catch {
-    return { error: "o motor do WhatsApp não respondeu" };
-  }
+  return call<{ success: boolean }>(
+    `/send`,
+    { method: "POST", body: JSON.stringify({ accountId, phoneJid, text, sender }) },
+    20000
+  );
 }

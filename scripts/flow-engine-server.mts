@@ -1,21 +1,24 @@
 /**
- * FLOW ENGINE SERVER — Servidor Separado para Executar Fluxos WhatsApp
+ * MOTOR DO WHATSAPP (processo separado do site)
  *
- * Responsabilidades:
- * - Manter conexão WhatsApp aberta via Baileys
- * - Monitorar fila de mensagens
- * - Interpretar e executar blocos de fluxo
- * - Gerenciar estado de conversas
- * - Logar execuções
+ * - Mantém um WhatsApp conectado para CADA conta (Master, parceiros e clientes)
+ * - A sessão fica guardada no banco (tabela wa_auth): novos deploys não derrubam a conexão
+ * - Recebe mensagens, cria leads, chama a IA da conta (chave própria ou herdada)
+ * - Marca horários na agenda quando a IA combina com o cliente
+ * - Dispara os lembretes da agenda no horário
  *
- * Roda como processo separado (scripts/flow-engine-server.mts)
+ * Roda com: npm run flow:engine
  */
 
 import {
   makeWASocket,
-  useMultiFileAuthState,
   DisconnectReason,
   Browsers,
+  initAuthCreds,
+  BufferJSON,
+  proto,
+  type AuthenticationState,
+  type SignalDataTypeMap,
 } from "@whiskeysockets/baileys";
 import type { Boom } from "@hapi/boom";
 import * as http from "http";
@@ -24,121 +27,249 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "../src/db/schema";
 import {
-  flows,
-  flowBlocks,
-  flowConnections,
+  accounts,
+  waAuth,
   conversations,
   messages,
   leads,
-  conversationStates,
-  flowExecutions,
   aiSettings,
   sellers,
   tags,
   leadTags,
-  distributionRules,
+  appointments,
 } from "../src/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, gte, lt, isNull, sql } from "drizzle-orm";
 import { runSdrAgent, pickSeller, type AgentDecision } from "../src/lib/ai/sdrAgent";
-import * as fs from "fs";
-import * as path from "path";
+import { resolveAiKey } from "../src/lib/tenancy/aiKey";
+import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
 
-// Load environment
 dotenv.config({ path: ".env.local" });
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const FLOW_ENGINE_PORT = process.env.FLOW_ENGINE_PORT || "3001";
-
 if (!DATABASE_URL) {
-  console.error("❌ DATABASE_URL not set");
+  console.error("❌ DATABASE_URL não configurada");
   process.exit(1);
 }
 
-// Database setup
 const pool = new Pool({ connectionString: DATABASE_URL });
-// O "schema" é obrigatório para usar db.query.* (sem ele nenhuma mensagem era salva)
 const db = drizzle(pool, { schema });
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 /** Espera alguns segundos antes da IA responder, para juntar mensagens seguidas do cliente */
 const AI_DEBOUNCE_MS = Number(process.env.AI_DEBOUNCE_MS || 6000);
+const SELFTEST = process.env.FLOW_ENGINE_SELFTEST === "1";
 
-// Auth directory
-const AUTH_DIR = path.join(process.cwd(), "auth_info_baileys");
-if (!fs.existsSync(AUTH_DIR)) {
-  fs.mkdirSync(AUTH_DIR, { recursive: true });
+type Sender = "AI" | "HUMAN" | "AUTO";
+type Sock = ReturnType<typeof makeWASocket>;
+
+interface Session {
+  accountId: string;
+  sock: Sock | null;
+  state: "starting" | "qr" | "connected" | "idle";
+  phone: string | null;
+  qr: string | null;
+  qrCount: number;
+  stopping: boolean;
 }
 
-let sock: ReturnType<typeof makeWASocket> | null = null;
-let connectedPhone: string | null = null;
-let currentQr: string | null = null;
+const sessions = new Map<string, Session>();
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * Conectar ao WhatsApp via Baileys
- */
-async function connectWhatsApp() {
-  console.log("[Flow Engine] Conectando ao WhatsApp...");
+// ============================================================================
+// SESSÃO DO WHATSAPP GUARDADA NO BANCO
+// ============================================================================
 
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+async function readAuth(accountId: string, key: string) {
+  const row = await db.query.waAuth.findFirst({ where: and(eq(waAuth.accountId, accountId), eq(waAuth.key, key)) });
+  return row ? JSON.parse(row.value, BufferJSON.reviver) : null;
+}
 
-  sock = makeWASocket({
-    auth: state,
-    browser: Browsers.ubuntu("Chrome"),
-  });
+async function writeAuth(accountId: string, key: string, value: unknown) {
+  const json = JSON.stringify(value, BufferJSON.replacer);
+  await db
+    .insert(waAuth)
+    .values({ accountId, key, value: json })
+    .onConflictDoUpdate({ target: [waAuth.accountId, waAuth.key], set: { value: json } });
+}
 
-  // Listeners
-  sock.ev.on("connection.update", async (update) => {
-    const { connection, lastDisconnect, qr } = update;
+async function removeAuth(accountId: string, key: string) {
+  await db.delete(waAuth).where(and(eq(waAuth.accountId, accountId), eq(waAuth.key, key)));
+}
 
-    if (qr) {
-      currentQr = qr;
-      console.log("[WhatsApp] Novo QR Code gerado. Abra a pagina do motor para escanear.");
-      try {
-        console.log(await QRCode.toString(qr, { type: "terminal", small: true }));
-      } catch {}
-    }
+async function clearAuth(accountId: string) {
+  await db.delete(waAuth).where(eq(waAuth.accountId, accountId));
+}
 
-    if (connection === "close") {
-      const shouldReconnect =
-        (lastDisconnect?.error as Boom)?.output?.statusCode !==
-        DisconnectReason.loggedOut;
+async function useDbAuthState(accountId: string): Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }> {
+  const creds = (await readAuth(accountId, "creds")) || initAuthCreds();
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
+          const data: { [id: string]: SignalDataTypeMap[T] } = {};
+          await Promise.all(
+            ids.map(async (id) => {
+              let value = await readAuth(accountId, `${type}-${id}`);
+              if (type === "app-state-sync-key" && value) {
+                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+              }
+              data[id] = value;
+            })
+          );
+          return data;
+        },
+        set: async (data: any) => {
+          const tasks: Promise<unknown>[] = [];
+          for (const category in data) {
+            for (const id in data[category]) {
+              const value = data[category][id];
+              const key = `${category}-${id}`;
+              tasks.push(value ? writeAuth(accountId, key, value) : removeAuth(accountId, key));
+            }
+          }
+          await Promise.all(tasks);
+        },
+      },
+    },
+    saveCreds: () => writeAuth(accountId, "creds", creds),
+  };
+}
 
-      console.log(
-        "[WhatsApp]",
-        shouldReconnect ? "Reconectando..." : "Desconectado"
-      );
+async function hasSavedLogin(accountId: string) {
+  const creds = await readAuth(accountId, "creds");
+  return Boolean(creds?.registered || creds?.me?.id);
+}
 
-      if (shouldReconnect) {
-        setTimeout(() => connectWhatsApp(), 3000);
-      }
-    } else if (connection === "open") {
-      const id = sock!.user?.id;
-      connectedPhone = id?.split(":")[0] || null;
-      currentQr = null;
-      console.log("✅ WhatsApp Conectado:", connectedPhone);
-    }
-  });
+// ============================================================================
+// CONEXÕES (UMA POR CONTA)
+// ============================================================================
+
+function getSession(accountId: string): Session {
+  let s = sessions.get(accountId);
+  if (!s) {
+    s = { accountId, sock: null, state: "idle", phone: null, qr: null, qrCount: 0, stopping: false };
+    sessions.set(accountId, s);
+  }
+  return s;
+}
+
+async function startSession(accountId: string) {
+  const s = getSession(accountId);
+  if (s.sock && s.state !== "idle") return s;
+  s.stopping = false;
+  s.state = "starting";
+  s.qr = null;
+
+  if (SELFTEST) {
+    s.sock = {
+      sendMessage: async (jid: string, content: any) => {
+        console.log(`[SELFTEST ${accountId.slice(0, 8)}] -> ${jid}: ${content?.text}`);
+        return { key: { id: "TEST" + Math.random().toString(36).slice(2) } };
+      },
+      end: () => {},
+      logout: async () => {},
+    } as unknown as Sock;
+    s.state = "connected";
+    s.phone = "55000" + accountId.replace(/\D/g, "").slice(0, 8);
+    return s;
+  }
+
+  const { state, saveCreds } = await useDbAuthState(accountId);
+  const sock = makeWASocket({ auth: state, browser: Browsers.ubuntu("Chrome"), markOnlineOnConnect: false });
+  s.sock = sock;
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("messages.upsert", async (m) => {
-    if (m.type !== "notify") return;
-
-    for (const msg of m.messages) {
-      if (msg.key.fromMe) {
-        // Mensagem enviada pelo celular da loja (uma pessoa respondeu direto no WhatsApp)
-        await handleOwnPhoneMessage(msg);
-        continue;
+  sock.ev.on("connection.update", async (update) => {
+    // Evento de uma conexão antiga (já substituída): ignora
+    if (s.sock !== sock) return;
+    const { connection, lastDisconnect, qr } = update;
+    if (qr) {
+      s.qr = qr;
+      s.state = "qr";
+      s.qrCount++;
+      console.log(`[WhatsApp ${accountId.slice(0, 8)}] QR Code gerado (${s.qrCount})`);
+    }
+    if (connection === "open") {
+      s.state = "connected";
+      s.qr = null;
+      s.qrCount = 0;
+      s.phone = sock.user?.id?.split(":")[0] || null;
+      console.log(`✅ [WhatsApp ${accountId.slice(0, 8)}] conectado: ${s.phone}`);
+    }
+    if (connection === "close") {
+      const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
+      s.sock = null;
+      s.phone = null;
+      if (s.stopping) {
+        s.state = "idle";
+        return;
       }
-
-      console.log("[Mensagem Recebida]", msg.key.remoteJid);
-      await handleIncomingMessage(msg);
+      if (code === DisconnectReason.loggedOut) {
+        console.log(`[WhatsApp ${accountId.slice(0, 8)}] desconectado pelo celular`);
+        await clearAuth(accountId);
+        s.state = "idle";
+        s.qr = null;
+        return;
+      }
+      // QR expirou sem ninguém ler: para (a pessoa clica em "Gerar QR Code" de novo)
+      if (!(await hasSavedLogin(accountId)) && s.qrCount >= 5) {
+        console.log(`[WhatsApp ${accountId.slice(0, 8)}] QR expirou sem leitura — aguardando novo pedido`);
+        s.state = "idle";
+        s.qr = null;
+        s.qrCount = 0;
+        return;
+      }
+      s.state = "starting";
+      setTimeout(() => startSession(accountId).catch((e) => console.error("[WhatsApp] reconexão:", e)), 3000);
     }
   });
 
-  return sock;
+  sock.ev.on("messages.upsert", async (m) => {
+    if (m.type !== "notify") return;
+    for (const msg of m.messages) {
+      if (msg.key.fromMe) await handleOwnPhoneMessage(accountId, msg);
+      else await handleIncomingMessage(accountId, msg);
+    }
+  });
+
+  return s;
 }
+
+async function stopSession(accountId: string, logout: boolean) {
+  const s = getSession(accountId);
+  s.stopping = true;
+  try {
+    if (logout) await s.sock?.logout().catch(() => {});
+    s.sock?.end(undefined);
+  } catch {}
+  s.sock = null;
+  s.state = "idle";
+  s.qr = null;
+  s.phone = null;
+  if (logout) await clearAuth(accountId);
+}
+
+/** Reabre as conexões salvas (ao iniciar e de tempos em tempos) */
+async function syncSessions() {
+  const rows = await db
+    .select({ id: accounts.id })
+    .from(accounts)
+    .where(and(eq(accounts.waEnabled, true), eq(accounts.active, true)));
+  for (const { id } of rows) {
+    const s = getSession(id);
+    if (s.state === "idle" && !s.sock && (SELFTEST || (await hasSavedLogin(id)))) {
+      console.log(`[WhatsApp ${id.slice(0, 8)}] reabrindo sessão salva`);
+      await startSession(id).catch((e) => console.error("[WhatsApp] start:", e));
+      await pause(500);
+    }
+  }
+}
+
+// ============================================================================
+// MENSAGENS
+// ============================================================================
 
 /** Conversas que não são de clientes (grupos, status, canais) */
 function isIgnoredJid(jid: string | null | undefined) {
@@ -175,387 +306,106 @@ function extractText(message: any): { text: string; type: string } | null {
   if (m.stickerMessage) return { text: "[figurinha]", type: "sticker" };
   if (m.locationMessage) return { text: "[localização]", type: "location" };
   if (m.contactMessage) return { text: "[contato]", type: "contact" };
-  return null; // reações, avisos de sistema etc.
+  return null;
 }
 
 /** Número de telefone real (o WhatsApp novo às vezes manda um ID "@lid" no lugar) */
 function phoneFromKey(key: any): string | null {
-  const candidates = [key?.remoteJidAlt, key?.senderPn, key?.remoteJid];
-  for (const c of candidates) {
-    if (typeof c === "string" && c.endsWith("@s.whatsapp.net")) {
-      return c.split("@")[0].split(":")[0];
-    }
+  for (const c of [key?.remoteJidAlt, key?.senderPn, key?.remoteJid]) {
+    if (typeof c === "string" && c.endsWith("@s.whatsapp.net")) return c.split("@")[0].split(":")[0];
   }
   return null;
 }
 
-async function isSellerPhone(phone: string) {
+async function isSellerPhone(accountId: string, phone: string) {
   const tail = phone.replace(/\D/g, "").slice(-10);
-  const all = await db.select({ phone: sellers.phone }).from(sellers);
+  const all = await db.select({ phone: sellers.phone }).from(sellers).where(eq(sellers.accountId, accountId));
   return all.some((s) => s.phone && s.phone.replace(/\D/g, "").slice(-10) === tail);
 }
 
-/**
- * Processar mensagem recebida
- */
-async function handleIncomingMessage(msg: any) {
+async function handleIncomingMessage(accountId: string, msg: any) {
   try {
     const phoneJid: string = msg.key.remoteJid;
     if (isIgnoredJid(phoneJid)) return;
-
     const extracted = extractText(msg.message);
     if (!extracted) return;
-    const messageBody = extracted.text;
     const pushName: string | null = msg.pushName || null;
     const phone = phoneFromKey(msg.key);
 
-    console.log(`[Mensagem] ${phoneJid}: "${messageBody.slice(0, 80)}"`);
+    if (phone && (await isSellerPhone(accountId, phone))) return; // vendedor da equipe não vira lead
 
-    // Mensagem de um vendedor da equipe (ex.: respondendo o aviso de lead) não vira lead
-    if (phone && (await isSellerPhone(phone))) {
-      console.log(`[Mensagem] ${phone} é vendedor da equipe — ignorado como lead`);
-      return;
-    }
-
-    // Evita duplicar se o WhatsApp reenviar o mesmo evento
     if (msg.key.id) {
       const dup = await db.query.messages.findFirst({ where: eq(messages.whatsappMessageId, msg.key.id) });
       if (dup) return;
     }
 
-    // 1. Obter/criar conversa
     let conversation = await db.query.conversations.findFirst({
-      where: eq(conversations.phoneJid, phoneJid),
+      where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
     });
-
     if (!conversation) {
-      const [newConv] = await db
+      const [created] = await db
         .insert(conversations)
-        .values({ phoneJid, leadName: pushName || "Lead", lastMessageAt: new Date() })
+        .values({ accountId, phoneJid, leadName: pushName || "Lead", lastMessageAt: new Date() })
         .onConflictDoNothing()
         .returning();
       conversation =
-        newConv || (await db.query.conversations.findFirst({ where: eq(conversations.phoneJid, phoneJid) }));
+        created ||
+        (await db.query.conversations.findFirst({
+          where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
+        }));
     } else if (pushName && (!conversation.leadName || conversation.leadName === "Lead")) {
       await db.update(conversations).set({ leadName: pushName }).where(eq(conversations.id, conversation.id));
     }
     if (!conversation) return;
 
-    // Card do lead no funil (Primeiro contato)
     const existingLead = await db.query.leads.findFirst({ where: eq(leads.conversationId, conversation.id) });
     if (!existingLead) {
       await db
         .insert(leads)
-        .values({
-          conversationId: conversation.id,
-          cardName: pushName || "Lead",
-          phone,
-          stage: "FIRST_CONTACT",
-        })
+        .values({ accountId, conversationId: conversation.id, cardName: pushName || "Lead", phone, stage: "FIRST_CONTACT" })
         .onConflictDoNothing();
     } else if (phone && !existingLead.phone) {
       await db.update(leads).set({ phone }).where(eq(leads.id, existingLead.id));
     }
 
-    // 2. Registrar mensagem
     await db.insert(messages).values({
       conversationId: conversation.id,
       direction: "IN",
-      body: messageBody,
+      body: extracted.text,
       messageType: extracted.type,
       whatsappMessageId: msg.key.id,
       sentAt: msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000) : new Date(),
       sender: "LEAD",
     });
-    await db
-      .update(conversations)
-      .set({ lastMessageAt: new Date() })
-      .where(eq(conversations.id, conversation.id));
+    await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
     await db.update(leads).set({ updatedAt: new Date() }).where(eq(leads.conversationId, conversation.id));
 
-    // IA ligada? Ela cuida do atendimento (o construtor de fluxos antigo fica de lado)
-    const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, "default") });
-    if (settings?.enabled) {
-      scheduleAi(conversation.id);
-      return;
-    }
+    console.log(`[Mensagem ${accountId.slice(0, 8)}] ${phoneJid}: "${extracted.text.slice(0, 60)}"`);
 
-    // 3. Encontrar fluxo ativo para esta conversa
-    let state = await db.query.conversationStates.findFirst({
-      where: and(
-        eq(conversationStates.conversationId, conversation.id),
-        eq(conversationStates.status, "ACTIVE")
-      ),
-    });
-
-    // Se não há estado, iniciar novo fluxo (trigger: FIRST_MESSAGE)
-    if (!state) {
-      console.log("[Flow] Iniciando novo fluxo para conversa...");
-      state = await startNewFlow(conversation.id, messageBody);
-
-      if (!state) {
-        console.log("[Flow] Nenhum fluxo encontrado para esta conversa");
-        return;
-      }
-    }
-
-    // 4. Executar próximo bloco
-    await executeFlowBlock(state, conversation, messageBody);
+    const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
+    if (settings?.enabled) scheduleAi(accountId, conversation.id);
   } catch (error) {
     console.error("[Error] handleIncomingMessage:", error);
   }
 }
 
-/**
- * Iniciar novo fluxo (trigger: FIRST_MESSAGE ou KEYWORD)
- */
-async function startNewFlow(conversationId: string, messageBody: string) {
-  try {
-    // Buscar fluxos com trigger FIRST_MESSAGE (ordenado por prioridade)
-    const activeFlows = await db
-      .select()
-      .from(flows)
-      .where(eq(flows.enabled, true))
-      .orderBy(flows.priority);
-
-    if (activeFlows.length === 0) {
-      return null;
-    }
-
-    // Usar primeiro fluxo (menor prioridade)
-    const flow = activeFlows[0];
-
-    // Criar state de conversa
-    const [newState] = await db
-      .insert(conversationStates)
-      .values({
-        conversationId,
-        flowId: flow.id,
-        currentBlockId: null,
-        variables: { startedWith: messageBody },
-        status: "ACTIVE",
-      })
-      .returning();
-
-    console.log(
-      `[Flow] Novo estado criado para fluxo "${flow.name}" (ID: ${flow.id})`
-    );
-
-    return newState;
-  } catch (error) {
-    console.error("[Error] startNewFlow:", error);
-    return null;
-  }
-}
-
-/**
- * Executar próximo bloco do fluxo
- */
-async function executeFlowBlock(
-  state: any,
-  conversation: any,
-  userMessage: string
-) {
-  try {
-    // 1. Determinar próximo bloco
-    let nextBlockId: string | null = null;
-
-    if (!state.currentBlockId) {
-      // Primeira execução: encontrar bloco START
-      const startBlock = await db.query.flowBlocks.findFirst({
-        where: and(
-          eq(flowBlocks.flowId, state.flowId),
-          eq(flowBlocks.type, "START")
-        ),
-      });
-      nextBlockId = startBlock?.id || null;
-    } else {
-      // Próximo bloco baseado em conexões
-      const connections = await db
-        .select()
-        .from(flowConnections)
-        .where(eq(flowConnections.fromBlockId, state.currentBlockId));
-
-      // Se há múltiplas conexões, usar primeira (em future: implementar condições)
-      nextBlockId = connections[0]?.toBlockId || null;
-    }
-
-    if (!nextBlockId) {
-      console.log("[Flow] Nenhum próximo bloco encontrado, encerrando fluxo");
-      await db
-        .update(conversationStates)
-        .set({ status: "COMPLETED" })
-        .where(eq(conversationStates.id, state.id));
-      return;
-    }
-
-    // 2. Buscar bloco
-    const block = await db.query.flowBlocks.findFirst({
-      where: eq(flowBlocks.id, nextBlockId),
-    });
-
-    if (!block) {
-      console.error("[Flow] Bloco não encontrado:", nextBlockId);
-      return;
-    }
-
-    console.log(`[Flow] Executando bloco: ${block.type} (${block.id})`);
-
-    // 3. Executar bloco
-    const result = await executeBlock(block, conversation, userMessage, state);
-
-    // 4. Registrar execução
-    await db.insert(flowExecutions).values({
-      stateId: state.id,
-      blockId: block.id,
-      executedAt: new Date(),
-      result,
-    });
-
-    // 5. Atualizar estado
-    await db
-      .update(conversationStates)
-      .set({
-        currentBlockId: block.id,
-        updatedAt: new Date(),
-      })
-      .where(eq(conversationStates.id, state.id));
-
-    console.log(`[Flow] Bloco executado com sucesso: ${block.type}`);
-  } catch (error) {
-    console.error("[Error] executeFlowBlock:", error);
-  }
-}
-
-/**
- * Executar lógica específica do bloco
- */
-async function executeBlock(
-  block: any,
-  conversation: any,
-  userMessage: string,
-  state: any
-): Promise<any> {
-  const config = block.config || {};
-
-  switch (block.type) {
-    case "START":
-      // Enviar mensagem inicial
-      if (config.message) {
-        return await sendMessage(
-          conversation.phoneJid,
-          config.message,
-          config.delay
-        );
-      }
-      return { success: true };
-
-    case "TEXT_MESSAGE":
-      // Enviar texto
-      return await sendMessage(
-        conversation.phoneJid,
-        config.text || "Mensagem",
-        config.delay
-      );
-
-    case "IMAGE":
-      // Enviar imagem
-      if (config.imageUrl) {
-        return await sendMedia(
-          conversation.phoneJid,
-          config.imageUrl,
-          "image",
-          config.caption
-        );
-      }
-      return { success: true };
-
-    case "VIDEO":
-      // Enviar vídeo
-      if (config.videoUrl) {
-        return await sendMedia(
-          conversation.phoneJid,
-          config.videoUrl,
-          "video",
-          config.caption
-        );
-      }
-      return { success: true };
-
-    case "AUDIO":
-      // Enviar áudio
-      if (config.audioUrl) {
-        return await sendMedia(conversation.phoneJid, config.audioUrl, "audio");
-      }
-      return { success: true };
-
-    case "DOCUMENT":
-      // Enviar documento
-      if (config.documentUrl) {
-        return await sendMedia(
-          conversation.phoneJid,
-          config.documentUrl,
-          "document",
-          null,
-          config.fileName
-        );
-      }
-      return { success: true };
-
-    case "LIST":
-      // Enviar menu/lista
-      return await sendList(
-        conversation.phoneJid,
-        config.title,
-        config.options
-      );
-
-    case "RESPONSE_WAIT":
-      // Apenas marca que está aguardando resposta (mensagem já foi enviada)
-      return { success: true, waiting: true };
-
-    case "CONDITION":
-      // Condição (implementado em conexões, aqui passa)
-      return { success: true };
-
-    case "END":
-      // Encerrar fluxo
-      if (config.message) {
-        await sendMessage(conversation.phoneJid, config.message);
-      }
-      await db
-        .update(conversationStates)
-        .set({ status: "COMPLETED" })
-        .where(eq(conversationStates.id, state.id));
-      return { success: true, ended: true };
-
-    default:
-      return { success: true, blockType: block.type };
-  }
-}
-
-// ============================================================================
-// ATENDIMENTO COM IA (SDR)
-// ============================================================================
-
-/** IDs de mensagens enviadas por este motor (para não confundir com mensagens do celular) */
+/** IDs de mensagens enviadas por este motor (para não confundir com mensagens digitadas no celular) */
 const recentSentIds: string[] = [];
 function rememberSent(id: string) {
   recentSentIds.push(id);
-  if (recentSentIds.length > 500) recentSentIds.shift();
+  if (recentSentIds.length > 1000) recentSentIds.shift();
 }
 
-/**
- * Alguém respondeu o cliente direto pelo celular da loja:
- * registra no histórico e pausa a IA desse lead (a pessoa assumiu).
- */
-async function handleOwnPhoneMessage(msg: any) {
+/** Alguém respondeu pelo celular da empresa: registra e pausa a IA desse lead */
+async function handleOwnPhoneMessage(accountId: string, msg: any) {
   try {
     const phoneJid: string = msg.key.remoteJid;
     if (isIgnoredJid(phoneJid) || !msg.key.id || recentSentIds.includes(msg.key.id)) return;
     const extracted = extractText(msg.message);
     if (!extracted) return;
-    const conversation = await db.query.conversations.findFirst({ where: eq(conversations.phoneJid, phoneJid) });
+    const conversation = await db.query.conversations.findFirst({
+      where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
+    });
     if (!conversation) return;
     const dup = await db.query.messages.findFirst({ where: eq(messages.whatsappMessageId, msg.key.id) });
     if (dup) return;
@@ -570,22 +420,50 @@ async function handleOwnPhoneMessage(msg: any) {
       sender: "HUMAN",
     });
     await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
-    await db
-      .update(leads)
-      .set({ aiPaused: true, updatedAt: new Date() })
-      .where(eq(leads.conversationId, conversation.id));
-    console.log(`[IA] Resposta manual pelo celular em ${phoneJid} — IA pausada para este lead`);
+    await db.update(leads).set({ aiPaused: true, updatedAt: new Date() }).where(eq(leads.conversationId, conversation.id));
   } catch (error) {
     console.error("[Error] handleOwnPhoneMessage:", error);
   }
 }
 
+/** Envia texto pelo WhatsApp da conta e registra no histórico */
+async function sendText(accountId: string, phoneJid: string, text: string, sender: Sender) {
+  const s = sessions.get(accountId);
+  if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
+  try {
+    const response = await s.sock.sendMessage(phoneJid, { text });
+    if (response?.key?.id) rememberSent(response.key.id);
+    const conv = await db.query.conversations.findFirst({
+      where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
+    });
+    if (conv) {
+      await db.insert(messages).values({
+        conversationId: conv.id,
+        direction: "OUT",
+        body: text,
+        messageType: "text",
+        whatsappMessageId: response?.key?.id,
+        sentAt: new Date(),
+        sender,
+      });
+      await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
+    }
+    return { success: true, messageId: response?.key?.id };
+  } catch (error) {
+    console.error("[Error] sendText:", error);
+    return { error: String(error) };
+  }
+}
+
+// ============================================================================
+// IA (SDR)
+// ============================================================================
+
 const aiTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const aiRunning = new Set<string>();
-let warnedNoKey = false;
+const warned = new Set<string>();
 
-/** Agenda a IA para responder (espera o cliente terminar de digitar) */
-function scheduleAi(conversationId: string) {
+function scheduleAi(accountId: string, conversationId: string) {
   const current = aiTimers.get(conversationId);
   if (current) clearTimeout(current);
   aiTimers.set(
@@ -593,41 +471,40 @@ function scheduleAi(conversationId: string) {
     setTimeout(() => {
       aiTimers.delete(conversationId);
       if (aiRunning.has(conversationId)) {
-        // Ainda respondendo a anterior: tenta de novo logo depois
-        scheduleAi(conversationId);
+        scheduleAi(accountId, conversationId);
         return;
       }
       aiRunning.add(conversationId);
-      runAi(conversationId)
+      runAi(accountId, conversationId)
         .catch((err) => console.error("[IA] Erro:", err?.message || err))
         .finally(() => aiRunning.delete(conversationId));
     }, AI_DEBOUNCE_MS)
   );
 }
 
-const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Telefone do vendedor em formato do WhatsApp (adiciona 55 se faltar) */
 function sellerJid(phone: string | null) {
   const d = (phone || "").replace(/\D/g, "");
   if (d.length < 10) return null;
   return `${d.length <= 11 ? "55" + d : d}@s.whatsapp.net`;
 }
 
-async function runAi(conversationId: string) {
-  const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, "default") });
+async function loadAccount(id: string) {
+  return db.query.accounts.findFirst({ where: eq(accounts.id, id) });
+}
+
+async function runAi(accountId: string, conversationId: string) {
+  const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
   if (!settings?.enabled) return;
-  if (!ANTHROPIC_API_KEY) {
-    if (!warnedNoKey) console.warn("[IA] ANTHROPIC_API_KEY não configurada no motor — IA não vai responder.");
-    warnedNoKey = true;
+
+  const key = await resolveAiKey(accountId, loadAccount);
+  if (!key.apiKey) {
+    if (!warned.has(accountId)) console.warn(`[IA ${accountId.slice(0, 8)}] sem chave de IA (${key.reason}) — não vou responder`);
+    warned.add(accountId);
     return;
   }
 
   const conversation = await db.query.conversations.findFirst({ where: eq(conversations.id, conversationId) });
-  const lead = await db.query.leads.findFirst({
-    where: eq(leads.conversationId, conversationId),
-    with: { leadTags: { with: { tag: true } } },
-  });
+  const lead = await db.query.leads.findFirst({ where: eq(leads.conversationId, conversationId) });
   if (!conversation || !lead) return;
   if (lead.aiPaused || lead.sellerId || lead.stage === "SALE") return;
 
@@ -639,13 +516,35 @@ async function runAi(conversationId: string) {
   const history = recent.reverse();
   if (!history.length || history[history.length - 1].direction !== "IN") return;
 
-  const allTags = await db.select().from(tags);
-  const rules = await db.query.distributionRules.findMany({ with: { seller: true } });
+  const allTags = await db.select().from(tags).where(eq(tags.accountId, accountId));
+  const rules = await db.query.distributionRules.findMany({
+    where: eq(schema.distributionRules.accountId, accountId),
+    with: { seller: true },
+  });
 
-  console.log(`[IA] Atendendo ${conversation.phoneJid}...`);
+  // Agenda: horários ocupados e o agendamento atual do lead
+  const now = new Date();
+  const busyRows = await db
+    .select({ startsAt: appointments.startsAt })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.accountId, accountId),
+        eq(appointments.status, "SCHEDULED"),
+        gte(appointments.startsAt, now),
+        lt(appointments.startsAt, new Date(now.getTime() + 21 * 864e5))
+      )
+    )
+    .orderBy(appointments.startsAt)
+    .limit(40);
+  const currentAppt = await db.query.appointments.findFirst({
+    where: and(eq(appointments.leadId, lead.id), eq(appointments.status, "SCHEDULED"), gte(appointments.startsAt, now)),
+    orderBy: (a, { asc }) => asc(a.startsAt),
+  });
+
   const decision = await runSdrAgent(
     {
-      systemPrompt: settings.systemPrompt || "Você é a atendente virtual da loja.",
+      systemPrompt: settings.systemPrompt || "Você é a atendente virtual da empresa.",
       lead: {
         name: lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conversation.leadName,
         city: lead.city,
@@ -658,31 +557,36 @@ async function runAi(conversationId: string) {
       history: history.map((m) => ({ direction: m.direction, body: m.body, sender: m.sender })),
       tags: allTags.map((t) => t.name),
       regions: [...new Set(rules.filter((r) => r.active && r.region).map((r) => r.region as string))],
+      scheduling: {
+        enabled: settings.schedulingEnabled,
+        businessHours: settings.businessHours,
+        busy: busyRows.map((b) => `${formatSpDate(b.startsAt).slice(0, 5)} às ${formatSpTime(b.startsAt)}`),
+        current: currentAppt
+          ? `${currentAppt.title} em ${formatSpDate(currentAppt.startsAt)} às ${formatSpTime(currentAppt.startsAt)}`
+          : null,
+      },
     },
-    {
-      apiKey: ANTHROPIC_API_KEY,
-      model: settings.model || "claude-sonnet-4-5",
-      baseUrl: process.env.ANTHROPIC_BASE_URL,
-    }
+    { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL }
   );
   if (!decision) return;
 
   // Uma pessoa assumiu enquanto a IA pensava? Não responde por cima.
   const fresh = await db.query.leads.findFirst({ where: eq(leads.id, lead.id) });
   if (!fresh || fresh.aiPaused || fresh.sellerId) return;
-  const newer = await db.query.messages.findFirst({
+  const newest = await db.query.messages.findFirst({
     where: eq(messages.conversationId, conversationId),
     orderBy: [desc(messages.sentAt)],
   });
-  if (newer && newer.id !== history[history.length - 1].id && newer.direction === "IN") {
-    // Chegou mensagem nova do cliente: a próxima rodada responde tudo junto
-    scheduleAi(conversationId);
+  if (newest && newest.id !== history[history.length - 1].id && newest.direction === "IN") {
+    scheduleAi(accountId, conversationId);
     return;
   }
 
-  await applyDecision(lead.id, conversationId, decision, allTags);
+  await applyDecision(accountId, lead.id, conversationId, decision, allTags);
+  if (decision.appointment && settings.schedulingEnabled) {
+    await saveAiAppointment(accountId, lead.id, decision, settings, currentAppt?.id || null);
+  }
 
-  // Envia a resposta (até 3 balões, como uma pessoa digitando)
   const parts = decision.reply
     .split(/\n\s*\n/)
     .map((p) => p.trim())
@@ -690,18 +594,20 @@ async function runAi(conversationId: string) {
     .slice(0, 3);
   for (let i = 0; i < parts.length; i++) {
     if (i > 0) await pause(1200);
-    await sendMessage(conversation.phoneJid, parts[i], 0, "AI");
+    await sendText(accountId, conversation.phoneJid, parts[i], "AI");
   }
 
   if (decision.handoff) {
-    await handoffToSeller(lead.id, conversation.phoneJid, conversation.leadName, decision, settings, rules);
+    await handoffToSeller(accountId, lead.id, conversation.phoneJid, conversation.leadName, decision, settings, rules);
   }
   console.log(
-    `[IA] Respondido ${conversation.phoneJid} — nota ${decision.score}${decision.handoff ? " — transferido" : ""}`
+    `[IA ${accountId.slice(0, 8)}] ${conversation.phoneJid} — nota ${decision.score}` +
+      `${decision.appointment ? " — agendou" : ""}${decision.handoff ? " — transferido" : ""}`
   );
 }
 
 async function applyDecision(
+  accountId: string,
   leadId: string,
   conversationId: string,
   d: AgentDecision,
@@ -710,12 +616,12 @@ async function applyDecision(
   const current = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
   if (!current) return;
   const order = ["FIRST_CONTACT", "SECOND_CONTACT", "HOT_LEAD", "SALE"];
-  // O estágio só avança (a IA não rebaixa um lead que alguém já moveu para frente)
-  const stage =
-    order.indexOf(d.stage) > order.indexOf(current.stage) || !order.includes(current.stage) ? d.stage : current.stage;
+  // O estágio só avança (a IA não rebaixa um lead que alguém moveu para frente)
+  let stage = order.indexOf(d.stage) > order.indexOf(current.stage) || !order.includes(current.stage) ? d.stage : current.stage;
+  if ((d.handoff || d.appointment) && order.indexOf(stage) < order.indexOf("HOT_LEAD")) stage = "HOT_LEAD";
 
   const set: Record<string, unknown> = {
-    stage: d.handoff && order.indexOf(stage) < order.indexOf("HOT_LEAD") ? "HOT_LEAD" : stage,
+    stage,
     score: d.score,
     aiSummary: d.summary || current.aiSummary,
     updatedAt: new Date(),
@@ -723,7 +629,8 @@ async function applyDecision(
   if (d.city) set.city = d.city;
   if (d.interest) set.interest = d.interest;
   if (d.saleType !== "ANY") set.saleType = d.saleType;
-  if (d.name && (!current.cardName || current.cardName === "Lead" || current.cardName === (await pushNameOf(conversationId)))) {
+  const conv = await db.query.conversations.findFirst({ where: eq(conversations.id, conversationId) });
+  if (d.name && (!current.cardName || current.cardName === "Lead" || current.cardName === conv?.leadName)) {
     set.cardName = d.name;
     await db.update(conversations).set({ leadName: d.name }).where(eq(conversations.id, conversationId));
   }
@@ -735,23 +642,61 @@ async function applyDecision(
   }
 }
 
-async function pushNameOf(conversationId: string) {
-  const c = await db.query.conversations.findFirst({ where: eq(conversations.id, conversationId) });
-  return c?.leadName || null;
+async function saveAiAppointment(
+  accountId: string,
+  leadId: string,
+  d: AgentDecision,
+  settings: { reminderMessage: string | null; reminderMinutesBefore: number },
+  existingId: string | null
+) {
+  if (!d.appointment) return;
+  const startsAt = fromSpDateTime(d.appointment.date, d.appointment.time);
+  if (!startsAt || startsAt.getTime() < Date.now() - 5 * 60e3) {
+    console.warn(`[IA ${accountId.slice(0, 8)}] horário inválido/passado ignorado:`, d.appointment);
+    return;
+  }
+  const lead = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
+  if (existingId) {
+    const existing = await db.query.appointments.findFirst({ where: eq(appointments.id, existingId) });
+    if (existing && existing.startsAt.getTime() === startsAt.getTime()) return; // já está marcado
+    await db
+      .update(appointments)
+      .set({ startsAt, title: d.appointment.subject, reminderSentAt: null, reminderError: null, updatedAt: new Date() })
+      .where(eq(appointments.id, existingId));
+    return;
+  }
+  await db.insert(appointments).values({
+    accountId,
+    leadId,
+    sellerId: lead?.sellerId || null,
+    title: d.appointment.subject,
+    notes: d.summary || null,
+    startsAt,
+    reminderMessage: settings.reminderMessage,
+    reminderMinutesBefore: settings.reminderMinutesBefore,
+    createdBy: "AI",
+  });
 }
 
 async function handoffToSeller(
+  accountId: string,
   leadId: string,
   leadJid: string,
   leadName: string | null,
   d: AgentDecision,
   settings: { handoffMessage: string | null; notifySeller: boolean },
-  rules: { region: string | null; saleType: "ANY" | "WHOLESALE" | "RETAIL"; priority: number; active: boolean; sellerId: string; seller: { active: boolean } | null }[]
+  rules: {
+    region: string | null;
+    saleType: "ANY" | "WHOLESALE" | "RETAIL";
+    priority: number;
+    active: boolean;
+    sellerId: string;
+    seller: { active: boolean } | null;
+  }[]
 ) {
   const current = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
   const city = d.city || current?.city || null;
   const saleType = d.saleType !== "ANY" ? d.saleType : current?.saleType || "ANY";
-
   const sellerId = pickSeller(
     rules.map((r) => ({ ...r, sellerActive: r.seller?.active !== false })),
     city,
@@ -763,11 +708,17 @@ async function handoffToSeller(
     .update(leads)
     .set({ sellerId: seller?.id || null, aiPaused: true, updatedAt: new Date() })
     .where(eq(leads.id, leadId));
+  if (seller) {
+    await db
+      .update(appointments)
+      .set({ sellerId: seller.id })
+      .where(and(eq(appointments.leadId, leadId), isNull(appointments.sellerId)));
+  }
 
   const template = settings.handoffMessage ?? "";
   if (template.trim()) {
     await pause(1200);
-    await sendMessage(leadJid, template.replace(/\{vendedor\}/g, seller?.name || "um de nossos consultores"), 0, "AI");
+    await sendText(accountId, leadJid, fillTemplate(template, { vendedor: seller?.name || "um de nossos consultores" }), "AI");
   }
 
   if (seller && settings.notifySeller) {
@@ -779,274 +730,218 @@ async function handoffToSeller(
         `*Cliente:* ${d.name || current?.cardName || leadName || "sem nome"}`,
         city ? `*Cidade:* ${city}` : null,
         d.interest ? `*Interesse:* ${d.interest}` : null,
+        d.appointment ? `*Agendado:* ${d.appointment.subject} em ${d.appointment.date.split("-").reverse().join("/")} às ${d.appointment.time}` : null,
         `*Nota:* ${d.score}/100`,
         d.summary ? `\n${d.summary}` : null,
-        leadPhone ? `\nFalar com o cliente: https://wa.me/${leadPhone}` : `\nAbra o painel em Leads para continuar a conversa.`,
+        leadPhone ? `\nFalar com o cliente: https://wa.me/${leadPhone}` : `\nAbra o painel em Leads para continuar.`,
       ].filter(Boolean);
-      const r = await sendMessage(jid, lines.join("\n"), 0, "AI");
-      if (r?.error) console.warn("[IA] Não consegui avisar o vendedor:", r.error);
+      const r = await sendText(accountId, jid, lines.join("\n"), "AI");
+      if ("error" in r) console.warn("[IA] Não consegui avisar o vendedor:", r.error);
     }
   }
 }
 
-/**
- * Enviar mensagem de texto
- */
-async function sendMessage(
-  phoneJid: string,
-  text: string,
-  delay?: number,
-  sender: "AI" | "HUMAN" | "FLOW" = "FLOW"
-): Promise<any> {
-  if (!sock || !connectedPhone) return { error: "WhatsApp não está conectado" };
+// ============================================================================
+// LEMBRETES DA AGENDA
+// ============================================================================
 
-  return new Promise((resolve) => {
-    setTimeout(async () => {
-      try {
-        const response = await sock!.sendMessage(phoneJid, { text });
-        if (response?.key?.id) rememberSent(response.key.id);
+let remindersRunning = false;
 
-        // Registrar mensagem enviada
-        const conv = await db.query.conversations.findFirst({
-          where: eq(conversations.phoneJid, phoneJid),
-        });
+async function processReminders() {
+  if (remindersRunning) return;
+  remindersRunning = true;
+  try {
+    const now = new Date();
+    // Agendamentos com lembrete pendente cujo horário de aviso já chegou (até 6h de atraso)
+    const due = await db
+      .select()
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.status, "SCHEDULED"),
+          eq(appointments.reminderEnabled, true),
+          isNull(appointments.reminderSentAt),
+          sql`${appointments.startsAt} - make_interval(mins => ${appointments.reminderMinutesBefore}) <= ${now}`,
+          gte(appointments.startsAt, new Date(now.getTime() - 6 * 3600e3))
+        )
+      )
+      .limit(50);
 
-        if (conv) {
-          await db.insert(messages).values({
-            conversationId: conv.id,
-            direction: "OUT",
-            body: text,
-            messageType: "text",
-            whatsappMessageId: response?.key?.id,
-            sentAt: new Date(),
-            sender,
-          });
-          await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
-        }
-
-        resolve({ success: true, messageId: response?.key?.id });
-      } catch (error) {
-        console.error("[Error] sendMessage:", error);
-        resolve({ error: String(error) });
+    for (const appt of due) {
+      if (!appt.leadId) {
+        await db.update(appointments).set({ reminderSentAt: now, reminderError: "Sem cliente vinculado" }).where(eq(appointments.id, appt.id));
+        continue;
       }
-    }, (delay || 0) * 1000);
-  });
-}
-
-/**
- * Enviar mídia (imagem, vídeo, áudio, documento)
- */
-async function sendMedia(
-  phoneJid: string,
-  url: string,
-  type: "image" | "video" | "audio" | "document",
-  caption?: string,
-  fileName?: string
-): Promise<any> {
-  if (!sock) return { error: "Socket not connected" };
-
-  try {
-    const messageObject: any = {
-      [type]:
-        type === "document"
-          ? { url, filename: fileName || "document" }
-          : { url },
-    };
-
-    if (caption && type !== "audio" && type !== "document") {
-      messageObject.caption = caption;
+      const lead = await db.query.leads.findFirst({ where: eq(leads.id, appt.leadId), with: { conversation: true } });
+      if (!lead?.conversation) continue;
+      const session = sessions.get(appt.accountId);
+      if (!session || session.state !== "connected") {
+        if (appt.reminderError !== "WhatsApp desconectado") {
+          await db.update(appointments).set({ reminderError: "WhatsApp desconectado" }).where(eq(appointments.id, appt.id));
+        }
+        continue; // tenta de novo na próxima rodada
+      }
+      const seller = appt.sellerId ? await db.query.sellers.findFirst({ where: eq(sellers.id, appt.sellerId) }) : null;
+      const name = lead.cardName && lead.cardName !== "Lead" ? lead.cardName : lead.conversation.leadName || "";
+      const text = fillTemplate(
+        appt.reminderMessage ||
+          "Olá, {nome}! Passando para lembrar do nosso compromisso: {assunto} em {data} às {hora}. Até já! 😊",
+        {
+          nome: name.split(" ")[0] || "",
+          data: formatSpDate(appt.startsAt),
+          hora: formatSpTime(appt.startsAt),
+          assunto: appt.title,
+          vendedor: seller?.name || "",
+        }
+      ).replace(/\s+([!,.])/g, "$1");
+      const r = await sendText(appt.accountId, lead.conversation.phoneJid, text, "AUTO");
+      if ("error" in r) {
+        await db.update(appointments).set({ reminderError: String(r.error).slice(0, 300) }).where(eq(appointments.id, appt.id));
+      } else {
+        await db.update(appointments).set({ reminderSentAt: new Date(), reminderError: null }).where(eq(appointments.id, appt.id));
+        console.log(`[Agenda ${appt.accountId.slice(0, 8)}] lembrete enviado: ${appt.title}`);
+      }
     }
-
-    const response = await sock!.sendMessage(phoneJid, messageObject);
-
-    return { success: true, messageId: response.key.id };
-  } catch (error) {
-    console.error(`[Error] sendMedia (${type}):`, error);
-    return { error: String(error) };
+  } catch (err) {
+    console.error("[Agenda] erro nos lembretes:", err);
+  } finally {
+    remindersRunning = false;
   }
 }
 
-/**
- * Enviar menu/lista de opções
- */
-async function sendList(
-  phoneJid: string,
-  title: string,
-  optionsStr?: string
-): Promise<any> {
-  if (!sock) return { error: "Socket not connected" };
+// ============================================================================
+// API INTERNA (usada pelo site)
+// ============================================================================
 
+async function readBody(req: http.IncomingMessage) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(chunk as Buffer);
   try {
-    // Parse opções de string (uma por linha)
-    const options = (optionsStr || "").split("\n").filter((o) => o.trim());
-
-    if (options.length === 0) {
-      return await sendMessage(phoneJid, title || "Escolha uma opção");
-    }
-
-    // Criar lista de seções
-    const sections = [
-      {
-        title: "Opções",
-        rows: options.map((opt, idx) => ({
-          id: `opt_${idx}`,
-          title: opt.trim(),
-          description: "",
-        })),
-      },
-    ];
-
-    const response = await sock!.sendMessage(phoneJid, {
-      listMessage: {
-        title: title || "Escolha",
-        description: "",
-        buttonText: "Ver opções",
-        sections,
-      },
-    });
-
-    return { success: true, messageId: response.key.id };
-  } catch (error) {
-    console.error("[Error] sendList:", error);
-    // Fallback: enviar como texto
-    return await sendMessage(phoneJid, title || "Escolha uma opção");
+    return JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}");
+  } catch {
+    return {};
   }
 }
 
-/**
- * Pagina de status / QR Code (abrir pelo dominio do servico no Railway)
- */
-function startStatusServer() {
-  const port = Number(process.env.PORT || FLOW_ENGINE_PORT);
-  const token = process.env.QR_ACCESS_TOKEN;
+function json(res: http.ServerResponse, status: number, body: unknown) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+async function statusOf(accountId: string) {
+  const s = sessions.get(accountId);
+  const state = s?.state || "idle";
+  return {
+    state,
+    connected: state === "connected",
+    phone: s?.phone || null,
+    qrDataUrl: s?.qr ? await QRCode.toDataURL(s.qr, { width: 320 }) : null,
+  };
+}
+
+async function validAccount(id: unknown) {
+  if (typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id)) return null;
+  return loadAccount(id);
+}
+
+function startApiServer() {
+  const port = Number(process.env.PORT || process.env.FLOW_ENGINE_PORT || 3001);
+  const token = process.env.FLOW_ENGINE_TOKEN || process.env.QR_ACCESS_TOKEN;
+
   http
     .createServer(async (req, res) => {
-      const url = new URL(req.url || "/", "http://localhost");
-      if (url.pathname === "/health") {
-        res.writeHead(200, { "Content-Type": "text/plain" });
-        return res.end("ok");
-      }
-
-      // API interna usada pelo app Next.js (SDR): status da conexão e envio
-      // manual de mensagens pelo inbox. Protegida pelo mesmo token do QR
-      // quando QR_ACCESS_TOKEN está configurado.
-      const internalToken = req.headers["x-internal-token"];
-      const isAuthorized = !token || internalToken === token;
-
-      if (url.pathname === "/status.json") {
-        if (!isAuthorized) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          return res.end(JSON.stringify({ error: "unauthorized" }));
+      try {
+        const url = new URL(req.url || "/", "http://localhost");
+        if (url.pathname === "/health") {
+          res.writeHead(200, { "Content-Type": "text/plain" });
+          return res.end("ok");
         }
-        const qrDataUrl = currentQr
-          ? await QRCode.toDataURL(currentQr, { width: 320 })
-          : null;
-        res.writeHead(200, { "Content-Type": "application/json" });
-        return res.end(
-          JSON.stringify({
-            connected: Boolean(connectedPhone),
-            phone: connectedPhone,
-            qrDataUrl,
-            aiReady: Boolean(ANTHROPIC_API_KEY),
-          })
-        );
-      }
+        if (token && req.headers["x-internal-token"] !== token) return json(res, 401, { error: "unauthorized" });
 
-      if (process.env.FLOW_ENGINE_SELFTEST === "1" && url.pathname === "/__test/incoming" && req.method === "POST") {
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) chunks.push(chunk as Buffer);
-        const msg = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
-        if (msg.key?.fromMe) await handleOwnPhoneMessage(msg);
-        else await handleIncomingMessage(msg);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        return res.end("{}");
-      }
-
-      if (url.pathname === "/send" && req.method === "POST") {
-        if (!isAuthorized) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          return res.end(JSON.stringify({ error: "unauthorized" }));
+        if (url.pathname === "/status.json") {
+          const acc = await validAccount(url.searchParams.get("account"));
+          if (!acc) return json(res, 400, { error: "Conta inválida" });
+          return json(res, 200, await statusOf(acc.id));
         }
-        try {
-          const chunks: Buffer[] = [];
-          for await (const chunk of req) chunks.push(chunk as Buffer);
-          const { phoneJid, text, sender } = JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}");
-          if (!phoneJid || !text) {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            return res.end(JSON.stringify({ error: "phoneJid e text são obrigatórios" }));
+
+        if (req.method !== "POST") return json(res, 404, { error: "not found" });
+        const body = await readBody(req);
+
+        if (SELFTEST && url.pathname === "/__test/incoming") {
+          const acc = await validAccount(body.accountId);
+          if (!acc) return json(res, 400, { error: "Conta inválida" });
+          if (body.msg?.key?.fromMe) await handleOwnPhoneMessage(acc.id, body.msg);
+          else await handleIncomingMessage(acc.id, body.msg);
+          return json(res, 200, {});
+        }
+        if (SELFTEST && url.pathname === "/__test/reminders") {
+          await processReminders();
+          return json(res, 200, {});
+        }
+
+        const acc = await validAccount(body.accountId);
+        if (!acc) return json(res, 400, { error: "Conta inválida" });
+
+        if (url.pathname === "/connect") {
+          const s = getSession(acc.id);
+          if (s.state === "idle") {
+            s.qrCount = 0;
+            await startSession(acc.id);
+            // espera um pouco pelo primeiro QR
+            for (let i = 0; i < 20 && getSession(acc.id).state === "starting"; i++) await pause(300);
           }
-          const result = await sendMessage(phoneJid, text, 0, sender === "AI" ? "AI" : "HUMAN");
-          res.writeHead(result?.error ? 502 : 200, { "Content-Type": "application/json" });
-          return res.end(JSON.stringify(result));
-        } catch (error) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          return res.end(JSON.stringify({ error: String(error) }));
+          return json(res, 200, await statusOf(acc.id));
         }
+        if (url.pathname === "/logout") {
+          await stopSession(acc.id, true);
+          return json(res, 200, { ok: true });
+        }
+        if (url.pathname === "/send") {
+          if (!body.phoneJid || !body.text) return json(res, 400, { error: "phoneJid e text são obrigatórios" });
+          const sender: Sender = body.sender === "AI" ? "AI" : body.sender === "AUTO" ? "AUTO" : "HUMAN";
+          const r = await sendText(acc.id, body.phoneJid, String(body.text), sender);
+          return json(res, "error" in r ? 502 : 200, r);
+        }
+        return json(res, 404, { error: "not found" });
+      } catch (err) {
+        console.error("[API] erro:", err);
+        return json(res, 500, { error: String(err) });
       }
-
-      if (token && url.searchParams.get("token") !== token) {
-        res.writeHead(401, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end("<h2>Acesso negado. Use ?token=SUA_SENHA no final do endereco.</h2>");
-      }
-      let body: string;
-      if (connectedPhone) {
-        body = `<h1>&#9989; WhatsApp conectado</h1><p>Numero: ${connectedPhone}</p>`;
-      } else if (currentQr) {
-        const img = await QRCode.toDataURL(currentQr, { width: 320 });
-        body = `<h1>Escaneie com o WhatsApp</h1><p>No celular: Configuracoes &rarr; Aparelhos conectados &rarr; Conectar aparelho</p><img src="${img}" alt="QR Code"/><p>A pagina atualiza sozinha.</p>`;
-      } else {
-        body = `<h1>Aguardando QR Code...</h1><p>A pagina atualiza sozinha.</p>`;
-      }
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="10"><title>Motor WhatsApp</title></head><body style="font-family:sans-serif;text-align:center;padding:40px">${body}</body></html>`);
     })
-    .listen(port, () => console.log(`[Status] Pagina do QR Code na porta ${port}`));
+    .listen(port, () => console.log(`[API] motor ouvindo na porta ${port}`));
 }
 
-/**
- * Main
- */
+// ============================================================================
+// MAIN
+// ============================================================================
+
 async function main() {
-  console.log("🚀 Flow Engine Server iniciando...");
-  console.log("📱 Conectando ao WhatsApp via Baileys...");
+  console.log("🚀 Motor do WhatsApp iniciando (multiempresa)...");
+  startApiServer();
+  await syncSessions();
+  setInterval(() => syncSessions().catch((e) => console.error("[sync]", e)), 60_000);
+  setInterval(() => processReminders(), SELFTEST ? 3_000 : 30_000);
 
-  startStatusServer();
-
-  // Modo de teste local (nunca ligado em produção): simula o WhatsApp
-  if (process.env.FLOW_ENGINE_SELFTEST === "1") {
-    console.log("🧪 SELFTEST: WhatsApp simulado");
-    connectedPhone = "5500000000000";
-    sock = {
-      sendMessage: async (jid: string, content: any) => {
-        console.log(`[SELFTEST] -> ${jid}: ${content?.text}`);
-        return { key: { id: "TEST" + Math.random().toString(36).slice(2) } };
-      },
-      end: () => {},
-    } as any;
-    return;
-  }
-
-  try {
-    await connectWhatsApp();
-
-    console.log(
-      `✅ Flow Engine rodando na porta ${FLOW_ENGINE_PORT} (PID: ${process.pid})`
-    );
-    console.log(
-      "📡 Aguardando mensagens... (pressione Ctrl+C para parar)\n"
-    );
-
-    // Manter processo vivo
-    process.on("SIGINT", async () => {
-      console.log("\n🛑 Encerrando Flow Engine...");
-      sock?.end(new Error("User requested shutdown"));
-      await pool.end();
-      process.exit(0);
-    });
-  } catch (error) {
-    console.error("❌ Erro ao iniciar Flow Engine:", error);
-    process.exit(1);
-  }
+  const shutdown = async () => {
+    console.log("\n🛑 Encerrando motor...");
+    for (const s of sessions.values()) {
+      s.stopping = true;
+      try {
+        s.sock?.end(undefined);
+      } catch {}
+    }
+    await pool.end();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
-main();
+main().catch((err) => {
+  console.error("❌ Erro ao iniciar o motor:", err);
+  process.exit(1);
+});
+
+// Evita derrubar o motor inteiro por um erro isolado de uma conta
+process.on("unhandledRejection", (err) => console.error("[unhandledRejection]", err));
+

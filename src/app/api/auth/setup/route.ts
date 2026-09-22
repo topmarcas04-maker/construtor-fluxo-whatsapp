@@ -6,6 +6,7 @@ import { appUsers } from "@/db/schema";
 import { hashPassword } from "@/lib/auth/password";
 import { createSessionToken, SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth/session";
 import { DEFAULT_PERMISSIONS } from "@/lib/auth/modules";
+import { getMasterAccount } from "@/lib/tenancy/server";
 
 async function userCount() {
   const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(appUsers);
@@ -33,9 +34,14 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+  const master = await getMasterAccount();
+  if (!master) {
+    return NextResponse.json({ error: "Banco ainda não foi preparado. Tente de novo em instantes." }, { status: 503 });
+  }
   const [user] = await db
     .insert(appUsers)
     .values({
+      accountId: master.id,
       name: name.trim(),
       email: email.trim().toLowerCase(),
       passwordHash: hashPassword(password),

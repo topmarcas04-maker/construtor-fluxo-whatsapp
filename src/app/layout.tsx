@@ -8,7 +8,8 @@ import { getCurrentUser } from "@/lib/auth/server";
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const branding = await getBranding();
+  const user = await getCurrentUser();
+  const branding = await getBranding(user?.account.id || null);
   return {
     title: branding.displayName,
     description: "SDR com IA para WhatsApp",
@@ -16,7 +17,8 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const [branding, user] = await Promise.all([getBranding(), getCurrentUser()]);
+  const user = await getCurrentUser();
+  const branding = await getBranding(user?.account.id || null);
   return (
     <html lang="pt-BR">
       <body>

@@ -1,7 +1,6 @@
-import { MODULES, ROLES, DEFAULT_PERMISSIONS, type RoleKey } from "@/lib/auth/modules";
+import { ROLES, DEFAULT_PERMISSIONS, ALL_MODULE_KEYS, type RoleKey } from "@/lib/auth/modules";
 import { hashPassword } from "@/lib/auth/password";
 
-const MODULE_KEYS = MODULES.map((m) => m.key as string);
 const ROLE_KEYS = ROLES.map((r) => r.key as string);
 
 /** Monta os campos de usuário a partir do corpo da requisição */
@@ -30,12 +29,11 @@ export function userValues(body: Record<string, unknown>, partial = false) {
   }
   if (body.permissions !== undefined) {
     if (!Array.isArray(body.permissions)) return { error: "Permissões inválidas" } as const;
-    values.permissions = body.permissions.filter((p) => MODULE_KEYS.includes(String(p)));
+    values.permissions = body.permissions.filter((p) => (ALL_MODULE_KEYS as string[]).includes(String(p)));
   } else if (!partial) {
     values.permissions = DEFAULT_PERMISSIONS[(values.role as RoleKey) || "SELLER"];
   }
   if (body.sellerId !== undefined) values.sellerId = body.sellerId || null;
-  if (body.partnerId !== undefined) values.partnerId = body.partnerId || null;
   if (body.active !== undefined) values.active = Boolean(body.active);
   return { values } as const;
 }
@@ -47,7 +45,7 @@ export const publicUserColumns = {
   role: true,
   permissions: true,
   sellerId: true,
-  partnerId: true,
+  accountId: true,
   active: true,
   lastLoginAt: true,
   createdAt: true,

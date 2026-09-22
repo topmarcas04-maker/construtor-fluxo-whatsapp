@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Send, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin } from "lucide-react";
+import { Bot, Send, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell } from "lucide-react";
 import type { Lead, Message, QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import {
   TAG_DOT_CLASSES,
@@ -35,6 +35,13 @@ function Avatar({ name }: { name: string }) {
 }
 
 function StatusChip({ lead }: { lead: Lead }) {
+  if (lead.stage === "SALE") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+        Venda{lead.seller ? ` · ${lead.seller.name}` : ""}
+      </span>
+    );
+  }
   if (lead.seller) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700">
@@ -320,6 +327,8 @@ export function ConversationsView({
                         out
                           ? isAi
                             ? "rounded-br-md bg-violet-600 text-white"
+                          : msg.sender === "AUTO"
+                          ? "rounded-br-md bg-slate-600 text-white"
                             : "rounded-br-md bg-[var(--accent)] text-white"
                           : "rounded-bl-md bg-white text-slate-800"
                       }`}
@@ -329,6 +338,10 @@ export function ConversationsView({
                           {isAi ? (
                             <>
                               <Sparkles size={11} /> IA
+                            </>
+                          ) : msg.sender === "AUTO" ? (
+                            <>
+                              <Bell size={11} /> Lembrete automático
                             </>
                           ) : (
                             <>

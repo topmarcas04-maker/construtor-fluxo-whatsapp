@@ -21,7 +21,7 @@ function Frame({
     <div className="flex h-screen overflow-hidden bg-slate-50">
       {!expanded && <Sidebar branding={branding} user={user} />}
       <div className="flex min-w-0 flex-1 flex-col">
-        {!expanded && <TopBar title={branding.displayName} user={user} />}
+        {!expanded && <TopBar title={user.account.name} user={user} />}
         <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>

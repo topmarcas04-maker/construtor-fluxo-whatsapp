@@ -4,12 +4,15 @@ import { db } from "@/db/client";
 import { leads, flows, conversationStates, flowExecutions } from "@/db/schema";
 import { eq, sum, count, and } from "drizzle-orm";
 import { sql } from "drizzle-orm";
+import { legacyGuard } from "@/lib/auth/legacy";
 
 /**
  * GET /api/dashboard/stats
  * Get dashboard statistics: total sales, closed deals, average ticket, flow stats
  */
 export async function GET(req: NextRequest) {
+  const denied = await legacyGuard();
+  if (denied) return denied;
   try {
     // Total sales value
     const [totalSalesResult] = await db

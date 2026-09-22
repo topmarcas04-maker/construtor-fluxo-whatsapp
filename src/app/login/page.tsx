@@ -9,6 +9,9 @@ interface Branding {
   displayName: string;
   subtitle: string | null;
   logo: string | null;
+  menuBg?: string;
+  menuText?: string;
+  accent?: string;
 }
 
 function LoginForm() {
@@ -22,9 +25,14 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetch("/api/platform/public").then((r) => r.json()).then(setBranding).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const c = params.get("c");
+    fetch(`/api/platform/public${c ? `?c=${encodeURIComponent(c)}` : ""}`)
+      .then((r) => r.json())
+      .then(setBranding)
+      .catch(() => {});
     fetch("/api/auth/setup").then((r) => r.json()).then((d) => setNeedsSetup(Boolean(d.needsSetup))).catch(() => {});
-  }, []);
+  }, [params]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,7 +50,7 @@ function LoginForm() {
         return;
       }
       const next = params.get("next");
-      window.location.href = next && next.startsWith("/") ? next : "/leads";
+      window.location.href = next && next.startsWith("/") ? next : "/";
     } catch {
       setError("Falha de conexão. Tente de novo.");
     } finally {
@@ -50,8 +58,14 @@ function LoginForm() {
     }
   };
 
+  const vars = {
+    ...(branding?.menuBg ? { "--menu-bg": branding.menuBg } : {}),
+    ...(branding?.menuText ? { "--menu-text": branding.menuText } : {}),
+    ...(branding?.accent ? { "--accent": branding.accent } : {}),
+  } as React.CSSProperties;
+
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-screen" style={vars}>
       <div
         className="hidden w-[46%] flex-col justify-between p-12 lg:flex"
         style={{ background: "var(--menu-bg)", color: "var(--menu-text)" }}

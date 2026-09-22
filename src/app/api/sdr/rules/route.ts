@@ -1,49 +1,38 @@
 export const dynamic = "force-dynamic";
-import { requireUser } from "@/lib/auth/server";
 import { NextRequest, NextResponse } from "next/server";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db/client";
-import { distributionRules } from "@/db/schema";
+import { distributionRules, sellers } from "@/db/schema";
+import { requireUser } from "@/lib/auth/server";
 
-/**
- * GET /api/sdr/rules — lista regras de distribuição (com o vendedor)
- * POST /api/sdr/rules — cria regra
- */
 export async function GET() {
   const auth = await requireUser(["leads", "configuracoes"]);
   if (auth.error) return auth.error;
-  try {
-    const all = await db.query.distributionRules.findMany({
-      with: { seller: true },
-      orderBy: (r, { desc }) => desc(r.priority),
-    });
-    return NextResponse.json(all);
-  } catch (error) {
-    console.error("Error fetching rules:", error);
-    return NextResponse.json({ error: "Failed to fetch rules" }, { status: 500 });
-  }
+  const all = await db.query.distributionRules.findMany({
+    where: eq(distributionRules.accountId, auth.accountId),
+    with: { seller: true },
+    orderBy: (r, { desc }) => desc(r.priority),
+  });
+  return NextResponse.json(all);
 }
 
 export async function POST(req: NextRequest) {
   const auth = await requireUser("configuracoes");
   if (auth.error) return auth.error;
-  try {
-    const body = await req.json();
-    const { region, saleType, sellerId, priority } = body;
-    if (!sellerId) {
-      return NextResponse.json({ error: "sellerId é obrigatório" }, { status: 400 });
-    }
-    const [created] = await db
-      .insert(distributionRules)
-      .values({
-        region: region || null,
-        saleType: saleType || "ANY",
-        sellerId,
-        priority: priority ?? 0,
-      })
-      .returning();
-    return NextResponse.json(created, { status: 201 });
-  } catch (error) {
-    console.error("Error creating rule:", error);
-    return NextResponse.json({ error: "Failed to create rule" }, { status: 500 });
-  }
+  const { region, saleType, sellerId, priority } = await req.json();
+  const seller = sellerId
+    ? await db.query.sellers.findFirst({ where: and(eq(sellers.id, sellerId), eq(sellers.accountId, auth.accountId)) })
+    : null;
+  if (!seller) return NextResponse.json({ error: "Escolha o vendedor" }, { status: 400 });
+  const [created] = await db
+    .insert(distributionRules)
+    .values({
+      accountId: auth.accountId,
+      region: region ? String(region).trim() : null,
+      saleType: ["ANY", "WHOLESALE", "RETAIL"].includes(saleType) ? saleType : "ANY",
+      sellerId: seller.id,
+      priority: Number(priority) || 0,
+    })
+    .returning();
+  return NextResponse.json(created, { status: 201 });
 }

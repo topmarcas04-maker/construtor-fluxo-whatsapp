@@ -3,40 +3,46 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  LayoutDashboard,
   MessageCircle,
   Users,
+  CalendarDays,
   Settings,
   Handshake,
   ShieldCheck,
   Palette,
   type LucideIcon,
 } from "lucide-react";
-import { MODULES, hasModule, type ModuleKey } from "@/lib/auth/modules";
+import { MODULES, moduleLabel, type ModuleKey } from "@/lib/auth/modules";
 import type { PlatformBranding } from "@/lib/platform/settings";
 
 const ICONS: Record<ModuleKey, LucideIcon> = {
+  "visao-geral": LayoutDashboard,
   whatsapp: MessageCircle,
   leads: Users,
+  agenda: CalendarDays,
   configuracoes: Settings,
   parceiros: Handshake,
   permissoes: ShieldCheck,
   plataforma: Palette,
 };
 
-/** Agrupamento visual do menu */
-const GROUPS: { title?: string; keys: ModuleKey[] }[] = [
-  { keys: ["whatsapp", "leads", "configuracoes"] },
-  { title: "Administração", keys: ["parceiros", "permissoes", "plataforma"] },
-];
+/** Agrupamento visual do menu. Menus novos entram no primeiro grupo automaticamente. */
+const ADMIN_KEYS: ModuleKey[] = ["parceiros", "permissoes", "plataforma"];
 
 export function Sidebar({
   branding,
   user,
 }: {
   branding: PlatformBranding;
-  user: { role: string; permissions: string[] };
+  user: { modules: string[]; account: { type: string } };
 }) {
   const pathname = usePathname();
+  const visible = MODULES.filter((m) => user.modules.includes(m.key));
+  const groups = [
+    { title: null, items: visible.filter((m) => !ADMIN_KEYS.includes(m.key)) },
+    { title: "Administração", items: visible.filter((m) => ADMIN_KEYS.includes(m.key)) },
+  ];
 
   return (
     <aside
@@ -54,27 +60,21 @@ export function Sidebar({
             </span>
             <div className="min-w-0">
               <p className="truncate text-[15px] font-bold leading-tight">{branding.displayName}</p>
-              {branding.subtitle && (
-                <p className="truncate text-[11px] leading-tight opacity-70">{branding.subtitle}</p>
-              )}
+              {branding.subtitle && <p className="truncate text-[11px] leading-tight opacity-70">{branding.subtitle}</p>}
             </div>
           </>
         )}
       </div>
 
       <nav className="flex-1 space-y-5 overflow-y-auto px-4 py-4">
-        {GROUPS.map((group, gi) => {
-          const items = MODULES.filter((m) => group.keys.includes(m.key) && hasModule(user, m.key));
-          if (items.length === 0) return null;
-          return (
+        {groups.map((group, gi) =>
+          group.items.length === 0 ? null : (
             <div key={gi} className="space-y-1.5">
               {group.title && (
-                <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider opacity-60">
-                  {group.title}
-                </p>
+                <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider opacity-60">{group.title}</p>
               )}
-              {items.map((item) => {
-                const Icon = ICONS[item.key];
+              {group.items.map((item) => {
+                const Icon = ICONS[item.key] || LayoutDashboard;
                 const active = pathname === item.href || pathname.startsWith(item.href + "/");
                 return (
                   <Link
@@ -85,13 +85,13 @@ export function Sidebar({
                     }`}
                   >
                     <Icon size={20} strokeWidth={1.9} />
-                    {item.label}
+                    {moduleLabel(item.key, user.account.type)}
                   </Link>
                 );
               })}
             </div>
-          );
-        })}
+          )
+        )}
       </nav>
     </aside>
   );

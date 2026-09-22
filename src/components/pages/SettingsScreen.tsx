@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Bot, Trash2, Plus, Check, Pencil } from "lucide-react";
+import { Bot, Trash2, Plus, Check, Pencil, KeyRound, CalendarDays } from "lucide-react";
+import { REMINDER_OPTIONS } from "@/components/agenda/types";
 import type { QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import { TAG_COLOR_CLASSES, TAG_DOT_CLASSES, SALE_TYPE_LABEL } from "@/lib/types/sdr";
 import {
@@ -37,6 +38,19 @@ interface AiSettings {
   model: string;
   handoffMessage: string;
   notifySeller: boolean;
+  schedulingEnabled: boolean;
+  businessHours: string | null;
+  reminderMessage: string;
+  reminderMinutesBefore: number;
+  integration: {
+    source: "OWN" | "PARENT" | "NONE";
+    ownKeyHint: string | null;
+    usesEnvKey: boolean;
+    parentName: string | null;
+    ready: boolean;
+    reason: string;
+    providerName: string | null;
+  };
 }
 
 const MODELS = [
@@ -59,19 +73,115 @@ async function api(url: string, method: string, body?: unknown) {
 }
 
 // ---------------------------------------------------------------------------
+function IntegrationCard({ s, onChanged }: { s: AiSettings; onChanged: (next: AiSettings) => void }) {
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const i = s.integration;
+
+  const saveKey = async (value: string) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const next = await api("/api/sdr/settings", "PUT", { apiKey: value });
+      onChanged(next);
+      setKey("");
+      setMsg({ ok: true, text: value ? "Chave salva." : "Chave removida." });
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const test = async () => {
+    setBusy(true);
+    setMsg(null);
+    const r = await api("/api/sdr/settings/test", "POST").catch((e) => ({ ok: false, error: (e as Error).message }));
+    setMsg(r.ok ? { ok: true, text: `Funcionando! (integração de ${r.provider})` } : { ok: false, text: r.error });
+    setBusy(false);
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-200 p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-2 font-semibold text-slate-900">
+          <KeyRound size={17} /> Integração de IA
+        </p>
+        {i.ready ? <Badge tone="green">Pronta</Badge> : i.source === "NONE" ? <Badge>Sem IA</Badge> : <Badge tone="amber">Falta a chave</Badge>}
+      </div>
+
+      {i.source === "NONE" && (
+        <p className="text-sm text-slate-600">
+          A IA não foi liberada para esta conta. Quem te cadastrou pode liberar em Parceiros/Clientes.
+        </p>
+      )}
+
+      {i.source === "PARENT" && (
+        <p className="text-sm text-slate-600">
+          Esta conta usa a integração de IA de <b>{i.providerName || i.parentName}</b>. Não precisa cadastrar chave.
+          {!i.ready && " (A conta responsável ainda não cadastrou a chave dela.)"}
+        </p>
+      )}
+
+      {i.source === "OWN" && (
+        <div className="space-y-3">
+          <p className="text-sm text-slate-600">
+            Esta conta usa a <b>própria</b> chave da Anthropic (console.anthropic.com → API Keys). O consumo é cobrado na
+            conta de quem é dono da chave.
+          </p>
+          {i.ownKeyHint ? (
+            <p className="text-sm">
+              Chave cadastrada: <code className="rounded bg-slate-100 px-1.5 py-0.5">{i.ownKeyHint}</code>
+            </p>
+          ) : i.usesEnvKey ? (
+            <p className="text-sm text-slate-500">Usando a chave configurada no servidor (ANTHROPIC_API_KEY).</p>
+          ) : (
+            <p className="text-sm text-amber-700">
+              Nenhuma chave cadastrada aqui. Se você colocou a chave só no Railway (motor), cole-a aqui também para o painel
+              reconhecer e para testar.
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Input
+              type="password"
+              className="max-w-md"
+              placeholder={i.ownKeyHint ? "Colar nova chave para trocar" : "Cole aqui a chave sk-ant-..."}
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+            />
+            <Button onClick={() => saveKey(key)} disabled={busy || !key.trim()}>
+              Salvar chave
+            </Button>
+            {i.ownKeyHint && (
+              <Button variant="ghost" onClick={() => confirm("Remover a chave?") && saveKey("")} disabled={busy}>
+                Remover
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {i.source !== "NONE" && (
+        <div className="mt-3 flex items-center gap-3">
+          <Button variant="secondary" onClick={test} disabled={busy || !i.ready}>
+            Testar integração
+          </Button>
+          {msg && <span className={`text-sm ${msg.ok ? "text-emerald-700" : "text-red-600"}`}>{msg.text}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AiTab() {
   const [s, setS] = useState<AiSettings | null>(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [aiReady, setAiReady] = useState<boolean | null>(null);
 
   useEffect(() => {
     fetch("/api/sdr/settings").then((r) => r.json()).then(setS);
-    fetch("/api/sdr/whatsapp/status")
-      .then((r) => r.json())
-      .then((d) => setAiReady(d.error ? null : Boolean(d.aiReady)))
-      .catch(() => {});
   }, []);
 
   if (!s) return <p className="p-6 text-sm text-slate-400">Carregando...</p>;
@@ -81,8 +191,9 @@ function AiTab() {
     setError(null);
     try {
       const next = { ...s, ...patch };
-      await api("/api/sdr/settings", "PUT", next);
-      setS(next);
+      const { integration: _i, ...body } = next;
+      void _i;
+      setS(await api("/api/sdr/settings", "PUT", body));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -93,6 +204,7 @@ function AiTab() {
   };
 
   const isCustomModel = !MODELS.some((m) => m.value === s.model);
+  const noAi = s.integration.source === "NONE";
 
   return (
     <div className="space-y-6 p-6">
@@ -104,21 +216,18 @@ function AiTab() {
           <div>
             <p className="font-semibold text-slate-900">Atendimento automático com IA</p>
             <p className="text-sm text-slate-600">
-              A IA responde cada nova mensagem, descobre o que o cliente quer, dá uma nota ao lead e passa
-              para um vendedor na hora certa.
+              A IA responde cada nova mensagem, qualifica o lead, marca horários na agenda e passa para um vendedor na hora certa.
             </p>
           </div>
         </div>
-        <Toggle checked={s.enabled} onChange={(v) => save({ enabled: v })} label={s.enabled ? "Ligado" : "Desligado"} />
+        <Toggle
+          checked={s.enabled && !noAi}
+          onChange={(v) => !noAi && save({ enabled: v })}
+          label={noAi ? "Indisponível" : s.enabled ? "Ligado" : "Desligado"}
+        />
       </div>
 
-      {aiReady === false && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          <b>Falta a chave da IA no motor.</b> No Railway, abra o serviço do motor → <b>Variables</b> → crie{" "}
-          <code className="rounded bg-white px-1">ANTHROPIC_API_KEY</code> com a sua chave (console.anthropic.com).
-          Sem ela a IA não responde, mesmo ligada aqui.
-        </div>
-      )}
+      <IntegrationCard s={s} onChanged={setS} />
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Field label="Modelo de IA" hint="Sonnet atende bem a maioria dos casos.">
@@ -134,38 +243,63 @@ function AiTab() {
             <option value="__custom">Outro (digitar o nome)</option>
           </Select>
           {isCustomModel && (
-            <Input
-              className="mt-2"
-              placeholder="ex.: claude-sonnet-4-5"
-              value={s.model}
-              onChange={(e) => setS({ ...s, model: e.target.value })}
-            />
+            <Input className="mt-2" placeholder="ex.: claude-sonnet-4-5" value={s.model} onChange={(e) => setS({ ...s, model: e.target.value })} />
           )}
         </Field>
         <Field label="Avisar o vendedor" hint="Manda um resumo do lead no WhatsApp do vendedor quando ele receber um lead.">
           <div className="pt-2">
-            <Toggle
-              checked={s.notifySeller}
-              onChange={(v) => setS({ ...s, notifySeller: v })}
-              label={s.notifySeller ? "Sim, avisar no WhatsApp dele" : "Não avisar"}
-            />
+            <Toggle checked={s.notifySeller} onChange={(v) => setS({ ...s, notifySeller: v })} label={s.notifySeller ? "Sim, avisar no WhatsApp dele" : "Não avisar"} />
           </div>
         </Field>
       </div>
 
       <Field
         label="Como a IA deve atender (instruções)"
-        hint="Explique como a loja funciona, o jeito de falar, o que perguntar e quando passar para um vendedor. Preços e condições que a IA pode informar também entram aqui."
+        hint="Explique como a empresa funciona, o jeito de falar, o que perguntar e quando passar para um vendedor. Preços e condições que a IA pode informar também entram aqui."
       >
-        <Textarea rows={14} value={s.systemPrompt} onChange={(e) => setS({ ...s, systemPrompt: e.target.value })} />
+        <Textarea rows={12} value={s.systemPrompt} onChange={(e) => setS({ ...s, systemPrompt: e.target.value })} />
       </Field>
 
-      <Field
-        label="Mensagem ao transferir para o vendedor"
-        hint="Use {vendedor} para o nome do vendedor. Deixe vazio para não enviar nada."
-      >
-        <Textarea rows={3} value={s.handoffMessage} onChange={(e) => setS({ ...s, handoffMessage: e.target.value })} />
+      <Field label="Mensagem ao transferir para o vendedor" hint="Use {vendedor} para o nome do vendedor. Deixe vazio para não enviar nada.">
+        <Textarea rows={2} value={s.handoffMessage} onChange={(e) => setS({ ...s, handoffMessage: e.target.value })} />
       </Field>
+
+      <div className="rounded-xl border border-slate-200 p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="flex items-center gap-2 font-semibold text-slate-900">
+            <CalendarDays size={17} /> Agenda
+          </p>
+          <Toggle
+            checked={s.schedulingEnabled}
+            onChange={(v) => setS({ ...s, schedulingEnabled: v })}
+            label={s.schedulingEnabled ? "A IA pode marcar horários" : "A IA não marca horários"}
+          />
+        </div>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Field label="Horário de atendimento" hint="A IA só oferece horários dentro disso.">
+            <Textarea
+              rows={3}
+              placeholder="Ex.: Segunda a sexta das 9h às 18h, sábado das 9h às 12h. Visitas duram 30 minutos."
+              value={s.businessHours || ""}
+              onChange={(e) => setS({ ...s, businessHours: e.target.value })}
+            />
+          </Field>
+          <div className="space-y-3">
+            <Field label="Mensagem automática (padrão dos novos agendamentos)" hint="Use {nome}, {data}, {hora}, {assunto} e {vendedor}.">
+              <Textarea rows={3} value={s.reminderMessage} onChange={(e) => setS({ ...s, reminderMessage: e.target.value })} />
+            </Field>
+            <Field label="Quando enviar">
+              <Select value={s.reminderMinutesBefore} onChange={(e) => setS({ ...s, reminderMinutesBefore: Number(e.target.value) })}>
+                {REMINDER_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+        </div>
+      </div>
 
       <ErrorNote message={error} />
       <div className="flex justify-end">
@@ -553,7 +687,7 @@ export function SettingsScreen() {
     <Page>
       <PageHeader
         title="Configurações"
-        description="Atendimento com IA, vendedores, distribuição de leads, etiquetas e respostas rápidas."
+        description="Atendimento com IA, agenda, vendedores, distribuição de leads, etiquetas e respostas rápidas."
       />
       <Card>
         <Tabs<TabKey>

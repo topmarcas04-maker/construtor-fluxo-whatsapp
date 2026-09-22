@@ -87,6 +87,55 @@ export const saleTypeEnum = pgEnum("sale_type", ["ANY", "WHOLESALE", "RETAIL"]);
 // FLOWS & BUILDER
 // ============================================================================
 
+// ============================================================================
+// CONTAS (MULTIEMPRESA): MASTER → PARCEIRO → CLIENTE
+// ============================================================================
+
+export const accounts = pgTable(
+  "accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Conta "mãe" (quem criou). Null só no Master. */
+    parentId: uuid("parent_id"),
+    /** MASTER | PARTNER | CLIENT */
+    type: varchar("type", { length: 10 }).notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    /** Identificador curto usado no link de login com a marca da conta (/login?c=slug) */
+    slug: varchar("slug", { length: 80 }).notNull(),
+    responsible: varchar("responsible", { length: 150 }),
+    email: varchar("email", { length: 200 }),
+    phone: varchar("phone", { length: 40 }),
+    city: varchar("city", { length: 120 }),
+    document: varchar("document", { length: 30 }),
+    commission: doublePrecision("commission"),
+    notes: text("notes"),
+    /** Menus liberados pela conta mãe */
+    modules: jsonb("modules").$type<string[]>().notNull().default([]),
+    /** De onde vem a IA: OWN (chave própria), PARENT (usa a da conta mãe), NONE (sem IA) */
+    aiSource: varchar("ai_source", { length: 10 }).notNull().default("PARENT"),
+    /** Chave da API de IA, criptografada */
+    aiApiKeyEnc: text("ai_api_key_enc"),
+    /** Manter o WhatsApp desta conta conectado no motor */
+    waEnabled: boolean("wa_enabled").notNull().default(false),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("accounts_slug_idx").on(table.slug), index("accounts_parent_id_idx").on(table.parentId)]
+);
+
+/** Sessão do WhatsApp (Baileys) guardada no banco — sobrevive a novos deploys */
+export const waAuth = pgTable(
+  "wa_auth",
+  {
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    key: varchar("key", { length: 255 }).notNull(),
+    value: text("value").notNull(),
+  },
+  (table) => [uniqueIndex("wa_auth_account_key_idx").on(table.accountId, table.key)]
+);
+
 export const flows = pgTable(
   "flows",
   {
@@ -174,13 +223,14 @@ export const conversations = pgTable(
   "conversations",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
     phoneJid: varchar("phone_jid", { length: 60 }).notNull(),
     leadName: varchar("lead_name", { length: 200 }),
     profilePicUrl: text("profile_pic_url"),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [uniqueIndex("conversations_phone_jid_idx").on(table.phoneJid)]
+  (table) => [uniqueIndex("conversations_account_phone_idx").on(table.accountId, table.phoneJid)]
 );
 
 export const messages = pgTable(
@@ -215,6 +265,7 @@ export const leads = pgTable(
   "leads",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
     conversationId: uuid("conversation_id")
       .notNull()
       .references(() => conversations.id, { onDelete: "cascade" }),
@@ -249,6 +300,7 @@ export const leads = pgTable(
     index("leads_stage_idx").on(table.stage),
     index("leads_closed_idx").on(table.closed),
     index("leads_seller_id_idx").on(table.sellerId),
+    index("leads_account_id_idx").on(table.accountId),
   ]
 );
 
@@ -258,6 +310,7 @@ export const leads = pgTable(
 
 export const sellers = pgTable("sellers", {
   id: uuid("id").primaryKey().defaultRandom(),
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
   name: varchar("name", { length: 150 }).notNull(),
   phone: varchar("phone", { length: 40 }),
   active: boolean("active").notNull().default(true),
@@ -266,6 +319,7 @@ export const sellers = pgTable("sellers", {
 
 export const tags = pgTable("tags", {
   id: uuid("id").primaryKey().defaultRandom(),
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
   name: varchar("name", { length: 60 }).notNull(),
   color: varchar("color", { length: 20 }).notNull().default("blue"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -291,6 +345,7 @@ export const distributionRules = pgTable(
   "distribution_rules",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
     /** Cidade/bairro. Vazio = qualquer região. */
     region: varchar("region", { length: 120 }),
     saleType: saleTypeEnum("sale_type").notNull().default("ANY"),
@@ -306,13 +361,15 @@ export const distributionRules = pgTable(
 
 export const quickReplies = pgTable("quick_replies", {
   id: uuid("id").primaryKey().defaultRandom(),
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
   shortcut: varchar("shortcut", { length: 60 }).notNull(),
   message: text("message").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** Configuração da IA de cada conta (id = id da conta) */
 export const aiSettings = pgTable("ai_settings", {
-  id: varchar("id", { length: 20 }).primaryKey().default("default"),
+  id: varchar("id", { length: 64 }).primaryKey(),
   systemPrompt: text("system_prompt").notNull().default(""),
   /** Liga/desliga o atendimento automático pela IA */
   enabled: boolean("enabled").notNull().default(false),
@@ -321,6 +378,14 @@ export const aiSettings = pgTable("ai_settings", {
   handoffMessage: text("handoff_message"),
   /** Avisar o vendedor no WhatsApp dele quando receber um lead */
   notifySeller: boolean("notify_seller").notNull().default(true),
+  /** A IA pode marcar horários na agenda */
+  schedulingEnabled: boolean("scheduling_enabled").notNull().default(true),
+  /** Horários de atendimento (texto livre, vai para a IA) */
+  businessHours: text("business_hours"),
+  /** Lembrete enviado ao cliente no horário agendado. {nome} {data} {hora} {assunto} */
+  reminderMessage: text("reminder_message"),
+  /** Minutos antes do horário para enviar o lembrete (0 = na hora) */
+  reminderMinutesBefore: integer("reminder_minutes_before").notNull().default(0),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -350,9 +415,11 @@ export const appUsers = pgTable(
     name: varchar("name", { length: 150 }).notNull(),
     email: varchar("email", { length: 200 }).notNull(),
     passwordHash: text("password_hash").notNull(),
-    /** MASTER (tudo), ADMIN, SELLER (vendedor), PARTNER (parceiro) */
+    /** MASTER (dono da plataforma), ADMIN (administrador da conta), SELLER (vendedor) */
     role: varchar("role", { length: 20 }).notNull().default("SELLER"),
-    /** Módulos liberados: whatsapp, leads, configuracoes, parceiros, permissoes, plataforma */
+    /** Conta (empresa) do usuário */
+    accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
+    /** Módulos liberados (dentro dos que a conta tem) */
     permissions: jsonb("permissions").$type<string[]>().notNull().default([]),
     sellerId: uuid("seller_id").references(() => sellers.id, { onDelete: "set null" }),
     partnerId: uuid("partner_id").references(() => partners.id, { onDelete: "set null" }),
@@ -363,8 +430,9 @@ export const appUsers = pgTable(
   (table) => [uniqueIndex("app_users_email_idx").on(table.email)]
 );
 
+/** Identidade visual de cada conta (id = id da conta). Sem registro = herda da conta mãe. */
 export const platformSettings = pgTable("platform_settings", {
-  id: varchar("id", { length: 20 }).primaryKey().default("default"),
+  id: varchar("id", { length: 64 }).primaryKey(),
   displayName: varchar("display_name", { length: 120 }).notNull().default("SDR WhatsApp"),
   subtitle: varchar("subtitle", { length: 120 }),
   /** Logo em data URL (PNG/SVG/JPG, até ~350 KB) */
@@ -377,6 +445,42 @@ export const platformSettings = pgTable("platform_settings", {
   accent: varchar("accent", { length: 20 }).notNull().default("#155e75"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ============================================================================
+// AGENDA
+// ============================================================================
+
+export const appointments = pgTable(
+  "appointments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "set null" }),
+    sellerId: uuid("seller_id").references(() => sellers.id, { onDelete: "set null" }),
+    title: varchar("title", { length: 200 }).notNull(),
+    notes: text("notes"),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    durationMinutes: integer("duration_minutes").notNull().default(30),
+    /** SCHEDULED | DONE | CANCELED | NO_SHOW */
+    status: varchar("status", { length: 12 }).notNull().default("SCHEDULED"),
+    /** Enviar lembrete no WhatsApp do cliente */
+    reminderEnabled: boolean("reminder_enabled").notNull().default(true),
+    reminderMessage: text("reminder_message"),
+    reminderMinutesBefore: integer("reminder_minutes_before").notNull().default(0),
+    reminderSentAt: timestamp("reminder_sent_at", { withTimezone: true }),
+    reminderError: text("reminder_error"),
+    /** AI | HUMAN */
+    createdBy: varchar("created_by", { length: 10 }).notNull().default("HUMAN"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("appointments_account_starts_idx").on(table.accountId, table.startsAt),
+    index("appointments_lead_id_idx").on(table.leadId),
+  ]
+);
 
 // ============================================================================
 // FLOW EXECUTION
@@ -473,6 +577,7 @@ export const leadsRelations = relations(leads, ({ one, many }) => ({
     references: [sellers.id],
   }),
   leadTags: many(leadTags),
+  appointments: many(appointments),
 }));
 
 export const partnersRelations = relations(partners, ({ many }) => ({
@@ -482,6 +587,19 @@ export const partnersRelations = relations(partners, ({ many }) => ({
 export const appUsersRelations = relations(appUsers, ({ one }) => ({
   seller: one(sellers, { fields: [appUsers.sellerId], references: [sellers.id] }),
   partner: one(partners, { fields: [appUsers.partnerId], references: [partners.id] }),
+  account: one(accounts, { fields: [appUsers.accountId], references: [accounts.id] }),
+}));
+
+export const accountsRelations = relations(accounts, ({ one, many }) => ({
+  parent: one(accounts, { fields: [accounts.parentId], references: [accounts.id], relationName: "children" }),
+  children: many(accounts, { relationName: "children" }),
+  users: many(appUsers),
+}));
+
+export const appointmentsRelations = relations(appointments, ({ one }) => ({
+  lead: one(leads, { fields: [appointments.leadId], references: [leads.id] }),
+  seller: one(sellers, { fields: [appointments.sellerId], references: [sellers.id] }),
+  account: one(accounts, { fields: [appointments.accountId], references: [accounts.id] }),
 }));
 
 export const sellersRelations = relations(sellers, ({ many }) => ({

@@ -1,62 +1,112 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/db/client";
-import { aiSettings } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { db } from "@/db/client";
+import { accounts, aiSettings } from "@/db/schema";
 import { requireUser } from "@/lib/auth/server";
+import { getAccount, resolveAccountAiKey } from "@/lib/tenancy/server";
+import { decryptSecret, encryptSecret, maskKey } from "@/lib/tenancy/secret";
 
-const DEFAULT_PROMPT = `Você é a atendente virtual da Resplen Motors, uma loja de patinetes e scooters elétricos. Você conversa pelo WhatsApp com pessoas interessadas em comprar.
+function defaultPrompt(company: string) {
+  return `Você é a atendente virtual da ${company}. Você conversa pelo WhatsApp com pessoas interessadas nos nossos produtos e serviços.
 
 Como atender:
 - Seja simpática, objetiva e breve (mensagens curtas, como WhatsApp de verdade). No máximo uma pergunta por mensagem.
-- Descubra: o nome da pessoa, a cidade/bairro, o que ela procura (modelo, uso, autonomia, faixa de preço) e se a compra é para uso próprio (varejo) ou para revender (atacado).
+- Descubra: o nome da pessoa, a cidade/bairro, o que ela procura e se a compra é para uso próprio (varejo) ou para revender (atacado).
 - Responda dúvidas gerais sem inventar preços, prazos ou estoque. Se não souber, diga que um consultor vai confirmar.
+- Se a pessoa quiser visitar a loja, fazer um test-drive ou receber uma ligação, combine dia e horário e marque na agenda.
 - Quando a pessoa estiver pronta para comprar, pedir orçamento/preço, pedir para falar com alguém, ou for atacado, transfira para um vendedor.`;
+}
 
 const DEFAULT_HANDOFF =
   "Perfeito! Vou te passar agora para {vendedor}, nosso consultor, que vai continuar seu atendimento por aqui. 😊";
+const DEFAULT_REMINDER =
+  "Olá, {nome}! Passando para lembrar do nosso compromisso: {assunto} em {data} às {hora}. Qualquer coisa é só responder aqui. 😊";
 
-async function ensure() {
-  let settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, "default") });
-  if (!settings) {
-    const [created] = await db
+async function ensure(accountId: string, company: string) {
+  let s = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
+  if (!s) {
+    await db
       .insert(aiSettings)
-      .values({ id: "default", systemPrompt: DEFAULT_PROMPT, handoffMessage: DEFAULT_HANDOFF })
-      .onConflictDoNothing()
-      .returning();
-    settings = created || (await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, "default") }));
+      .values({
+        id: accountId,
+        systemPrompt: defaultPrompt(company),
+        handoffMessage: DEFAULT_HANDOFF,
+        reminderMessage: DEFAULT_REMINDER,
+      })
+      .onConflictDoNothing();
+    s = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
   }
-  return settings!;
+  return s!;
+}
+
+async function payload(accountId: string) {
+  const account = await getAccount(accountId);
+  const s = await ensure(accountId, account?.name || "empresa");
+  const ai = await resolveAccountAiKey(accountId);
+  const ownKey = decryptSecret(account?.aiApiKeyEnc);
+  const parent = await getAccount(account?.parentId);
+  return {
+    ...s,
+    handoffMessage: s.handoffMessage ?? DEFAULT_HANDOFF,
+    reminderMessage: s.reminderMessage ?? DEFAULT_REMINDER,
+    integration: {
+      /** OWN | PARENT | NONE — definido por quem cadastrou a conta */
+      source: account?.type === "MASTER" ? "OWN" : account?.aiSource || "PARENT",
+      ownKeyHint: maskKey(ownKey),
+      usesEnvKey: account?.type === "MASTER" && !ownKey && Boolean(process.env.ANTHROPIC_API_KEY),
+      parentName: parent?.name || null,
+      ready: Boolean(ai.apiKey),
+      reason: ai.reason,
+      providerName: ai.providerAccountName,
+    },
+  };
 }
 
 export async function GET() {
-  const auth = await requireUser("configuracoes");
+  const auth = await requireUser(["configuracoes", "whatsapp"]);
   if (auth.error) return auth.error;
-  try {
-    const s = await ensure();
-    return NextResponse.json({ ...s, handoffMessage: s.handoffMessage ?? DEFAULT_HANDOFF });
-  } catch (error) {
-    console.error("Error fetching AI settings:", error);
-    return NextResponse.json({ error: "Falha ao carregar configurações" }, { status: 500 });
-  }
+  return NextResponse.json(await payload(auth.accountId));
 }
 
 export async function PUT(req: NextRequest) {
   const auth = await requireUser("configuracoes");
   if (auth.error) return auth.error;
-  try {
-    await ensure();
-    const body = await req.json();
-    const set: Record<string, unknown> = { updatedAt: new Date() };
-    if (typeof body.systemPrompt === "string") set.systemPrompt = body.systemPrompt;
-    if (typeof body.enabled === "boolean") set.enabled = body.enabled;
-    if (typeof body.notifySeller === "boolean") set.notifySeller = body.notifySeller;
-    if (typeof body.model === "string" && body.model.trim()) set.model = body.model.trim().slice(0, 80);
-    if (typeof body.handoffMessage === "string") set.handoffMessage = body.handoffMessage;
-    const [updated] = await db.update(aiSettings).set(set).where(eq(aiSettings.id, "default")).returning();
-    return NextResponse.json(updated);
-  } catch (error) {
-    console.error("Error updating AI settings:", error);
-    return NextResponse.json({ error: "Falha ao salvar" }, { status: 500 });
+  const account = await getAccount(auth.accountId);
+  await ensure(auth.accountId, account?.name || "empresa");
+  const body = await req.json();
+
+  // Chave própria da IA (só quando a conta tem integração própria)
+  if (body.apiKey !== undefined) {
+    const source = account?.type === "MASTER" ? "OWN" : account?.aiSource;
+    if (source !== "OWN") {
+      return NextResponse.json(
+        { error: "Esta conta usa a IA de quem a cadastrou. Peça para liberar integração própria." },
+        { status: 403 }
+      );
+    }
+    const key = String(body.apiKey || "").trim();
+    if (key && !key.startsWith("sk-")) {
+      return NextResponse.json({ error: "Chave inválida. Ela começa com sk-ant-..." }, { status: 400 });
+    }
+    await db
+      .update(accounts)
+      .set({ aiApiKeyEnc: key ? encryptSecret(key) : null })
+      .where(eq(accounts.id, auth.accountId));
   }
+
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  if (typeof body.systemPrompt === "string") set.systemPrompt = body.systemPrompt;
+  if (typeof body.enabled === "boolean") set.enabled = body.enabled;
+  if (typeof body.notifySeller === "boolean") set.notifySeller = body.notifySeller;
+  if (typeof body.schedulingEnabled === "boolean") set.schedulingEnabled = body.schedulingEnabled;
+  if (typeof body.model === "string" && body.model.trim()) set.model = body.model.trim().slice(0, 80);
+  if (typeof body.handoffMessage === "string") set.handoffMessage = body.handoffMessage;
+  if (typeof body.reminderMessage === "string") set.reminderMessage = body.reminderMessage;
+  if (typeof body.businessHours === "string") set.businessHours = body.businessHours;
+  if (body.reminderMinutesBefore !== undefined) {
+    set.reminderMinutesBefore = Math.max(0, Math.min(1440, Number(body.reminderMinutesBefore) || 0));
+  }
+  await db.update(aiSettings).set(set).where(eq(aiSettings.id, auth.accountId));
+  return NextResponse.json(await payload(auth.accountId));
 }

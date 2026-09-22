@@ -1,9 +1,9 @@
 export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { leads } from "@/db/schema";
-import { requireUser } from "@/lib/auth/server";
+import { requireUser, sellerScope } from "@/lib/auth/server";
 
 /**
  * GET /api/sdr/leads
@@ -13,11 +13,13 @@ import { requireUser } from "@/lib/auth/server";
 export async function GET() {
   const auth = await requireUser("leads");
   if (auth.error) return auth.error;
-  const onlySeller = auth.user.role === "SELLER" && auth.user.sellerId ? auth.user.sellerId : null;
+  const onlySeller = sellerScope(auth.user);
 
   try {
     const all = await db.query.leads.findMany({
-      where: onlySeller ? eq(leads.sellerId, onlySeller) : undefined,
+      where: onlySeller
+        ? and(eq(leads.accountId, auth.accountId), eq(leads.sellerId, onlySeller))
+        : eq(leads.accountId, auth.accountId),
       with: {
         conversation: {
           with: {

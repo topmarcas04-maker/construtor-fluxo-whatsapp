@@ -3,12 +3,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { flows, flowBlocks, flowConnections, flowTriggers } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { legacyGuard } from "@/lib/auth/legacy";
 
 /**
  * GET /api/flows
  * List all flows
  */
 export async function GET(req: NextRequest) {
+  const denied = await legacyGuard();
+  if (denied) return denied;
   try {
     const allFlows = await db.query.flows.findMany();
     return NextResponse.json(allFlows);
@@ -26,6 +29,8 @@ export async function GET(req: NextRequest) {
  * Create a new flow
  */
 export async function POST(req: NextRequest) {
+  const denied = await legacyGuard();
+  if (denied) return denied;
   try {
     const body = await req.json();
     const { name, description, phoneNumber, priority = 0 } = body;

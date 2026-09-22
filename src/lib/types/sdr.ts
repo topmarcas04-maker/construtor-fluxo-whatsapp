@@ -56,7 +56,7 @@ export interface Message {
   mediaDataUrl: string | null;
   mediaMimeType: string | null;
   mediaFileName: string | null;
-  sender: "LEAD" | "AI" | "HUMAN" | "FLOW" | null;
+  sender: "LEAD" | "AI" | "HUMAN" | "FLOW" | "AUTO" | null;
 }
 
 export interface QuickReply {

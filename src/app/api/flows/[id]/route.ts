@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { flows, flowBlocks, flowConnections, flowTriggers } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { legacyGuard } from "@/lib/auth/legacy";
 
 interface Params {
   params: {
@@ -15,6 +16,8 @@ interface Params {
  * Get a specific flow with all its blocks, connections, and triggers
  */
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string; }> }) {
+  const denied = await legacyGuard();
+  if (denied) return denied;
   const params = await ctx.params;
   try {
     const { id } = params;
@@ -47,6 +50,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
  * Update a flow
  */
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string; }> }) {
+  const denied = await legacyGuard();
+  if (denied) return denied;
   const params = await ctx.params;
   try {
     const { id } = params;
@@ -80,6 +85,8 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
  * Delete a flow (cascades to blocks, connections, triggers)
  */
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string; }> }) {
+  const denied = await legacyGuard();
+  if (denied) return denied;
   const params = await ctx.params;
   try {
     const { id } = params;

@@ -1,16 +1,13 @@
 export const dynamic = "force-dynamic";
-import { requireUser } from "@/lib/auth/server";
 import { NextResponse } from "next/server";
+import { requireUser } from "@/lib/auth/server";
 import { getEngineStatus } from "@/lib/services/whatsapp/engineClient";
+import { resolveAccountAiKey } from "@/lib/tenancy/server";
 
-/**
- * GET /api/sdr/whatsapp/status
- * Status da conexão do WhatsApp (proxy pro motor de fluxo, que é quem
- * mantém a sessão Baileys viva).
- */
+/** Status do WhatsApp da conta ativa + se a IA tem chave disponível */
 export async function GET() {
   const auth = await requireUser(["whatsapp", "configuracoes", "leads"]);
   if (auth.error) return auth.error;
-  const status = await getEngineStatus();
-  return NextResponse.json(status);
+  const [status, ai] = await Promise.all([getEngineStatus(auth.accountId), resolveAccountAiKey(auth.accountId)]);
+  return NextResponse.json({ ...status, aiReady: Boolean(ai.apiKey), aiReason: ai.reason });
 }

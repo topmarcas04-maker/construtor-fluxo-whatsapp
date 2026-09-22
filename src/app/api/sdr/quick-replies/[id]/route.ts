@@ -1,28 +1,14 @@
 export const dynamic = "force-dynamic";
-import { requireUser } from "@/lib/auth/server";
 import { NextRequest, NextResponse } from "next/server";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { quickReplies } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { requireUser } from "@/lib/auth/server";
 
-/**
- * DELETE /api/sdr/quick-replies/[id]
- */
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const auth = await requireUser("configuracoes");
   if (auth.error) return auth.error;
   const { id } = await ctx.params;
-  try {
-    const [deleted] = await db
-      .delete(quickReplies)
-      .where(eq(quickReplies.id, id))
-      .returning();
-    if (!deleted) {
-      return NextResponse.json({ error: "Quick reply not found" }, { status: 404 });
-    }
-    return NextResponse.json({ message: "Quick reply deleted" });
-  } catch (error) {
-    console.error("Error deleting quick reply:", error);
-    return NextResponse.json({ error: "Failed to delete quick reply" }, { status: 500 });
-  }
+  await db.delete(quickReplies).where(and(eq(quickReplies.id, id), eq(quickReplies.accountId, auth.accountId)));
+  return NextResponse.json({ ok: true });
 }

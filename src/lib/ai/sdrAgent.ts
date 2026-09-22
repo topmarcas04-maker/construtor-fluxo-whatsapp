@@ -33,6 +33,15 @@ export interface AgentInput {
   tags: string[];
   regions: string[];
   now?: Date;
+  /** Agenda: a IA pode marcar horários */
+  scheduling?: {
+    enabled: boolean;
+    businessHours: string | null;
+    /** Horários já ocupados nos próximos dias (texto, ex.: "25/09 às 14:00") */
+    busy: string[];
+    /** Agendamento futuro que este lead já tem (texto) */
+    current: string | null;
+  };
 }
 
 export interface AgentDecision {
@@ -47,6 +56,8 @@ export interface AgentDecision {
   tags: string[];
   handoff: boolean;
   handoffReason: string | null;
+  /** Horário combinado com o cliente (horário de Brasília) */
+  appointment: { date: string; time: string; subject: string } | null;
 }
 
 export const TOOL_NAME = "registrar_atendimento";
@@ -102,6 +113,17 @@ const TOOL = {
           "true para passar agora para um vendedor humano (pronto para comprar, pediu preço/orçamento que você não pode dar, pediu atendente, atacado, reclamação, ou você não sabe responder).",
       },
       motivo_transferencia: { type: "string", description: "Por que transferir (se transferir=true)." },
+      agendamento: {
+        type: "object",
+        description:
+          "Preencha SOMENTE quando o cliente CONFIRMOU um dia e horário (visita, test-drive, ligação, reunião). Omita se ainda está combinando.",
+        properties: {
+          data: { type: "string", description: "Data no formato AAAA-MM-DD" },
+          hora: { type: "string", description: "Hora no formato HH:MM (24h, horário de Brasília)" },
+          assunto: { type: "string", description: "Assunto curto, ex.: Visita à loja, Test-drive, Ligação" },
+        },
+        required: ["data", "hora", "assunto"],
+      },
     },
     required: ["resposta", "tipo_compra", "estagio", "pontuacao", "resumo", "transferir"],
   },
@@ -136,7 +158,22 @@ REGRAS DE FORMATO
 - Não repita perguntas que o cliente já respondeu. Faça no máximo uma pergunta por vez.
 - Nunca invente preço, estoque, prazo ou condição que não esteja nas instruções acima.
 - Se o cliente mandar áudio ou imagem que você não consegue ver, peça gentilmente para escrever.
-- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).`;
+- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${schedulingBlock(input)}`;
+}
+
+function schedulingBlock(input: AgentInput) {
+  const sc = input.scheduling;
+  if (!sc?.enabled) {
+    return "\n- Você NÃO marca horários. Se o cliente quiser agendar, diga que um consultor vai combinar com ele e transfira.";
+  }
+  return `
+
+AGENDA
+- Você pode marcar visita, test-drive, ligação ou reunião. Ofereça horários, confirme dia e hora com o cliente e só então preencha "agendamento".
+- Horário de atendimento: ${sc.businessHours?.trim() || "segunda a sexta, 9h às 18h; sábado, 9h às 12h"}. Não marque fora dele nem no passado.
+- Horários já ocupados: ${sc.busy.length ? sc.busy.join(", ") : "nenhum"}.
+- ${sc.current ? `Este cliente já tem agendado: ${sc.current}. Se ele quiser remarcar, preencha "agendamento" com o novo horário.` : "Este cliente ainda não tem nada agendado."}
+- Ao confirmar, repita dia e hora na resposta (ex.: "Combinado, quinta 25/09 às 14h!").`;
 }
 
 /** Converte o histórico para o formato de mensagens da API (alternando user/assistant) */
@@ -192,7 +229,18 @@ export function parseDecision(raw: Record<string, unknown>, allowedTags: string[
     tags,
     handoff: raw.transferir === true,
     handoffReason: clean(raw.motivo_transferencia, 500),
+    appointment: parseAppointment(raw.agendamento),
   };
+}
+
+function parseAppointment(v: unknown): AgentDecision["appointment"] {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const date = String(o.data || "").trim();
+  const timeRaw = String(o.hora || "").trim().replace("h", ":").replace(/:$/, ":00");
+  const time = /^\d{1,2}$/.test(timeRaw) ? `${timeRaw}:00` : timeRaw;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{1,2}:\d{2}$/.test(time)) return null;
+  return { date, time: time.padStart(5, "0"), subject: clean(o.assunto, 200) || "Atendimento" };
 }
 
 /** Chama a API da Anthropic. Lança erro com mensagem legível em caso de falha. */

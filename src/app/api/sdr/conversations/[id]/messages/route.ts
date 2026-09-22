@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { conversations, leads, messages } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { sendWhatsappMessage } from "@/lib/services/whatsapp/engineClient";
 import { requireUser } from "@/lib/auth/server";
 
@@ -12,6 +12,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (auth.error) return auth.error;
   const { id } = await ctx.params;
   try {
+    const conv = await db.query.conversations.findFirst({
+      where: and(eq(conversations.id, id), eq(conversations.accountId, auth.accountId)),
+    });
+    if (!conv) return NextResponse.json({ error: "Conversa não encontrada" }, { status: 404 });
     const all = await db.query.messages.findMany({
       where: eq(messages.conversationId, id),
       orderBy: (m, { asc }) => [asc(m.sentAt)],
@@ -38,14 +42,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       return NextResponse.json({ error: "Digite uma mensagem" }, { status: 400 });
     }
 
-    const conversation = await db.query.conversations.findFirst({ where: eq(conversations.id, id) });
+    const conversation = await db.query.conversations.findFirst({
+      where: and(eq(conversations.id, id), eq(conversations.accountId, auth.accountId)),
+    });
     if (!conversation) {
       return NextResponse.json({ error: "Conversa não encontrada" }, { status: 404 });
     }
 
     await db.update(leads).set({ aiPaused: true, updatedAt: new Date() }).where(eq(leads.conversationId, id));
 
-    const result = await sendWhatsappMessage(conversation.phoneJid, String(text), "HUMAN");
+    const result = await sendWhatsappMessage(auth.accountId, conversation.phoneJid, String(text), "HUMAN");
     if ("error" in result) {
       return NextResponse.json({ error: `Mensagem não enviada: ${result.error}` }, { status: 502 });
     }

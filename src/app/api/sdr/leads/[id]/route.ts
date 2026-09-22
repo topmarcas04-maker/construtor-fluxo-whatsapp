@@ -1,9 +1,9 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
-import { leads, leadTags, conversations } from "@/db/schema";
+import { leads, leadTags, conversations, sellers, tags } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
-import { requireUser } from "@/lib/auth/server";
+import { requireUser, sellerScope } from "@/lib/auth/server";
 
 const STAGES = ["FIRST_CONTACT", "SECOND_CONTACT", "HOT_LEAD", "SALE"];
 const SALE_TYPES = ["ANY", "WHOLESALE", "RETAIL"];
@@ -20,13 +20,18 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
 
   try {
     const body = await req.json();
-    const lead = await db.query.leads.findFirst({ where: eq(leads.id, id) });
+    const lead = await db.query.leads.findFirst({
+      where: and(eq(leads.id, id), eq(leads.accountId, auth.accountId)),
+    });
     if (!lead) return NextResponse.json({ error: "Lead não encontrado" }, { status: 404 });
-    if (auth.user.role === "SELLER" && auth.user.sellerId && lead.sellerId !== auth.user.sellerId) {
+    const onlySeller = sellerScope(auth.user);
+    if (onlySeller && lead.sellerId !== onlySeller) {
       return NextResponse.json({ error: "Este lead é de outro vendedor" }, { status: 403 });
     }
 
-    if (body.addTagId) {
+    const ownTag = async (tagId: string) =>
+      Boolean(await db.query.tags.findFirst({ where: and(eq(tags.id, tagId), eq(tags.accountId, auth.accountId)) }));
+    if (body.addTagId && (await ownTag(body.addTagId))) {
       await db.insert(leadTags).values({ leadId: id, tagId: body.addTagId }).onConflictDoNothing();
     }
     if (body.removeTagId) {
@@ -39,7 +44,15 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       set.closed = body.stage === "SALE";
       set.closedAt = body.stage === "SALE" ? new Date() : null;
     }
-    if (body.sellerId !== undefined) set.sellerId = body.sellerId || null;
+    if (body.sellerId !== undefined) {
+      if (body.sellerId) {
+        const s = await db.query.sellers.findFirst({
+          where: and(eq(sellers.id, body.sellerId), eq(sellers.accountId, auth.accountId)),
+        });
+        if (!s) return NextResponse.json({ error: "Vendedor inválido" }, { status: 400 });
+      }
+      set.sellerId = body.sellerId || null;
+    }
     if (body.dealValue !== undefined) {
       const v = body.dealValue === null || body.dealValue === "" ? null : Number(body.dealValue);
       set.dealValue = v === null || Number.isNaN(v) ? null : v;

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { flowBlocks } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { legacyGuard } from "@/lib/auth/legacy";
 
 interface Params {
   params: {
@@ -15,6 +16,8 @@ interface Params {
  * Create a new block in a flow
  */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string; }> }) {
+  const denied = await legacyGuard();
+  if (denied) return denied;
   const params = await ctx.params;
   try {
     const { id } = params;
