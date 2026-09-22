@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, LogOut, Building2, Search, Check } from "lucide-react";
+import { ChevronDown, LogOut, Building2, Search, Check, Menu } from "lucide-react";
 import { roleLabel, ACCOUNT_TYPE_LABEL } from "@/lib/auth/modules";
 import type { CurrentUser } from "@/lib/auth/server";
 
@@ -71,11 +71,11 @@ function AccountSwitcher({ user }: { user: CurrentUser }) {
         title="Visualizar o painel de outra conta"
       >
         <Building2 size={16} />
-        <span className="max-w-[180px] truncate">{user.account.name}</span>
+        <span className="hidden max-w-[180px] truncate sm:inline">{user.account.name}</span>
         <ChevronDown size={15} />
       </button>
       {open && (
-        <div className="absolute right-0 z-40 mt-2 w-80 rounded-xl border border-slate-200 bg-white p-2 text-slate-700 shadow-lg">
+        <div className="absolute right-0 z-40 mt-2 w-[min(20rem,calc(100vw-1.5rem))] rounded-xl border border-slate-200 bg-white p-2 text-slate-700 shadow-lg">
           <p className="px-2 pb-2 pt-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Visualizar painel de</p>
           <div className="relative mb-2">
             <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -109,7 +109,7 @@ function AccountSwitcher({ user }: { user: CurrentUser }) {
   );
 }
 
-export function TopBar({ title, user }: { title: string; user: CurrentUser }) {
+export function TopBar({ title, user, onOpenMenu }: { title: string; user: CurrentUser; onOpenMenu?: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -137,17 +137,20 @@ export function TopBar({ title, user }: { title: string; user: CurrentUser }) {
         </div>
       )}
       <header
-        className="flex h-[76px] shrink-0 items-center justify-between border-b border-slate-200 px-8"
+        className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-slate-200 px-3 md:h-[76px] md:px-8"
         style={{ background: "var(--top-bg)", color: "var(--top-text)" }}
       >
-        <div className="min-w-0">
+        <button onClick={onOpenMenu} className="-ml-1 rounded-lg p-2 hover:bg-black/5 md:hidden" aria-label="Abrir menu">
+          <Menu size={22} />
+        </button>
+        <div className="min-w-0 flex-1">
           <p className="truncate text-[17px] font-semibold leading-tight">{title}</p>
           <p className="text-sm leading-tight opacity-60">
             {user.actingAs ? `${ACCOUNT_TYPE_LABEL[user.account.type]} · acesso de administrador` : roleLabel(user.role, user.account.type)}
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 md:gap-3">
           {user.canManage && user.homeAccount.type !== "CLIENT" && <AccountSwitcher user={user} />}
           <div ref={ref} className="relative">
             <button
@@ -177,7 +180,7 @@ export function TopBar({ title, user }: { title: string; user: CurrentUser }) {
           </div>
           <button
             onClick={logout}
-            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-[15px] font-medium text-slate-700 hover:bg-slate-50"
+            className="hidden rounded-lg border border-slate-300 bg-white px-4 py-2 text-[15px] font-medium text-slate-700 hover:bg-slate-50 md:block"
           >
             Sair
           </button>

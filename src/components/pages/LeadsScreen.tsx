@@ -72,7 +72,7 @@ export function LeadsScreen() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-6 py-3">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2.5 md:gap-3 md:px-6 md:py-3">
         <h1 className="mr-2 text-xl font-semibold text-slate-900">Leads</h1>
 
         <div className="flex rounded-lg bg-slate-100 p-1">
@@ -106,14 +106,14 @@ export function LeadsScreen() {
           </span>
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
-          <div className="relative">
+        <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
+          <div className="relative flex-1 sm:flex-none">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar nome, telefone, cidade..."
-              className="w-64 rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none focus:border-[var(--accent)] focus:bg-white"
+              className="w-full rounded-lg border sm:w-64 border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none focus:border-[var(--accent)] focus:bg-white"
             />
           </div>
           <ExpandButton />

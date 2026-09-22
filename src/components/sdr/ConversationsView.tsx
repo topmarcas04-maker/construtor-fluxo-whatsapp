@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell } from "lucide-react";
+import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X } from "lucide-react";
 import type { Lead, Message, QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import {
   TAG_DOT_CLASSES,
@@ -106,6 +106,10 @@ export function ConversationsView({
     }
   }, [leads, filter]);
 
+  // Celular/tablet: uma tela por vez (lista → conversa) e a ficha abre por cima
+  const [mobilePane, setMobilePane] = useState<"list" | "chat">("list");
+  const [showFicha, setShowFicha] = useState(false);
+
   const selectedLead = useMemo(
     () => leads.find((l) => l.id === selectedLeadId) || null,
     [leads, selectedLeadId]
@@ -181,10 +185,10 @@ export function ConversationsView({
   ];
 
   return (
-    <div className="grid h-full grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[340px_minmax(0,1fr)_330px]">
+    <div className="grid h-full grid-cols-1 md:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[340px_minmax(0,1fr)_330px]">
       {/* Lista de conversas */}
-      <div className="flex min-h-0 flex-col border-r border-slate-200 bg-white">
-        <div className="flex gap-1.5 border-b border-slate-100 px-3 py-2.5">
+      <div className={`min-h-0 flex-col border-r border-slate-200 bg-white ${mobilePane === "list" ? "flex" : "hidden md:flex"}`}>
+        <div className="flex gap-1.5 overflow-x-auto border-b border-slate-100 px-3 py-2.5">
           {FILTERS.map((f) => (
             <button
               key={f.key}
@@ -216,7 +220,10 @@ export function ConversationsView({
               return (
                 <button
                   key={lead.id}
-                  onClick={() => onSelectLead(lead.id)}
+                  onClick={() => {
+                    onSelectLead(lead.id);
+                    setMobilePane("chat");
+                  }}
                   className={`flex w-full gap-3 border-b border-slate-100 px-4 py-3 text-left transition ${
                     active ? "bg-[var(--accent)]/8 shadow-[inset_3px_0_0_var(--accent)]" : "hover:bg-slate-50"
                   }`}
@@ -261,13 +268,20 @@ export function ConversationsView({
 
       {/* Conversa */}
       {!selectedLead ? (
-        <div className="flex items-center justify-center bg-slate-50 text-sm text-slate-400">
+        <div className="hidden items-center justify-center bg-slate-50 text-sm text-slate-400 md:flex">
           Selecione uma conversa à esquerda
         </div>
       ) : (
-        <div className="flex min-h-0 flex-col bg-slate-50">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-6 py-3">
-            <div className="flex items-center gap-3">
+        <div className={`min-h-0 flex-col bg-slate-50 ${mobilePane === "chat" ? "flex" : "hidden md:flex"}`}>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 py-2.5 md:gap-3 md:px-6 md:py-3">
+            <div className="flex min-w-0 items-center gap-2 md:gap-3">
+              <button
+                onClick={() => setMobilePane("list")}
+                className="-ml-1 rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 md:hidden"
+                aria-label="Voltar para a lista"
+              >
+                <ArrowLeft size={20} />
+              </button>
               <Avatar name={leadDisplayName(selectedLead)} />
               <div>
                 <h3 className="font-semibold text-slate-900">{leadDisplayName(selectedLead)}</h3>
@@ -277,6 +291,12 @@ export function ConversationsView({
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setShowFicha(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 xl:hidden"
+              >
+                <IdCard size={16} /> Ficha
+              </button>
               <select
                 value={funnelColumn(selectedLead.stage)}
                 disabled={!canEdit}
@@ -310,7 +330,7 @@ export function ConversationsView({
             </div>
           </div>
 
-          <div ref={scrollRef} className="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-6 py-5">
+          <div ref={scrollRef} className="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-3 py-4 md:px-6 md:py-5">
             {messagesLoading ? (
               <p className="text-sm text-slate-400">Carregando mensagens...</p>
             ) : messages.length === 0 ? (
@@ -322,7 +342,7 @@ export function ConversationsView({
                 return (
                   <div key={msg.id} className={`flex ${out ? "justify-end" : "justify-start"}`}>
                     <div
-                      className={`max-w-[70%] rounded-2xl px-4 py-2.5 text-[15px] shadow-sm ${
+                      className={`max-w-[85%] rounded-2xl md:max-w-[70%] px-4 py-2.5 text-[15px] shadow-sm ${
                         out
                           ? isAi
                             ? "rounded-br-md bg-violet-600 text-white"
@@ -367,7 +387,7 @@ export function ConversationsView({
             )}
           </div>
 
-          <div className="border-t border-slate-200 bg-white px-6 py-3">
+          <div className="border-t border-slate-200 bg-white px-3 py-2.5 md:px-6 md:py-3">
             {sendError && <p className="mb-2 text-sm text-red-600">{sendError}</p>}
             {!selectedLead.aiPaused && !selectedLead.seller && (
               <p className="mb-2 text-xs text-slate-400">Se você enviar uma mensagem, a IA pausa e você assume a conversa.</p>
@@ -381,6 +401,24 @@ export function ConversationsView({
       {selectedLead && (
         <div className="hidden min-h-0 overflow-y-auto border-l border-slate-200 bg-white xl:block">
           <LeadPanel lead={selectedLead} tags={tags} sellers={sellers} onPatch={patchLead} canEdit={canEdit} />
+        </div>
+      )}
+
+      {/* Ficha por cima da conversa (telas menores) */}
+      {selectedLead && showFicha && (
+        <div className="fixed inset-0 z-50 flex justify-end xl:hidden">
+          <button className="flex-1 bg-black/40" aria-label="Fechar ficha" onClick={() => setShowFicha(false)} />
+          <div className="flex h-full w-full max-w-sm flex-col bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <p className="font-semibold text-slate-900">Ficha do lead</p>
+              <button onClick={() => setShowFicha(false)} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100" aria-label="Fechar">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <LeadPanel lead={selectedLead} tags={tags} sellers={sellers} onPatch={patchLead} canEdit={canEdit} />
+            </div>
+          </div>
         </div>
       )}
     </div>

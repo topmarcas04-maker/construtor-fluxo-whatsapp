@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import type { PlatformBranding } from "@/lib/platform/settings";
 import type { CurrentUser } from "@/lib/auth/server";
@@ -40,11 +41,45 @@ function Frame({
   children: React.ReactNode;
 }) {
   const { expanded } = useFullscreen();
+  const pathname = usePathname();
+  // Menu recolhido (só ícones) — lembrado neste navegador
+  const [collapsed, setCollapsed] = useState(false);
+  // Celular: menu em gaveta
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem("sdr_menu_collapsed") === "1");
+    } catch {}
+  }, []);
+  useEffect(() => setMobileOpen(false), [pathname]);
+
+  const toggle = () => {
+    setCollapsed((c) => {
+      try {
+        localStorage.setItem("sdr_menu_collapsed", c ? "0" : "1");
+      } catch {}
+      return !c;
+    });
+  };
+
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50">
-      {!expanded && <Sidebar branding={branding} user={user} />}
+    <div className="flex h-[100dvh] overflow-hidden bg-slate-50">
+      {!expanded && (
+        <div className="hidden h-full md:block">
+          <Sidebar branding={branding} user={user} collapsed={collapsed} onToggle={toggle} />
+        </div>
+      )}
+      {mobileOpen && (
+        <div className="fixed inset-0 z-50 flex md:hidden">
+          <div className="h-full shadow-2xl">
+            <Sidebar branding={branding} user={user} mobile onClose={() => setMobileOpen(false)} />
+          </div>
+          <button className="flex-1 bg-black/40" aria-label="Fechar menu" onClick={() => setMobileOpen(false)} />
+        </div>
+      )}
       <div className="flex min-w-0 flex-1 flex-col">
-        {!expanded && <TopBar title={user.account.name} user={user} />}
+        {!expanded && <TopBar title={user.account.name} user={user} onOpenMenu={() => setMobileOpen(true)} />}
         <WhatsAppDownBanner user={user} />
         <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
       </div>
