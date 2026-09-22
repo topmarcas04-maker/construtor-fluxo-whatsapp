@@ -11,13 +11,15 @@
  * Roda como processo separado (scripts/flow-engine-server.mts)
  */
 
-import Baileys, {
+import {
   makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
   Browsers,
 } from "@whiskeysockets/baileys";
-import { Boom } from "@hapi/boom";
+import type { Boom } from "@hapi/boom";
+import * as http from "http";
+import QRCode from "qrcode";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import {
@@ -58,6 +60,7 @@ if (!fs.existsSync(AUTH_DIR)) {
 
 let sock: ReturnType<typeof makeWASocket> | null = null;
 let connectedPhone: string | null = null;
+let currentQr: string | null = null;
 
 /**
  * Conectar ao WhatsApp via Baileys
@@ -69,13 +72,20 @@ async function connectWhatsApp() {
 
   sock = makeWASocket({
     auth: state,
-    printQRInTerminal: true,
     browser: Browsers.ubuntu("Chrome"),
   });
 
   // Listeners
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      currentQr = qr;
+      console.log("[WhatsApp] Novo QR Code gerado. Abra a pagina do motor para escanear.");
+      try {
+        console.log(await QRCode.toString(qr, { type: "terminal", small: true }));
+      } catch {}
+    }
 
     if (connection === "close") {
       const shouldReconnect =
@@ -93,6 +103,7 @@ async function connectWhatsApp() {
     } else if (connection === "open") {
       const id = sock!.user?.id;
       connectedPhone = id?.split(":")[0] || null;
+      currentQr = null;
       console.log("✅ WhatsApp Conectado:", connectedPhone);
     }
   });
@@ -527,11 +538,45 @@ async function sendList(
 }
 
 /**
+ * Pagina de status / QR Code (abrir pelo dominio do servico no Railway)
+ */
+function startStatusServer() {
+  const port = Number(process.env.PORT || FLOW_ENGINE_PORT);
+  const token = process.env.QR_ACCESS_TOKEN;
+  http
+    .createServer(async (req, res) => {
+      const url = new URL(req.url || "/", "http://localhost");
+      if (url.pathname === "/health") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        return res.end("ok");
+      }
+      if (token && url.searchParams.get("token") !== token) {
+        res.writeHead(401, { "Content-Type": "text/html; charset=utf-8" });
+        return res.end("<h2>Acesso negado. Use ?token=SUA_SENHA no final do endereco.</h2>");
+      }
+      let body: string;
+      if (connectedPhone) {
+        body = `<h1>&#9989; WhatsApp conectado</h1><p>Numero: ${connectedPhone}</p>`;
+      } else if (currentQr) {
+        const img = await QRCode.toDataURL(currentQr, { width: 320 });
+        body = `<h1>Escaneie com o WhatsApp</h1><p>No celular: Configuracoes &rarr; Aparelhos conectados &rarr; Conectar aparelho</p><img src="${img}" alt="QR Code"/><p>A pagina atualiza sozinha.</p>`;
+      } else {
+        body = `<h1>Aguardando QR Code...</h1><p>A pagina atualiza sozinha.</p>`;
+      }
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="10"><title>Motor WhatsApp</title></head><body style="font-family:sans-serif;text-align:center;padding:40px">${body}</body></html>`);
+    })
+    .listen(port, () => console.log(`[Status] Pagina do QR Code na porta ${port}`));
+}
+
+/**
  * Main
  */
 async function main() {
   console.log("🚀 Flow Engine Server iniciando...");
   console.log("📱 Conectando ao WhatsApp via Baileys...");
+
+  startStatusServer();
 
   try {
     await connectWhatsApp();

@@ -6,13 +6,13 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node scripts/init-db.mjs && next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "flow:engine": "tsx scripts/flow-engine-server.mts"
+    "flow:engine": "node scripts/init-db.mjs && tsx scripts/flow-engine-server.mts"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc14",
@@ -24,7 +24,8 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "reactflow": "^11.11.4",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "tsx": "^4.23.12"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -37,7 +38,6 @@
     "eslint": "^9",
     "eslint-config-next": "^16.3.3",
     "tailwindcss": "^4",
-    "tsx": "^4.23.12",
     "typescript": "^5"
   }
 }

@@ -291,9 +291,23 @@ export const flowsRelations = relations(flows, ({ many }) => ({
   triggers: many(flowTriggers),
 }));
 
-export const flowBlocksRelations = relations(flowBlocks, ({ one, many }) => ({
+export const flowBlocksRelations = relations(flowBlocks, ({ one }) => ({
   flow: one(flows, { fields: [flowBlocks.flowId], references: [flows.id] }),
-  fromConnections: many(flowConnections),
+}));
+
+export const flowConnectionsRelations = relations(flowConnections, ({ one }) => ({
+  flow: one(flows, { fields: [flowConnections.flowId], references: [flows.id] }),
+}));
+
+export const flowTriggersRelations = relations(flowTriggers, ({ one }) => ({
+  flow: one(flows, { fields: [flowTriggers.flowId], references: [flows.id] }),
+}));
+
+export const messagesRelations = relations(messages, ({ one }) => ({
+  conversation: one(conversations, {
+    fields: [messages.conversationId],
+    references: [conversations.id],
+  }),
 }));
 
 export const conversationsRelations = relations(conversations, ({ many }) => ({
