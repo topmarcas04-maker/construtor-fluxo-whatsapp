@@ -382,6 +382,51 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS lead_edit boolean NOT NULL DEFAULT
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS sign_messages boolean NOT NULL DEFAULT true;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS alert_phone varchar(40);
 CREATE INDEX IF NOT EXISTS messages_whatsapp_message_id_idx ON messages (whatsapp_message_id);
+
+-- Catálogo de produtos
+CREATE TABLE IF NOT EXISTS product_categories (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name varchar(120) NOT NULL,
+  sort integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS product_categories_account_idx ON product_categories (account_id);
+CREATE TABLE IF NOT EXISTS products (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  category_id uuid REFERENCES product_categories(id) ON DELETE SET NULL,
+  name varchar(200) NOT NULL,
+  description text,
+  price double precision,
+  promo_price double precision,
+  code varchar(60),
+  active boolean NOT NULL DEFAULT true,
+  sort integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS products_account_idx ON products (account_id);
+CREATE INDEX IF NOT EXISTS products_category_idx ON products (category_id);
+CREATE TABLE IF NOT EXISTS product_images (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  data_url text NOT NULL,
+  sort integer NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS product_images_product_idx ON product_images (product_id);
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS catalog_enabled boolean NOT NULL DEFAULT true;
+
+-- Migrações que rodam uma única vez
+CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM app_migrations WHERE key = 'grant-produtos-v1') THEN
+    -- Menu novo "Produtos": libera para parceiros/clientes que já tinham Leads
+    UPDATE accounts SET modules = modules || '["produtos"]'::jsonb
+      WHERE type <> 'MASTER' AND modules ? 'leads' AND NOT modules ? 'produtos';
+    INSERT INTO app_migrations (key) VALUES ('grant-produtos-v1');
+  END IF;
+END $$;
 `;
 
 const client = new pg.Client({ connectionString: url });

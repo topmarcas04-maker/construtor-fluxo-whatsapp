@@ -13,6 +13,14 @@ import {
 } from "@/lib/types/sdr";
 import { LeadPanel } from "./LeadPanel";
 import { MessageMedia, mediaCaption } from "./MessageMedia";
+
+/** Mostra o *negrito* do WhatsApp como negrito no painel */
+function waFormat(text: string | null | undefined) {
+  if (!text) return text;
+  return text.split(/(\*[^*\n]+\*)/g).map((part, i) =>
+    /^\*[^*\n]+\*$/.test(part) ? <b key={i}>{part.slice(1, -1)}</b> : part
+  );
+}
 import { Composer, type OutgoingPayload } from "./Composer";
 
 interface Props {
@@ -344,10 +352,10 @@ export function ConversationsView({
                       {msg.messageType && msg.messageType !== "text" ? (
                         <div className="space-y-1.5">
                           <MessageMedia msg={msg} out={out} />
-                          {mediaCaption(msg) && <p className="whitespace-pre-wrap break-words">{mediaCaption(msg)}</p>}
+                          {mediaCaption(msg) && <p className="whitespace-pre-wrap break-words">{waFormat(mediaCaption(msg))}</p>}
                         </div>
                       ) : (
-                        <p className="whitespace-pre-wrap break-words">{msg.body}</p>
+                        <p className="whitespace-pre-wrap break-words">{waFormat(msg.body)}</p>
                       )}
                       <p className={`mt-1 text-right text-[10px] ${out ? "text-white/70" : "text-slate-400"}`}>
                         {new Date(msg.sentAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}

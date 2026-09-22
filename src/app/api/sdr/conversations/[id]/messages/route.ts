@@ -1,9 +1,9 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
-import { conversations, leads, messages } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
-import { sendWhatsappMedia, sendWhatsappMessage } from "@/lib/services/whatsapp/engineClient";
+import { conversations, leads, messages, products } from "@/db/schema";
+import { and, eq, sql } from "drizzle-orm";
+import { sendWhatsappMedia, sendWhatsappMessage, sendWhatsappProduct } from "@/lib/services/whatsapp/engineClient";
 import { requireUser } from "@/lib/auth/server";
 
 /** Tamanho máximo de arquivo enviado pelo painel */
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         authorName: messages.authorName,
         mediaMimeType: messages.mediaMimeType,
         mediaFileName: messages.mediaFileName,
-        hasMedia: messages.mediaDataUrl,
+        hasMedia: sql<boolean>`(${messages.mediaDataUrl} is not null)`,
       })
       .from(messages)
       .where(eq(messages.conversationId, id))
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 /**
  * POST — mensagem enviada pelo painel (vendedor/admin). Quando uma pessoa responde,
  * a IA para de responder esse lead (pode ser religada no painel).
- * Body: { text } ou { media: { kind: "image"|"audio"|"document", dataUrl, fileName? }, caption? }
+ * Body: { text } ou { media: { kind: "image"|"audio"|"document", dataUrl, fileName? }, caption? } ou { productId }
  */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const auth = await requireUser("leads");
@@ -65,7 +65,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     const author = auth.user.name;
     let result;
-    if (body.media) {
+    if (body.productId) {
+      const product = await db.query.products.findFirst({
+        where: and(eq(products.id, String(body.productId)), eq(products.accountId, auth.accountId)),
+      });
+      if (!product) return NextResponse.json({ error: "Produto não encontrado" }, { status: 404 });
+      await db.update(leads).set({ aiPaused: true, updatedAt: new Date() }).where(eq(leads.conversationId, id));
+      result = await sendWhatsappProduct(auth.accountId, conversation.phoneJid, product.id, author);
+    } else if (body.media) {
       const { kind, dataUrl, fileName } = body.media as { kind: string; dataUrl: string; fileName?: string };
       const match = /^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/.exec(String(dataUrl || ""));
       if (!["image", "audio", "document"].includes(kind) || !match) {

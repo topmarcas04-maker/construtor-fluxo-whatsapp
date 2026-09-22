@@ -13,6 +13,7 @@ export const MODULES = [
   { key: "whatsapp", label: "WhatsApp", href: "/whatsapp" },
   { key: "leads", label: "Leads", href: "/leads" },
   { key: "agenda", label: "Agenda", href: "/agenda" },
+  { key: "produtos", label: "Produtos", href: "/produtos" },
   { key: "configuracoes", label: "Configurações", href: "/configuracoes" },
   { key: "parceiros", label: "Parceiros", href: "/parceiros" },
   { key: "permissoes", label: "Permissões", href: "/permissoes" },

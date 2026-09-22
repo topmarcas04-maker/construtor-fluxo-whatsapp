@@ -398,6 +398,8 @@ export const aiSettings = pgTable("ai_settings", {
   reminderMinutesBefore: integer("reminder_minutes_before").notNull().default(0),
   /** Colocar o nome de quem enviou no começo das mensagens do painel */
   signMessages: boolean("sign_messages").notNull().default(true),
+  /** A IA consulta o catálogo de produtos (preço, descrição) e envia fotos */
+  catalogEnabled: boolean("catalog_enabled").notNull().default(true),
   /** WhatsApp que recebe alertas (ex.: WhatsApp desconectado) */
   alertPhone: varchar("alert_phone", { length: 40 }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -459,6 +461,61 @@ export const platformSettings = pgTable("platform_settings", {
   accent: varchar("accent", { length: 20 }).notNull().default("#155e75"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ============================================================================
+// PRODUTOS (CATÁLOGO)
+// ============================================================================
+
+export const productCategories = pgTable(
+  "product_categories",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 120 }).notNull(),
+    sort: integer("sort").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("product_categories_account_idx").on(table.accountId)]
+);
+
+export const products = pgTable(
+  "products",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    categoryId: uuid("category_id").references(() => productCategories.id, { onDelete: "set null" }),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    /** Preço em reais (vazio = sob consulta) */
+    price: doublePrecision("price"),
+    /** Preço promocional (opcional) */
+    promoPrice: doublePrecision("promo_price"),
+    code: varchar("code", { length: 60 }),
+    active: boolean("active").notNull().default(true),
+    sort: integer("sort").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("products_account_idx").on(table.accountId), index("products_category_idx").on(table.categoryId)]
+);
+
+/** Fotos do produto (a primeira é a principal) */
+export const productImages = pgTable(
+  "product_images",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    dataUrl: text("data_url").notNull(),
+    sort: integer("sort").notNull().default(0),
+  },
+  (table) => [index("product_images_product_idx").on(table.productId)]
+);
 
 // ============================================================================
 // AGENDA
@@ -608,6 +665,19 @@ export const accountsRelations = relations(accounts, ({ one, many }) => ({
   parent: one(accounts, { fields: [accounts.parentId], references: [accounts.id], relationName: "children" }),
   children: many(accounts, { relationName: "children" }),
   users: many(appUsers),
+}));
+
+export const productCategoriesRelations = relations(productCategories, ({ many }) => ({
+  products: many(products),
+}));
+
+export const productsRelations = relations(products, ({ one, many }) => ({
+  category: one(productCategories, { fields: [products.categoryId], references: [productCategories.id] }),
+  images: many(productImages),
+}));
+
+export const productImagesRelations = relations(productImages, ({ one }) => ({
+  product: one(products, { fields: [productImages.productId], references: [products.id] }),
 }));
 
 export const appointmentsRelations = relations(appointments, ({ one }) => ({

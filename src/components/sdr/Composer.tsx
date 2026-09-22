@@ -1,12 +1,24 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ImagePlus, Mic, Send, Trash2, Loader2, X } from "lucide-react";
+import { ImagePlus, Mic, Send, Trash2, Loader2, X, Package, Search } from "lucide-react";
 import type { QuickReply } from "@/lib/types/sdr";
 
 export type OutgoingPayload =
   | { text: string }
-  | { media: { kind: "image" | "audio"; dataUrl: string; fileName?: string }; caption?: string };
+  | { media: { kind: "image" | "audio"; dataUrl: string; fileName?: string }; caption?: string }
+  | { productId: string };
+
+interface PickerProduct {
+  id: string;
+  name: string;
+  price: number | null;
+  promoPrice: number | null;
+  active: boolean;
+  images: { id: string; url: string }[];
+}
+
+const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -65,6 +77,27 @@ export function Composer({
   const chunksRef = useRef<Blob[]>([]);
   const cancelRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [catalog, setCatalog] = useState<PickerProduct[] | null>(null);
+  const [catalogQuery, setCatalogQuery] = useState("");
+
+  const openPicker = async () => {
+    setPickerOpen((o) => !o);
+    if (catalog === null) {
+      const r = await fetch("/api/products", { cache: "no-store" });
+      const data = r.ok ? await r.json() : { products: [] };
+      setCatalog((data.products || []).filter((p: PickerProduct) => p.active));
+    }
+  };
+
+  const sendProduct = async (p: PickerProduct) => {
+    setPickerOpen(false);
+    await send({ productId: p.id });
+  };
+
+  const shownCatalog = (catalog || []).filter((p) =>
+    p.name.toLowerCase().includes(catalogQuery.trim().toLowerCase())
+  );
 
   useEffect(
     () => () => {
@@ -158,6 +191,58 @@ export function Composer({
           ))}
         </div>
       )}
+      {pickerOpen && (
+        <div className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-sm overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+          <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2">
+            <Search size={15} className="text-slate-400" />
+            <input
+              autoFocus
+              value={catalogQuery}
+              onChange={(e) => setCatalogQuery(e.target.value)}
+              placeholder="Buscar produto..."
+              className="flex-1 bg-transparent text-sm outline-none"
+            />
+            <button onClick={() => setPickerOpen(false)} className="rounded p-1 text-slate-400 hover:bg-slate-100" title="Fechar">
+              <X size={15} />
+            </button>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {catalog === null ? (
+              <p className="flex items-center gap-2 px-4 py-6 text-sm text-slate-500">
+                <Loader2 size={15} className="animate-spin" /> Carregando produtos...
+              </p>
+            ) : shownCatalog.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-slate-500">
+                {catalog.length === 0 ? "Nenhum produto cadastrado. Cadastre no menu Produtos." : "Nenhum produto encontrado."}
+              </p>
+            ) : (
+              shownCatalog.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => sendProduct(p)}
+                  className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-slate-50"
+                  title="Enviar foto, preço e descrição para o cliente"
+                >
+                  {p.images[0] ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={p.images[0].url} alt="" className="h-11 w-11 shrink-0 rounded-lg object-cover" />
+                  ) : (
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-400">
+                      <Package size={18} />
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-slate-800">{p.name}</span>
+                    <span className="block text-xs text-slate-500">
+                      {p.promoPrice != null ? brl(p.promoPrice) : p.price != null ? brl(p.price) : "Sob consulta"}
+                    </span>
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
       {micError && <p className="mb-2 text-sm text-red-600">{micError}</p>}
       {image && (
         <div className="mb-2 inline-flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
@@ -191,6 +276,14 @@ export function Composer({
             title="Enviar foto"
           >
             <ImagePlus size={20} />
+          </button>
+          <button
+            onClick={openPicker}
+            disabled={disabled || sending}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100 disabled:opacity-40"
+            title="Enviar produto do catálogo"
+          >
+            <Package size={20} />
           </button>
           <textarea
             rows={1}

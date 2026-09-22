@@ -42,6 +42,15 @@ export interface AgentInput {
     /** Agendamento futuro que este lead já tem (texto) */
     current: string | null;
   };
+  /** Catálogo de produtos que a IA pode consultar (código curto P1, P2...) */
+  catalog?: {
+    code: string;
+    name: string;
+    category: string | null;
+    price: string;
+    description: string | null;
+    hasPhoto: boolean;
+  }[];
 }
 
 export interface AgentDecision {
@@ -58,6 +67,8 @@ export interface AgentDecision {
   handoffReason: string | null;
   /** Horário combinado com o cliente (horário de Brasília) */
   appointment: { date: string; time: string; subject: string } | null;
+  /** Códigos do catálogo (P1, P2...) cujas fotos devem ser enviadas */
+  productCodes: string[];
 }
 
 export const TOOL_NAME = "registrar_atendimento";
@@ -124,6 +135,13 @@ const TOOL = {
         },
         required: ["data", "hora", "assunto"],
       },
+      enviar_fotos: {
+        type: "array",
+        items: { type: "string" },
+        maxItems: 3,
+        description:
+          "Códigos do CATÁLOGO (ex.: P3) cujas fotos devem ser enviadas junto com a resposta, quando o cliente pedir para ver ou quando ajudar a vender. Máximo 3. Omita se não houver catálogo ou não for o caso.",
+      },
     },
     required: ["resposta", "tipo_compra", "estagio", "pontuacao", "resumo", "transferir"],
   },
@@ -156,9 +174,9 @@ REGRAS DE FORMATO
 - Responda SEMPRE chamando a ferramenta ${TOOL_NAME}.
 - "resposta" é enviada como está no WhatsApp: português do Brasil, sem markdown (#, **, listas longas), no máximo um emoji.
 - Não repita perguntas que o cliente já respondeu. Faça no máximo uma pergunta por vez.
-- Nunca invente preço, estoque, prazo ou condição que não esteja nas instruções acima.
+- Nunca invente preço, estoque, prazo ou condição que não esteja nas instruções ou no catálogo.
 - Se o cliente mandar áudio ou imagem que você não consegue ver, peça gentilmente para escrever.
-- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${schedulingBlock(input)}`;
+- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${schedulingBlock(input)}${catalogBlock(input)}`;
 }
 
 function schedulingBlock(input: AgentInput) {
@@ -174,6 +192,28 @@ AGENDA
 - Horários já ocupados: ${sc.busy.length ? sc.busy.join(", ") : "nenhum"}.
 - ${sc.current ? `Este cliente já tem agendado: ${sc.current}. Se ele quiser remarcar, preencha "agendamento" com o novo horário.` : "Este cliente ainda não tem nada agendado."}
 - Ao confirmar, repita dia e hora na resposta (ex.: "Combinado, quinta 25/09 às 14h!").`;
+}
+
+function catalogBlock(input: AgentInput) {
+  const items = input.catalog || [];
+  if (!items.length) return "";
+  const lines = items.map((p) => {
+    const parts = [`${p.code} | ${p.name}`];
+    if (p.category) parts.push(`categoria: ${p.category}`);
+    parts.push(`preço: ${p.price}`);
+    if (p.description) parts.push(`detalhes: ${p.description}`);
+    if (!p.hasPhoto) parts.push("(sem foto)");
+    return `- ${parts.join(" | ")}`;
+  });
+  return `
+
+CATÁLOGO DE PRODUTOS (use SOMENTE estes dados para preço e informações)
+${lines.join("\n")}
+- Quando o cliente perguntar por um produto, preço ou detalhes, responda com base no catálogo acima. Os preços do catálogo PODEM ser informados ao cliente.
+- Se o produto tiver "de X por Y", informe a promoção.
+- Para mostrar fotos, coloque o código (ex.: P3) em "enviar_fotos" — as fotos vão logo depois da sua resposta; não escreva links.
+- Se o cliente pedir algo que não está no catálogo, diga que vai verificar com um consultor. Nunca invente produto ou preço.
+- Não mostre os códigos (P1, P2...) ao cliente.`;
 }
 
 /** Converte o histórico para o formato de mensagens da API (alternando user/assistant) */
@@ -230,6 +270,9 @@ export function parseDecision(raw: Record<string, unknown>, allowedTags: string[
     handoff: raw.transferir === true,
     handoffReason: clean(raw.motivo_transferencia, 500),
     appointment: parseAppointment(raw.agendamento),
+    productCodes: Array.isArray(raw.enviar_fotos)
+      ? [...new Set(raw.enviar_fotos.map((c) => String(c).trim().toUpperCase()).filter((c) => /^P\d{1,4}$/.test(c)))].slice(0, 3)
+      : [],
   };
 }
 

@@ -36,6 +36,13 @@ async function ensure(accountId: string, company: string) {
       })
       .onConflictDoNothing();
     s = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
+  } else if (!s.systemPrompt && s.handoffMessage === null && s.reminderMessage === null) {
+    // Registro criado por outra tela (ex.: Produtos) antes de abrir as configurações: completa os textos padrão
+    [s] = await db
+      .update(aiSettings)
+      .set({ systemPrompt: defaultPrompt(company), handoffMessage: DEFAULT_HANDOFF, reminderMessage: DEFAULT_REMINDER })
+      .where(eq(aiSettings.id, accountId))
+      .returning();
   }
   return s!;
 }

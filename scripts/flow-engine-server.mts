@@ -38,10 +38,14 @@ import {
   tags,
   leadTags,
   appointments,
+  products,
+  productCategories,
+  productImages,
 } from "../src/db/schema";
-import { eq, and, desc, gte, lt, isNull, sql } from "drizzle-orm";
+import { eq, and, desc, gte, lt, isNull, sql, inArray } from "drizzle-orm";
 import { runSdrAgent, pickSeller, type AgentDecision } from "../src/lib/ai/sdrAgent";
 import { resolveAiKey } from "../src/lib/tenancy/aiKey";
+import { priceLabel } from "../src/lib/products/format";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
 import { spawn } from "node:child_process";
@@ -238,7 +242,7 @@ async function startSession(accountId: string) {
   if (SELFTEST) {
     s.sock = {
       sendMessage: async (jid: string, content: any) => {
-        console.log(`[SELFTEST ${accountId.slice(0, 8)}] -> ${jid}: ${content?.text}`);
+        console.log(`[SELFTEST ${accountId.slice(0, 8)}] -> ${jid}: ${content?.text ?? (content?.image ? `[foto ${content.image.length}b] ${content.caption || ""}` : "[mídia]")}`);
         return { key: { id: "TEST" + Math.random().toString(36).slice(2) } };
       },
       end: () => {},
@@ -816,6 +820,9 @@ async function runAi(accountId: string, conversationId: string) {
     orderBy: (a, { asc }) => asc(a.startsAt),
   });
 
+  // Catálogo: produtos ativos da conta (códigos curtos P1, P2... para a IA)
+  const catalog = settings.catalogEnabled ? await loadCatalog(accountId) : [];
+
   const decision = await runSdrAgent(
     {
       systemPrompt: settings.systemPrompt || "Você é a atendente virtual da empresa.",
@@ -839,6 +846,7 @@ async function runAi(accountId: string, conversationId: string) {
           ? `${currentAppt.title} em ${formatSpDate(currentAppt.startsAt)} às ${formatSpTime(currentAppt.startsAt)}`
           : null,
       },
+      catalog: catalog.map((c) => c.ai),
     },
     { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL }
   );
@@ -871,6 +879,15 @@ async function runAi(accountId: string, conversationId: string) {
     await sendText(accountId, conversation.phoneJid, parts[i], "AI");
   }
 
+  // Fotos dos produtos que a IA escolheu mostrar
+  for (const code of decision.productCodes) {
+    const item = catalog.find((c) => c.ai.code === code);
+    if (!item) continue;
+    await pause(900);
+    const r = await sendProductPhoto(accountId, conversation.phoneJid, item.id, "AI", null);
+    if ("error" in r) console.warn(`[IA ${accountId.slice(0, 8)}] foto do produto ${code}: ${r.error}`);
+  }
+
   if (decision.handoff) {
     await handoffToSeller(accountId, lead.id, conversation.phoneJid, conversation.leadName, decision, settings, rules);
   }
@@ -878,6 +895,71 @@ async function runAi(accountId: string, conversationId: string) {
     `[IA ${accountId.slice(0, 8)}] ${conversation.phoneJid} — nota ${decision.score}` +
       `${decision.appointment ? " — agendou" : ""}${decision.handoff ? " — transferido" : ""}`
   );
+}
+
+const CATALOG_LIMIT = 80;
+
+async function loadCatalog(accountId: string) {
+  const rows = await db
+    .select({
+      id: products.id,
+      name: products.name,
+      description: products.description,
+      price: products.price,
+      promoPrice: products.promoPrice,
+      category: productCategories.name,
+    })
+    .from(products)
+    .leftJoin(productCategories, eq(productCategories.id, products.categoryId))
+    .where(and(eq(products.accountId, accountId), eq(products.active, true)))
+    .orderBy(products.sort, products.name)
+    .limit(CATALOG_LIMIT);
+  if (!rows.length) return [];
+  const withPhoto = new Set(
+    (
+      await db
+        .select({ productId: productImages.productId })
+        .from(productImages)
+        .where(inArray(productImages.productId, rows.map((r) => r.id)))
+    ).map((r) => r.productId)
+  );
+  return rows.map((r, i) => ({
+    id: r.id,
+    ai: {
+      code: `P${i + 1}`,
+      name: r.name,
+      category: r.category,
+      price: priceLabel(r),
+      description: r.description ? r.description.replace(/\s+/g, " ").slice(0, 400) : null,
+      hasPhoto: withPhoto.has(r.id),
+    },
+  }));
+}
+
+/** Envia a primeira foto do produto com legenda "Nome — preço" (+ descrição curta) */
+async function sendProductPhoto(
+  accountId: string,
+  phoneJid: string,
+  productId: string,
+  sender: Sender,
+  authorName: string | null,
+  withDescription = false
+) {
+  const product = await db.query.products.findFirst({
+    where: and(eq(products.id, productId), eq(products.accountId, accountId)),
+  });
+  if (!product) return { error: "Produto não encontrado" };
+  const img = await db.query.productImages.findFirst({
+    where: eq(productImages.productId, productId),
+    orderBy: (t, { asc }) => asc(t.sort),
+  });
+  const lines = [`*${product.name}*`, priceLabel(product)];
+  if (withDescription && product.description?.trim()) lines.push("", product.description.trim().slice(0, 700));
+  const caption = lines.join("\n");
+  if (!img) return sendText(accountId, phoneJid, caption, sender, authorName);
+  const m = /^data:([^;]+);base64,(.*)$/s.exec(img.dataUrl);
+  if (!m) return { error: "Foto inválida" };
+  return sendMedia(accountId, phoneJid, { kind: "image", base64: m[2], mimetype: m[1], caption }, sender, authorName);
 }
 
 async function applyDecision(
@@ -1182,6 +1264,11 @@ function startApiServer() {
             return json(res, 400, { error: "Mídia inválida" });
           }
           const r = await sendMedia(acc.id, body.phoneJid, media, "HUMAN", body.authorName || null);
+          return json(res, "error" in r ? 502 : 200, r);
+        }
+        if (url.pathname === "/send-product") {
+          if (!body.phoneJid || !body.productId) return json(res, 400, { error: "Produto inválido" });
+          const r = await sendProductPhoto(acc.id, body.phoneJid, String(body.productId), "HUMAN", body.authorName || null, true);
           return json(res, "error" in r ? 502 : 200, r);
         }
         return json(res, 404, { error: "not found" });
