@@ -549,6 +549,13 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_at timestamptz;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_ended_at timestamptz;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_last_id uuid;
 
+-- Estilo e ritmo da IA
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS style varchar(20) NOT NULL DEFAULT 'FRIENDLY';
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS style_custom text;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS reply_length varchar(10) NOT NULL DEFAULT 'MEDIUM';
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS emoji_level varchar(10) NOT NULL DEFAULT 'LOW';
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS reply_speed varchar(10) NOT NULL DEFAULT 'NATURAL';
+
 -- Recontato automático
 CREATE TABLE IF NOT EXISTS followup_settings (
   id varchar(64) PRIMARY KEY,

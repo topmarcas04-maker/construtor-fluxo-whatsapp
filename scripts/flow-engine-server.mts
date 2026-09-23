@@ -91,6 +91,8 @@ import {
 import { followupCandidates, ensureDisqualifiedColumn, type FollowupCandidate } from "../src/lib/followup/shared";
 import { withDefaults, fillName, type FollowupSettings } from "../src/lib/followup/common";
 import { generateFollowup } from "../src/lib/ai/followup";
+import { replyDelayMs, typingMs } from "../src/lib/ai/style";
+import { loadCatalogFor } from "../src/lib/ai/catalog";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
 import { spawn } from "node:child_process";
@@ -292,6 +294,9 @@ async function startSession(accountId: string) {
       sendMessage: async (jid: string, content: any) => {
         console.log(`[SELFTEST ${accountId.slice(0, 8)}] -> ${jid}: ${content?.text ?? (content?.image ? `[foto ${content.image.length}b] ${content.caption || ""}` : "[mídia]")}`);
         return { key: { id: "TEST" + Math.random().toString(36).slice(2) } };
+      },
+      sendPresenceUpdate: async (kind: string, jid: string) => {
+        console.log(`[SELFTEST ${accountId.slice(0, 8)}] presença ${kind} -> ${jid}`);
       },
       end: () => {},
       logout: async () => {},
@@ -1198,6 +1203,7 @@ async function runAi(accountId: string, conversationId: string, force = false) {
   const decision = await runSdrAgent(
     {
       systemPrompt: settings.systemPrompt || "Você é a atendente virtual da empresa.",
+      style: { style: settings.style, styleCustom: settings.styleCustom, replyLength: settings.replyLength, emojiLevel: settings.emojiLevel },
       lead: {
         name: lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conversation.leadName,
         city: lead.city,
@@ -1276,6 +1282,24 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     .slice(0, 3);
   // Cliente mandou áudio e a conta responde por voz: a resposta vai em áudio
   const lastIn = history[history.length - 1];
+
+  // Ritmo humano: espera um pouco mostrando "digitando..." (ou "gravando áudio...")
+  const willSpeak = lastIn.messageType === "audio" && settings.voiceReplies && settings.voiceId;
+  const wait = parts.length ? replyDelayMs(settings.replySpeed, Date.now() - new Date(lastIn.sentAt).getTime()) : 0;
+  if (wait > 0) {
+    await typingFor(accountId, conversation.phoneJid, wait, willSpeak ? "recording" : "composing");
+    // O cliente mandou mais alguma coisa enquanto isso? Responde tudo junto na próxima rodada
+    const newer = await db.query.messages.findFirst({
+      where: eq(messages.conversationId, conversationId),
+      orderBy: [desc(messages.sentAt)],
+    });
+    const still = await db.query.leads.findFirst({ where: eq(leads.id, lead.id) });
+    if (!still || still.aiPaused || still.sellerId) return;
+    if (newer && newer.direction === "IN" && newer.id !== lastIn.id) {
+      scheduleAi(accountId, conversationId);
+      return;
+    }
+  }
   const spoke =
     parts.length > 0 &&
     lastIn.messageType === "audio" &&
@@ -1284,7 +1308,7 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     (await sendVoiceReply(accountId, conversation.phoneJid, parts.join("\n"), settings.voiceId));
   if (!spoke) {
     for (let i = 0; i < parts.length; i++) {
-      if (i > 0) await pause(1200);
+      if (i > 0) await typingFor(accountId, conversation.phoneJid, typingMs(settings.replySpeed, parts[i]), "composing");
       await sendText(accountId, conversation.phoneJid, parts[i], "AI");
     }
   }
@@ -1307,6 +1331,21 @@ async function runAi(accountId: string, conversationId: string, force = false) {
   );
 }
 
+/** Mostra "digitando..." (ou "gravando áudio...") no WhatsApp do cliente enquanto espera */
+async function typingFor(accountId: string, jid: string, ms: number, kind: "composing" | "recording") {
+  const sock = metaChannelOf(jid) ? null : sessions.get(accountId)?.sock;
+  const end = Date.now() + ms;
+  try {
+    while (Date.now() < end) {
+      if (sock) await Promise.resolve().then(() => sock.sendPresenceUpdate(kind, jid)).catch(() => {});
+      await pause(Math.min(8000, end - Date.now()));
+    }
+    if (sock) await Promise.resolve().then(() => sock.sendPresenceUpdate("paused", jid)).catch(() => {});
+  } catch {
+    /* presença é só cosmética */
+  }
+}
+
 /** Gera a resposta em voz (ElevenLabs) e envia como áudio do WhatsApp. false = mandar em texto. */
 async function sendVoiceReply(accountId: string, phoneJid: string, text: string, voiceId: string) {
   try {
@@ -1326,19 +1365,6 @@ async function sendVoiceReply(accountId: string, phoneJid: string, text: string,
     console.warn(`[Voz ${accountId.slice(0, 8)}] respondendo em texto:`, (err as Error)?.message || err);
     return false;
   }
-}
-
-/** Ações do produto (as dele; senão as da categoria), com a principal primeiro */
-function productActionNames(
-  r: { actionIds: string[]; primaryActionId: string | null; catActionIds: string[] | null; catPrimaryActionId: string | null },
-  actions: AiAction[]
-) {
-  const own = (r.actionIds || []).length > 0;
-  const ids = own ? r.actionIds : r.catActionIds || [];
-  const primary = own ? r.primaryActionId : r.catPrimaryActionId;
-  const list = ids.map((id) => actions.find((a) => a.id === id)).filter((a): a is AiAction => Boolean(a));
-  list.sort((a, b) => (a.id === primary ? -1 : b.id === primary ? 1 : 0));
-  return list.map((a) => a.name);
 }
 
 /** Registra no card a ação feita pela IA (e move para a coluna da ação, se tiver) */
@@ -1363,77 +1389,7 @@ async function recordAction(
   await db.update(leads).set(set).where(eq(leads.id, leadId));
 }
 
-const CATALOG_LIMIT = 80;
-
-async function loadCatalog(accountId: string, actions: AiAction[] = []) {
-  const rows = await db
-    .select({
-      id: products.id,
-      name: products.name,
-      description: products.description,
-      price: products.price,
-      promoPrice: products.promoPrice,
-      availability: products.availability,
-      leadTimeDays: products.leadTimeDays,
-      installments: products.installments,
-      kind: products.kind,
-      billingPeriod: products.billingPeriod,
-      setupFee: products.setupFee,
-      commitmentMonths: products.commitmentMonths,
-      trialDays: products.trialDays,
-      durationMinutes: products.durationMinutes,
-      actionIds: products.actionIds,
-      primaryActionId: products.primaryActionId,
-      catActionIds: productCategories.actionIds,
-      catFunnelId: productCategories.funnelId,
-      catPrimaryActionId: productCategories.primaryActionId,
-      category: productCategories.name,
-    })
-    .from(products)
-    .leftJoin(productCategories, eq(productCategories.id, products.categoryId))
-    .where(and(eq(products.accountId, accountId), eq(products.active, true)))
-    .orderBy(products.sort, products.name)
-    .limit(CATALOG_LIMIT);
-  if (!rows.length) return [];
-  const photos = await db
-    .select({
-      productId: productImages.productId,
-      label: productImages.label,
-      active: productImages.active,
-      availability: productImages.availability,
-      leadTimeDays: productImages.leadTimeDays,
-    })
-    .from(productImages)
-    .where(inArray(productImages.productId, rows.map((r) => r.id)))
-    .orderBy(productImages.sort);
-  // Cores desligadas não entram para a IA
-  const activePhotos = photos.filter((ph) => ph.active !== false);
-  const withPhoto = new Set(activePhotos.map((r) => r.productId));
-  return rows.map((r, i) => ({
-    id: r.id,
-    funnelId: r.catFunnelId,
-    ai: {
-      code: `P${i + 1}`,
-      name: r.name,
-      category: r.category,
-      price: kindPriceLabel(r),
-      kind: KIND_LABEL[r.kind] || "Produto",
-      actions: productActionNames(r, actions),
-      details: kindDetails(r),
-      description: r.description ? r.description.replace(/\s+/g, " ").slice(0, 400) : null,
-      hasPhoto: withPhoto.has(r.id),
-      photoLabels: activePhotos.filter((ph) => ph.productId === r.id && ph.label?.trim()).map((ph) => ph.label!.trim()),
-      delivery: r.kind === "PHYSICAL" ? availabilityText(effectiveAvailability(r)) : undefined,
-      installments: r.kind === "PHYSICAL" ? installmentRows(r).map(installmentText) : [],
-      colors: activePhotos
-        .filter((ph) => ph.productId === r.id && ph.label?.trim())
-        .map((ph) => ({
-          name: ph.label!.trim(),
-          delivery: r.kind === "PHYSICAL" ? availabilityText(effectiveAvailability(r, ph)) : "",
-        })),
-    },
-  }));
-}
+const loadCatalog = (accountId: string, actions: AiAction[] = []) => loadCatalogFor(db, accountId, actions);
 
 /** Envia a primeira foto do produto com legenda "Nome — preço" (+ descrição curta) */
 async function sendProductPhoto(

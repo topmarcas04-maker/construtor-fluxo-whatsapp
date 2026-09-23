@@ -10,6 +10,8 @@
  * Não use imports com "@/": este arquivo é importado pelo motor via caminho relativo.
  */
 
+import { styleBlock, type StyleSettings } from "./style";
+
 export interface AgentHistoryMessage {
   direction: "IN" | "OUT";
   body: string;
@@ -28,6 +30,8 @@ export interface AgentLeadContext {
 
 export interface AgentInput {
   systemPrompt: string;
+  /** Estilo de conversa (tom, tamanho, emojis) */
+  style?: StyleSettings;
   lead: AgentLeadContext;
   history: AgentHistoryMessage[];
   tags: string[];
@@ -216,11 +220,11 @@ INFORMAÇÕES INTERNAS (nunca mostre ao cliente)
 
 REGRAS DE FORMATO
 - Responda SEMPRE chamando a ferramenta ${TOOL_NAME}.
-- "resposta" é enviada como está no ${channelName(input.channel)}: português do Brasil, sem markdown (#, **, listas longas), no máximo um emoji.
+- "resposta" é enviada como está no ${channelName(input.channel)}: português do Brasil, sem markdown (#, **, listas longas).
 - Não repita perguntas que o cliente já respondeu. Faça no máximo uma pergunta por vez.
 - Nunca invente preço, estoque, prazo ou condição que não esteja nas instruções ou no catálogo.
 - Se o cliente mandar áudio ou imagem que você não consegue ver, peça gentilmente para escrever.
-- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
+- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${styleBlock(input.style || {})}${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
 }
 
 function channelName(channel?: string) {

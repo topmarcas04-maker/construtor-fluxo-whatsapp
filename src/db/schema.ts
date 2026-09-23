@@ -444,6 +444,14 @@ export const aiSettings = pgTable("ai_settings", {
   /** Voz da ElevenLabs usada nas respostas */
   voiceId: varchar("voice_id", { length: 80 }),
   voiceName: varchar("voice_name", { length: 120 }),
+  /** Estilo de conversa (ver lib/ai/style.ts) e texto do estilo personalizado */
+  style: varchar("style", { length: 20 }).notNull().default("FRIENDLY"),
+  styleCustom: text("style_custom"),
+  /** Tamanho das respostas (SHORT | MEDIUM | LONG) e emojis (NONE | LOW | MANY) */
+  replyLength: varchar("reply_length", { length: 10 }).notNull().default("MEDIUM"),
+  emojiLevel: varchar("emoji_level", { length: 10 }).notNull().default("LOW"),
+  /** Ritmo da resposta (FAST | NATURAL | CALM) — espera mostrando "digitando..." */
+  replySpeed: varchar("reply_speed", { length: 10 }).notNull().default("NATURAL"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

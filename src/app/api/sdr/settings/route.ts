@@ -1,4 +1,5 @@
 export const dynamic = "force-dynamic";
+import { STYLE_PRESETS, LENGTH_OPTIONS, EMOJI_OPTIONS, SPEED_OPTIONS } from "@/lib/ai/style";
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
@@ -153,6 +154,12 @@ export async function PUT(req: NextRequest) {
   if (typeof body.reminderMessage === "string") set.reminderMessage = body.reminderMessage;
   if (typeof body.businessHours === "string") set.businessHours = body.businessHours;
   if (typeof body.signMessages === "boolean") set.signMessages = body.signMessages;
+  // Estilo e ritmo
+  if (STYLE_PRESETS.some((p) => p.key === body.style)) set.style = body.style;
+  if (body.styleCustom !== undefined) set.styleCustom = String(body.styleCustom || "").slice(0, 3000) || null;
+  if (LENGTH_OPTIONS.some((o) => o.key === body.replyLength)) set.replyLength = body.replyLength;
+  if (EMOJI_OPTIONS.some((o) => o.key === body.emojiLevel)) set.emojiLevel = body.emojiLevel;
+  if (SPEED_OPTIONS.some((o) => o.key === body.replySpeed)) set.replySpeed = body.replySpeed;
   if (body.alertPhone !== undefined) set.alertPhone = String(body.alertPhone || "").replace(/\D/g, "").slice(0, 20) || null;
   if (body.reminderMinutesBefore !== undefined) {
     set.reminderMinutesBefore = Math.max(0, Math.min(1440, Number(body.reminderMinutesBefore) || 0));

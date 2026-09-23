@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Bot, Trash2, Plus, Check, Pencil, KeyRound, CalendarDays, AudioLines, Play, Loader2 } from "lucide-react";
 import { ActionsTab } from "@/components/settings/ActionsTab";
 import { FollowupTab } from "@/components/settings/FollowupTab";
+import { StyleCard, AiTester } from "@/components/settings/AiStyle";
 import { REMINDER_OPTIONS } from "@/components/agenda/types";
 import type { QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import { TAG_COLOR_CLASSES, TAG_DOT_CLASSES, SALE_TYPE_LABEL } from "@/lib/types/sdr";
@@ -59,6 +60,11 @@ interface AiSettings {
   voiceReplies: boolean;
   voiceId: string | null;
   voiceName: string | null;
+  style: string;
+  styleCustom: string | null;
+  replyLength: string;
+  emojiLevel: string;
+  replySpeed: string;
   voice: {
     openai: VoiceKeyInfo;
     eleven: VoiceKeyInfo;
@@ -511,12 +517,22 @@ function AiTab() {
         </Field>
       </div>
 
+      <StyleCard
+        v={{ style: s.style, styleCustom: s.styleCustom, replyLength: s.replyLength, emojiLevel: s.emojiLevel, replySpeed: s.replySpeed }}
+        onChange={(patch) => setS({ ...s, ...patch })}
+      />
+
       <Field
         label="Como a IA deve atender (instruções)"
         hint="Explique como a empresa funciona, o jeito de falar, o que perguntar e quando passar para um vendedor. Preços e condições que a IA pode informar também entram aqui."
       >
         <Textarea rows={12} value={s.systemPrompt} onChange={(e) => setS({ ...s, systemPrompt: e.target.value })} />
       </Field>
+
+      <AiTester
+        draft={{ systemPrompt: s.systemPrompt, style: s.style, styleCustom: s.styleCustom, replyLength: s.replyLength, emojiLevel: s.emojiLevel }}
+        disabled={noAi ? "Esta conta está sem IA" : !s.integration.ready ? "Configure a chave da IA para testar" : null}
+      />
 
       <Field label="Mensagem ao transferir para o vendedor" hint="Use {vendedor} para o nome do vendedor. Deixe vazio para não enviar nada.">
         <Textarea rows={2} value={s.handoffMessage} onChange={(e) => setS({ ...s, handoffMessage: e.target.value })} />
