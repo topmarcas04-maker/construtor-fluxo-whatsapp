@@ -441,6 +441,35 @@ ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS voice_id varchar(80);
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS voice_name varchar(120);
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript text;
 
+-- Instagram e Facebook (Meta)
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS channel varchar(20) NOT NULL DEFAULT 'WHATSAPP';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS handle varchar(120);
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS meta_page_id varchar(40);
+CREATE TABLE IF NOT EXISTS meta_connections (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  page_id varchar(40) NOT NULL,
+  page_name varchar(200),
+  page_token_enc text NOT NULL,
+  ig_user_id varchar(40),
+  ig_username varchar(120),
+  messenger_enabled boolean NOT NULL DEFAULT true,
+  instagram_enabled boolean NOT NULL DEFAULT true,
+  status varchar(20) NOT NULL DEFAULT 'connected',
+  last_error text,
+  last_event_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS meta_connections_page_idx ON meta_connections (page_id);
+CREATE INDEX IF NOT EXISTS meta_connections_account_idx ON meta_connections (account_id);
+CREATE INDEX IF NOT EXISTS meta_connections_ig_idx ON meta_connections (ig_user_id);
+CREATE TABLE IF NOT EXISTS meta_pending (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  payload_enc text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- Migrações que rodam uma única vez
 CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());
 DO $$ BEGIN

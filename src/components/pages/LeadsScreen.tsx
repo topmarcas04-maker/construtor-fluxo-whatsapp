@@ -64,7 +64,7 @@ export function LeadsScreen() {
     const q = search.trim().toLowerCase();
     if (!q) return leads;
     return leads.filter((l) =>
-      [leadDisplayName(l), l.phone, l.city, l.interest, l.seller?.name, l.conversation.phoneJid]
+      [leadDisplayName(l), l.phone, l.city, l.interest, l.seller?.name, l.conversation.phoneJid, l.conversation.handle]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(q))
     );

@@ -12,6 +12,7 @@ import {
   Handshake,
   ShieldCheck,
   Palette,
+  AtSign,
   PanelLeftClose,
   PanelLeftOpen,
   X,
@@ -23,6 +24,7 @@ import type { PlatformBranding } from "@/lib/platform/settings";
 const ICONS: Record<ModuleKey, LucideIcon> = {
   "visao-geral": LayoutDashboard,
   whatsapp: MessageCircle,
+  "redes-sociais": AtSign,
   leads: Users,
   agenda: CalendarDays,
   produtos: Package,

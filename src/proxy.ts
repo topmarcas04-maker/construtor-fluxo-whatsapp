@@ -2,7 +2,15 @@ import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE, readSessionToken } from "@/lib/auth/session";
 
 /** Rotas acessíveis sem login */
-const PUBLIC_PREFIXES = ["/login", "/api/auth/", "/api/platform/public"];
+const PUBLIC_PREFIXES = [
+  "/login",
+  "/api/auth/",
+  "/api/platform/public",
+  // Meta (Instagram/Facebook) avisa as mensagens aqui — protegido pela assinatura da Meta
+  "/api/meta/webhook",
+  // Arquivos que a Meta baixa para enviar ao cliente — protegidos por link assinado
+  "/api/public/file/",
+];
 
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;

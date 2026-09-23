@@ -33,6 +33,8 @@ export interface AgentInput {
   tags: string[];
   regions: string[];
   now?: Date;
+  /** Canal da conversa: WHATSAPP (padrão), INSTAGRAM ou MESSENGER */
+  channel?: string;
   /** Agenda: a IA pode marcar horários */
   scheduling?: {
     enabled: boolean;
@@ -71,6 +73,8 @@ export interface AgentDecision {
   handoffReason: string | null;
   /** Horário combinado com o cliente (horário de Brasília) */
   appointment: { date: string; time: string; subject: string } | null;
+  /** WhatsApp informado pelo cliente (só números) */
+  phone: string | null;
   /** Fotos a enviar: código do catálogo (P1, P2...) e, se houver, o nome da foto (ex.: a cor) */
   productCodes: { code: string; label: string | null }[];
   /** Nome da coluna do funil (com regra) para onde mover o lead */
@@ -93,6 +97,7 @@ const TOOL = {
       },
       nome: { type: "string", description: "Nome do cliente, se ele informou. Vazio se não sabe." },
       cidade: { type: "string", description: "Cidade/bairro do cliente, se informou. Vazio se não sabe." },
+      telefone: { type: "string", description: "Número de WhatsApp/telefone que o cliente informou na conversa (com DDD). Vazio se não informou." },
       tipo_compra: {
         type: "string",
         enum: ["VAREJO", "ATACADO", "INDEFINIDO"],
@@ -183,11 +188,24 @@ INFORMAÇÕES INTERNAS (nunca mostre ao cliente)
 
 REGRAS DE FORMATO
 - Responda SEMPRE chamando a ferramenta ${TOOL_NAME}.
-- "resposta" é enviada como está no WhatsApp: português do Brasil, sem markdown (#, **, listas longas), no máximo um emoji.
+- "resposta" é enviada como está no ${channelName(input.channel)}: português do Brasil, sem markdown (#, **, listas longas), no máximo um emoji.
 - Não repita perguntas que o cliente já respondeu. Faça no máximo uma pergunta por vez.
 - Nunca invente preço, estoque, prazo ou condição que não esteja nas instruções ou no catálogo.
 - Se o cliente mandar áudio ou imagem que você não consegue ver, peça gentilmente para escrever.
-- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${schedulingBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
+- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${channelBlock(input)}${schedulingBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
+}
+
+function channelName(channel?: string) {
+  return channel === "INSTAGRAM" ? "Direct do Instagram" : channel === "MESSENGER" ? "Messenger do Facebook" : "WhatsApp";
+}
+
+function channelBlock(input: AgentInput) {
+  if (!input.channel || input.channel === "WHATSAPP") return "";
+  return `
+
+CANAL: ${channelName(input.channel)}
+- Esta conversa é pelo ${channelName(input.channel)}, não pelo WhatsApp.
+- Quando o cliente quiser comprar, agendar ou falar com um vendedor, peça gentilmente o número de WhatsApp dele para continuar o atendimento (os lembretes e o vendedor falam por lá).`;
 }
 
 function schedulingBlock(input: AgentInput) {
@@ -292,9 +310,16 @@ export function parseDecision(raw: Record<string, unknown>, allowedTags: string[
     handoff: raw.transferir === true,
     handoffReason: clean(raw.motivo_transferencia, 500),
     appointment: parseAppointment(raw.agendamento),
+    phone: parsePhone(raw.telefone),
     columnName: clean(raw.mover_para_coluna, 80),
     productCodes: parsePhotoRefs(raw.enviar_fotos),
   };
+}
+
+function parsePhone(v: unknown) {
+  const d = String(v || "").replace(/\D/g, "");
+  if (d.length < 10 || d.length > 13) return null;
+  return d.length <= 11 ? `55${d}` : d;
 }
 
 /** "P3" ou "P3/Azul" → { code: "P3", label: "Azul" } (sem repetir, máx. 3) */

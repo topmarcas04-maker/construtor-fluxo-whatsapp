@@ -42,6 +42,10 @@ export interface Lead {
   note: string | null;
   conversation: {
     phoneJid: string;
+    /** WHATSAPP | INSTAGRAM | MESSENGER */
+    channel?: string;
+    /** @usuario do Instagram */
+    handle?: string | null;
     leadName: string | null;
     lastMessageAt: string | null;
   };
@@ -100,6 +104,28 @@ export function formatPhone(raw: string | null | undefined) {
   if (d.length === 13) return `(${d.slice(2, 4)}) ${d.slice(4, 9)}-${d.slice(9)}`;
   if (d.length === 12) return `(${d.slice(2, 4)}) ${d.slice(4, 8)}-${d.slice(8)}`;
   return d || "Sem número";
+}
+
+export const CHANNEL_LABEL: Record<string, string> = {
+  WHATSAPP: "WhatsApp",
+  INSTAGRAM: "Instagram",
+  MESSENGER: "Facebook",
+};
+
+/** Classes do selo do canal */
+export const CHANNEL_BADGE: Record<string, string> = {
+  WHATSAPP: "bg-emerald-50 text-emerald-700",
+  INSTAGRAM: "bg-pink-50 text-pink-700",
+  MESSENGER: "bg-blue-50 text-blue-700",
+};
+
+/** Linha de contato: telefone (WhatsApp), @usuario (Instagram) ou "Facebook Messenger" */
+export function contactLine(lead: Pick<Lead, "phone" | "conversation">) {
+  const ch = lead.conversation.channel || "WHATSAPP";
+  if (lead.phone) return formatPhone(lead.phone) + (ch !== "WHATSAPP" ? ` · ${CHANNEL_LABEL[ch]}` : "");
+  if (ch === "INSTAGRAM") return lead.conversation.handle ? `@${lead.conversation.handle} · Instagram` : "Instagram";
+  if (ch === "MESSENGER") return "Facebook Messenger";
+  return lead.conversation.phoneJid.split("@")[0];
 }
 
 export function timeLabel(iso: string | null) {

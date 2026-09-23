@@ -237,6 +237,12 @@ export const conversations = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
     phoneJid: varchar("phone_jid", { length: 60 }).notNull(),
+    /** WHATSAPP | INSTAGRAM | MESSENGER — no Instagram/Facebook o phoneJid é "ig:<id>" / "fb:<id>" */
+    channel: varchar("channel", { length: 20 }).notNull().default("WHATSAPP"),
+    /** @usuario do Instagram (quando houver) */
+    handle: varchar("handle", { length: 120 }),
+    /** Página do Facebook por onde a conversa chegou (Instagram/Messenger) */
+    metaPageId: varchar("meta_page_id", { length: 40 }),
     leadName: varchar("lead_name", { length: 200 }),
     profilePicUrl: text("profile_pic_url"),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
@@ -475,6 +481,51 @@ export const platformSettings = pgTable("platform_settings", {
   topText: varchar("top_text", { length: 20 }).notNull().default("#0f172a"),
   accent: varchar("accent", { length: 20 }).notNull().default("#155e75"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ============================================================================
+// INSTAGRAM E FACEBOOK (META)
+// ============================================================================
+
+/** Página do Facebook (e o Instagram ligado a ela) conectada a uma conta */
+export const metaConnections = pgTable(
+  "meta_connections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    pageId: varchar("page_id", { length: 40 }).notNull(),
+    pageName: varchar("page_name", { length: 200 }),
+    /** Token da página (criptografado) */
+    pageTokenEnc: text("page_token_enc").notNull(),
+    igUserId: varchar("ig_user_id", { length: 40 }),
+    igUsername: varchar("ig_username", { length: 120 }),
+    /** Responder mensagens do Messenger (Facebook) */
+    messengerEnabled: boolean("messenger_enabled").notNull().default(true),
+    /** Responder mensagens do Direct do Instagram */
+    instagramEnabled: boolean("instagram_enabled").notNull().default(true),
+    status: varchar("status", { length: 20 }).notNull().default("connected"),
+    lastError: text("last_error"),
+    lastEventAt: timestamp("last_event_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("meta_connections_page_idx").on(table.pageId),
+    index("meta_connections_account_idx").on(table.accountId),
+    index("meta_connections_ig_idx").on(table.igUserId),
+  ]
+);
+
+/** Páginas encontradas no login do Facebook, aguardando a escolha (expira em 1 hora) */
+export const metaPending = pgTable("meta_pending", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  accountId: uuid("account_id")
+    .notNull()
+    .references(() => accounts.id, { onDelete: "cascade" }),
+  /** JSON criptografado com as páginas e tokens */
+  payloadEnc: text("payload_enc").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // ============================================================================

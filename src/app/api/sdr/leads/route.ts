@@ -60,6 +60,8 @@ export async function GET() {
         note: lead.note,
         conversation: {
           phoneJid: lead.conversation.phoneJid,
+          channel: lead.conversation.channel,
+          handle: lead.conversation.handle,
           leadName: lead.conversation.leadName,
           lastMessageAt: lead.conversation.lastMessageAt,
         },

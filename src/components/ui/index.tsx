@@ -24,7 +24,7 @@ export function PageHeader({
 }
 
 export function Page({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <div className={`px-8 py-7 ${className}`}>{children}</div>;
+  return <div className={`px-4 py-5 md:px-8 md:py-7 ${className}`}>{children}</div>;
 }
 
 export function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {

@@ -41,11 +41,26 @@ import {
   products,
   productCategories,
   productImages,
+  metaConnections,
 } from "../src/db/schema";
 import { eq, and, desc, gte, lt, isNull, sql, inArray } from "drizzle-orm";
 import { runSdrAgent, pickSeller, type AgentDecision } from "../src/lib/ai/sdrAgent";
 import { resolveAiKey, resolveVoiceKey } from "../src/lib/tenancy/aiKey";
 import { transcribeAudio, synthesizeSpeech } from "../src/lib/voice/providers";
+import {
+  metaChannelOf,
+  metaUserId,
+  CHANNEL_PREFIX,
+  plainForMeta,
+  splitForMeta,
+  sendMetaText,
+  sendMetaAttachment,
+  metaProfile,
+  downloadMetaFile,
+  publicFileUrl,
+  type MetaChannel,
+} from "../src/lib/meta/graph";
+import { decryptSecret } from "../src/lib/tenancy/secret";
 import { priceLabel } from "../src/lib/products/format";
 import { ensureColumns } from "../src/lib/funnel/shared";
 import { normalizeStage } from "../src/lib/funnel/common";
@@ -625,6 +640,7 @@ async function signed(accountId: string, text: string, authorName?: string | nul
 
 /** Envia texto pelo WhatsApp da conta e registra no histórico */
 async function sendText(accountId: string, phoneJid: string, text: string, sender: Sender, authorName?: string | null) {
+  if (metaChannelOf(phoneJid)) return metaSendText(accountId, phoneJid, text, sender, authorName);
   const s = sessions.get(accountId);
   if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
   try {
@@ -697,6 +713,7 @@ interface MediaPayload {
 }
 
 async function sendMedia(accountId: string, phoneJid: string, media: MediaPayload, sender: Sender, authorName?: string | null) {
+  if (metaChannelOf(phoneJid)) return metaSendMedia(accountId, phoneJid, media, sender, authorName);
   const s = sessions.get(accountId);
   if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
   try {
@@ -756,6 +773,282 @@ async function sendMedia(accountId: string, phoneJid: string, media: MediaPayloa
     console.error("[Error] sendMedia:", error);
     return { error: (error as Error)?.message || String(error) };
   }
+}
+
+// ============================================================================
+// INSTAGRAM E FACEBOOK (META)
+// ============================================================================
+
+/** Página conectada por onde a conversa chegou */
+async function metaConnectionFor(accountId: string, phoneJid: string) {
+  const conv = await db.query.conversations.findFirst({
+    where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
+  });
+  const conns = await db.select().from(metaConnections).where(eq(metaConnections.accountId, accountId));
+  const channel = metaChannelOf(phoneJid);
+  const conn =
+    (conv?.metaPageId && conns.find((c) => c.pageId === conv.metaPageId)) ||
+    conns.find((c) => (channel === "INSTAGRAM" ? Boolean(c.igUserId) : true));
+  return { conv, conn, token: conn ? decryptSecret(conn.pageTokenEnc) : null };
+}
+
+async function markMetaError(connId: string, error: string | null) {
+  await db.update(metaConnections).set({ lastError: error }).where(eq(metaConnections.id, connId)).catch(() => {});
+}
+
+async function metaSendText(accountId: string, phoneJid: string, text: string, sender: Sender, authorName?: string | null) {
+  const { conv, conn, token } = await metaConnectionFor(accountId, phoneJid);
+  if (!conn || !token) return { error: "Instagram/Facebook desta conta não está conectado" };
+  try {
+    const out = plainForMeta(await signed(accountId, text, authorName));
+    let lastId: string | null = null;
+    for (const part of splitForMeta(out)) {
+      lastId = await sendMetaText(token, metaUserId(phoneJid), part);
+      if (lastId) rememberSent(lastId);
+    }
+    if (conv) {
+      await db.insert(messages).values({
+        conversationId: conv.id,
+        direction: "OUT",
+        body: text,
+        messageType: "text",
+        whatsappMessageId: lastId,
+        sentAt: new Date(),
+        sender,
+        authorName: authorName || null,
+      });
+      await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
+    }
+    if (conn.lastError) await markMetaError(conn.id, null);
+    return { success: true, messageId: lastId };
+  } catch (error) {
+    const msg = (error as Error)?.message || String(error);
+    console.error(`[Meta ${accountId.slice(0, 8)}] envio de texto:`, msg);
+    await markMetaError(conn.id, msg);
+    return { error: msg };
+  }
+}
+
+/** Converte áudio para o formato aceito: Instagram = AAC, Messenger = MP3 */
+function convertAudio(input: Buffer, target: "aac" | "mp3"): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const args =
+      target === "aac"
+        ? ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "64k", "-f", "adts", "pipe:1"]
+        : ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "64k", "-f", "mp3", "pipe:1"];
+    const p = spawn(ffmpegPath(), args);
+    const out: Buffer[] = [];
+    let err = "";
+    p.stdout.on("data", (d) => out.push(d));
+    p.stderr.on("data", (d) => (err += d));
+    p.on("error", reject);
+    p.on("close", (code) => (code === 0 ? resolve(Buffer.concat(out)) : reject(new Error(err || `ffmpeg saiu com ${code}`))));
+    p.stdin.on("error", () => {});
+    p.stdin.end(input);
+  });
+}
+
+/**
+ * Mídia no Instagram/Messenger: a Meta baixa o arquivo por um link.
+ * Guarda a mensagem primeiro (o link aponta para ela) e depois envia; a legenda vai logo em seguida, como texto.
+ */
+async function metaSendMedia(accountId: string, phoneJid: string, media: MediaPayload, sender: Sender, authorName?: string | null) {
+  const { conv, conn, token } = await metaConnectionFor(accountId, phoneJid);
+  if (!conn || !token || !conv) return { error: "Instagram/Facebook desta conta não está conectado" };
+  const channel = metaChannelOf(phoneJid)!;
+  let buffer: Buffer = Buffer.from(media.base64, "base64");
+  if (!buffer.length) return { error: "Arquivo vazio" };
+  let mime = (media.mimetype || "application/octet-stream").split(";")[0];
+  let type: "image" | "audio" | "file" = media.kind === "image" ? "image" : media.kind === "audio" ? "audio" : "file";
+  try {
+    if (media.kind === "audio") {
+      const target = channel === "INSTAGRAM" ? "aac" : "mp3";
+      buffer = await convertAudio(buffer, target);
+      mime = target === "aac" ? "audio/aac" : "audio/mpeg";
+    }
+    if (buffer.length > MAX_STORED_MEDIA) return { error: "Arquivo grande demais" };
+    const body = media.kind === "audio" ? "[áudio]" : media.caption?.trim() || (media.kind === "image" ? "[imagem]" : `[documento] ${media.fileName || ""}`.trim());
+    const [row] = await db
+      .insert(messages)
+      .values({
+        conversationId: conv.id,
+        direction: "OUT",
+        body,
+        messageType: media.kind,
+        sentAt: new Date(),
+        sender,
+        authorName: authorName || null,
+        mediaDataUrl: `data:${mime};base64,${buffer.toString("base64")}`,
+        mediaMimeType: mime,
+        mediaFileName: media.fileName || null,
+        transcript: media.transcript || null,
+      })
+      .returning({ id: messages.id });
+    const mid = await sendMetaAttachment(token, metaUserId(phoneJid), type, publicFileUrl("msg", row.id));
+    if (mid) {
+      rememberSent(mid);
+      await db.update(messages).set({ whatsappMessageId: mid }).where(eq(messages.id, row.id));
+    }
+    // Legenda (ou assinatura do áudio) vai como texto logo depois
+    const captionText =
+      media.kind === "audio" ? null : media.caption?.trim() ? plainForMeta(await signed(accountId, media.caption.trim(), authorName)) : null;
+    if (captionText) {
+      for (const part of splitForMeta(captionText)) {
+        const cm = await sendMetaText(token, metaUserId(phoneJid), part);
+        if (cm) rememberSent(cm);
+      }
+    }
+    await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
+    if (conn.lastError) await markMetaError(conn.id, null);
+    return { success: true, messageId: mid };
+  } catch (error) {
+    const msg = (error as Error)?.message || String(error);
+    console.error(`[Meta ${accountId.slice(0, 8)}] envio de mídia:`, msg);
+    await markMetaError(conn.id, msg);
+    return { error: msg };
+  }
+}
+
+const META_KIND: Record<string, { type: string; label: string }> = {
+  image: { type: "image", label: "[imagem]" },
+  audio: { type: "audio", label: "[áudio]" },
+  video: { type: "video", label: "[vídeo]" },
+  file: { type: "document", label: "[documento]" },
+};
+
+/** Evento do webhook da Meta (repassado pelo site) */
+async function handleMetaEvent(payload: any) {
+  const object = payload?.object;
+  if (object !== "page" && object !== "instagram") return;
+  for (const entry of payload.entry || []) {
+    const entryId = String(entry.id || "");
+    const conn =
+      object === "instagram"
+        ? await db.query.metaConnections.findFirst({ where: eq(metaConnections.igUserId, entryId) })
+        : await db.query.metaConnections.findFirst({ where: eq(metaConnections.pageId, entryId) });
+    if (!conn) {
+      console.warn(`[Meta] evento de ${object} ${entryId} sem conta conectada — ignorado`);
+      continue;
+    }
+    await db.update(metaConnections).set({ lastEventAt: new Date() }).where(eq(metaConnections.id, conn.id)).catch(() => {});
+    for (const ev of entry.messaging || []) {
+      try {
+        // No Messenger, mensagens do Instagram também podem chegar com object "page": o id do Instagram decide
+        const isIg = object === "instagram" || (conn.igUserId && (ev.recipient?.id === conn.igUserId || ev.sender?.id === conn.igUserId));
+        const channel: MetaChannel = isIg ? "INSTAGRAM" : "MESSENGER";
+        if (channel === "INSTAGRAM" && !conn.instagramEnabled) continue;
+        if (channel === "MESSENGER" && !conn.messengerEnabled) continue;
+        await handleMetaMessage(conn, channel, ev);
+      } catch (err) {
+        console.error("[Meta] erro ao processar mensagem:", (err as Error)?.message || err);
+      }
+    }
+  }
+}
+
+async function handleMetaMessage(conn: typeof metaConnections.$inferSelect, channel: MetaChannel, ev: any) {
+  const msg = ev.message;
+  if (!msg || msg.is_deleted || msg.is_unsupported) return;
+  const accountId = conn.accountId;
+  const echo = Boolean(msg.is_echo);
+  const userId = String(echo ? ev.recipient?.id : ev.sender?.id || "");
+  if (!userId) return;
+  const phoneJid = CHANNEL_PREFIX[channel] + userId;
+  const mid: string | undefined = msg.mid;
+  if (mid && recentSentIds.includes(mid)) return; // enviada por este sistema
+  if (mid) {
+    const dup = await db.query.messages.findFirst({ where: eq(messages.whatsappMessageId, mid) });
+    if (dup) return;
+  }
+
+  // Texto e anexo (o primeiro)
+  const att = Array.isArray(msg.attachments) ? msg.attachments[0] : null;
+  const kind = att ? META_KIND[att.type] || null : null;
+  const sticker = att?.payload?.sticker_id || att?.type === "like_heart";
+  let text: string = typeof msg.text === "string" ? msg.text : "";
+  let messageType = "text";
+  let media: { dataUrl: string; mime: string } | null = null;
+  if (att && sticker) {
+    text = text || "[figurinha]";
+  } else if (att && kind && att.payload?.url) {
+    messageType = kind.type;
+    text = text || kind.label;
+    try {
+      const f = await downloadMetaFile(att.payload.url, MAX_STORED_MEDIA);
+      media = { dataUrl: `data:${f.mime};base64,${f.buffer.toString("base64")}`, mime: f.mime };
+    } catch (err) {
+      console.warn(`[Meta ${accountId.slice(0, 8)}] não baixei o anexo:`, (err as Error)?.message || err);
+    }
+  } else if (att) {
+    text = text || (att.type === "share" || att.type === "story_mention" || att.type === "ig_reel" ? "[compartilhou uma publicação]" : "[mensagem]");
+  }
+  if (!text && !media) return;
+
+  const token = decryptSecret(conn.pageTokenEnc);
+  let conversation = await db.query.conversations.findFirst({
+    where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
+  });
+  if (!conversation) {
+    if (echo) return; // resposta da página para alguém que ainda não está no sistema
+    const profile = token ? await metaProfile(token, userId, channel) : { name: null, handle: null };
+    const [created] = await db
+      .insert(conversations)
+      .values({
+        accountId,
+        phoneJid,
+        channel,
+        handle: profile.handle,
+        metaPageId: conn.pageId,
+        leadName: profile.name || (channel === "INSTAGRAM" ? "Instagram" : "Facebook"),
+        lastMessageAt: new Date(),
+      })
+      .onConflictDoNothing()
+      .returning();
+    conversation =
+      created ||
+      (await db.query.conversations.findFirst({
+        where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
+      }));
+    if (!conversation) return;
+    await db
+      .insert(leads)
+      .values({ accountId, conversationId: conversation.id, cardName: conversation.leadName || "Lead", stage: "FIRST_CONTACT" })
+      .onConflictDoNothing();
+  } else if (!conversation.metaPageId) {
+    await db.update(conversations).set({ metaPageId: conn.pageId }).where(eq(conversations.id, conversation.id));
+  }
+
+  const sentAt = ev.timestamp ? new Date(Number(ev.timestamp)) : new Date();
+  const [saved] = await db
+    .insert(messages)
+    .values({
+      conversationId: conversation.id,
+      direction: echo ? "OUT" : "IN",
+      body: text,
+      messageType,
+      whatsappMessageId: mid || null,
+      sentAt,
+      sender: echo ? "HUMAN" : "LEAD",
+      authorName: echo ? (channel === "INSTAGRAM" ? "Instagram da empresa" : "Página da empresa") : null,
+      mediaDataUrl: media?.dataUrl || null,
+      mediaMimeType: media?.mime || null,
+    })
+    .returning({ id: messages.id });
+  await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
+
+  if (echo) {
+    // Alguém respondeu pelo app do Instagram/Facebook: a pessoa assumiu a conversa
+    await db.update(leads).set({ aiPaused: true, updatedAt: new Date() }).where(eq(leads.conversationId, conversation.id));
+    return;
+  }
+  await db.update(leads).set({ updatedAt: new Date() }).where(eq(leads.conversationId, conversation.id));
+  console.log(`[${channel === "INSTAGRAM" ? "Instagram" : "Messenger"} ${accountId.slice(0, 8)}] ${phoneJid}: "${text.slice(0, 60)}"`);
+
+  const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
+  if (messageType === "audio" && saved && media && settings?.transcribeAudio !== false) {
+    await transcribeIncoming(accountId, saved.id, media.dataUrl);
+  }
+  if (settings?.enabled && Date.now() - sentAt.getTime() < AI_RECOVERY_WINDOW_MS) scheduleAi(accountId, conversation.id);
 }
 
 // ============================================================================
@@ -863,6 +1156,7 @@ async function runAi(accountId: string, conversationId: string) {
         score: lead.score,
         summary: lead.aiSummary,
       },
+      channel: conversation.channel,
       history: history.map((m) => ({
         direction: m.direction,
         body: m.transcript ? (m.direction === "IN" ? `(áudio) ${m.transcript}` : m.transcript) : m.body,
@@ -1064,6 +1358,7 @@ async function applyDecision(
     updatedAt: new Date(),
   };
   if (d.city) set.city = d.city;
+  if (d.phone && !current.phone) set.phone = d.phone;
   if (d.interest) set.interest = d.interest;
   if (d.saleType !== "ANY") set.saleType = d.saleType;
   const conv = await db.query.conversations.findFirst({ where: eq(conversations.id, conversationId) });
@@ -1323,6 +1618,12 @@ function startApiServer() {
         if (SELFTEST && url.pathname === "/__test/reminders") {
           await processReminders();
           return json(res, 200, {});
+        }
+
+        if (url.pathname === "/meta-event") {
+          // Responde logo; o processamento continua em segundo plano
+          handleMetaEvent(body).catch((err) => console.error("[Meta] erro:", err));
+          return json(res, 200, { ok: true });
         }
 
         const acc = await validAccount(body.accountId);

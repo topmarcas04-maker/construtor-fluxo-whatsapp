@@ -7,8 +7,10 @@ import {
   TAG_DOT_CLASSES,
   funnelColumn,
   leadDisplayName,
-  formatPhone,
   timeLabel,
+  contactLine,
+  CHANNEL_LABEL,
+  CHANNEL_BADGE,
 } from "@/lib/types/sdr";
 import { LeadPanel } from "./LeadPanel";
 import { columnOfLead, type FunnelColumn } from "@/lib/funnel/common";
@@ -92,21 +94,28 @@ export function ConversationsView({
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("todos");
+  const [channelFilter, setChannelFilter] = useState<string>("todos");
+  const channels = useMemo(
+    () => [...new Set(leads.map((l) => l.conversation.channel || "WHATSAPP"))],
+    [leads]
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastCountRef = useRef(0);
 
   const visible = useMemo(() => {
+    const byChannel =
+      channelFilter === "todos" ? leads : leads.filter((l) => (l.conversation.channel || "WHATSAPP") === channelFilter);
     switch (filter) {
       case "ia":
-        return leads.filter((l) => !l.aiPaused && !l.seller);
+        return byChannel.filter((l) => !l.aiPaused && !l.seller);
       case "vendedor":
-        return leads.filter((l) => l.seller);
+        return byChannel.filter((l) => l.seller);
       case "quentes":
-        return leads.filter((l) => funnelColumn(l.stage) === "HOT_LEAD");
+        return byChannel.filter((l) => funnelColumn(l.stage) === "HOT_LEAD");
       default:
-        return leads;
+        return byChannel;
     }
-  }, [leads, filter]);
+  }, [leads, filter, channelFilter]);
 
   // Celular/tablet: uma tela por vez (lista → conversa) e a ficha abre por cima
   const [mobilePane, setMobilePane] = useState<"list" | "chat">("list");
@@ -205,13 +214,30 @@ export function ConversationsView({
             </button>
           ))}
         </div>
+        {channels.length > 1 && (
+          <div className="flex gap-1.5 overflow-x-auto border-b border-slate-100 px-3 py-2">
+            {["todos", ...channels].map((c) => (
+              <button
+                key={c}
+                onClick={() => setChannelFilter(c)}
+                className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition ${
+                  channelFilter === c
+                    ? "border-[var(--accent)] text-[var(--accent)]"
+                    : "border-slate-200 text-slate-500 hover:border-slate-300"
+                }`}
+              >
+                {c === "todos" ? "Todos os canais" : CHANNEL_LABEL[c] || c}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto">
           {loading ? (
             <p className="p-5 text-sm text-slate-400">Carregando...</p>
           ) : visible.length === 0 ? (
             <p className="p-5 text-sm text-slate-400">
               {leads.length === 0
-                ? "Nenhuma conversa ainda. Assim que alguém escrever no WhatsApp, o lead aparece aqui."
+                ? "Nenhuma conversa ainda. Assim que alguém escrever no WhatsApp (ou Instagram/Facebook, se conectados), o lead aparece aqui."
                 : "Nenhum lead neste filtro."}
             </p>
           ) : (
@@ -246,6 +272,11 @@ export function ConversationsView({
                         : "Sem mensagens"}
                     </p>
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {lead.conversation.channel && lead.conversation.channel !== "WHATSAPP" && (
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${CHANNEL_BADGE[lead.conversation.channel] || ""}`}>
+                          {CHANNEL_LABEL[lead.conversation.channel] || lead.conversation.channel}
+                        </span>
+                      )}
                       <StatusChip lead={lead} />
                       {lead.city && (
                         <span className="inline-flex items-center gap-0.5 text-[11px] text-slate-500">
@@ -288,7 +319,7 @@ export function ConversationsView({
               <div>
                 <h3 className="font-semibold text-slate-900">{leadDisplayName(selectedLead)}</h3>
                 <p className="text-xs text-slate-500">
-                  {selectedLead.phone ? formatPhone(selectedLead.phone) : selectedLead.conversation.phoneJid.split("@")[0]}
+                  {contactLine(selectedLead)}
                 </p>
               </div>
             </div>

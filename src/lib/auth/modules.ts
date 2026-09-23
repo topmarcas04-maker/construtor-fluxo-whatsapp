@@ -11,6 +11,7 @@
 export const MODULES = [
   { key: "visao-geral", label: "Visão Geral", href: "/visao-geral" },
   { key: "whatsapp", label: "WhatsApp", href: "/whatsapp" },
+  { key: "redes-sociais", label: "Instagram e Facebook", href: "/redes-sociais" },
   { key: "leads", label: "Leads", href: "/leads" },
   { key: "agenda", label: "Agenda", href: "/agenda" },
   { key: "produtos", label: "Produtos", href: "/produtos" },

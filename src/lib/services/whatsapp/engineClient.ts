@@ -102,3 +102,8 @@ export function sendWhatsappProduct(
     60000
   );
 }
+
+/** Repassa ao motor as mensagens do Instagram/Facebook recebidas pelo webhook da Meta */
+export function forwardMetaEvent(payload: unknown) {
+  return call<{ ok: boolean }>(`/meta-event`, { method: "POST", body: JSON.stringify(payload) }, 25000);
+}
