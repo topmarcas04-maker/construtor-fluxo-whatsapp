@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X, Workflow } from "lucide-react";
+import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X, Workflow, CalendarClock } from "lucide-react";
 import type { Lead, Message, QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import {
   TAG_DOT_CLASSES,
@@ -433,6 +433,8 @@ export function ConversationsView({
                           ? "rounded-br-md bg-slate-600 text-white"
                           : msg.sender === "BOT"
                           ? "rounded-br-md bg-teal-600 text-white"
+                          : msg.sender === "FOLLOWUP"
+                          ? "rounded-br-md bg-indigo-600 text-white"
                             : "rounded-br-md bg-[var(--accent)] text-white"
                           : "rounded-bl-md bg-white text-slate-800"
                       }`}
@@ -450,6 +452,10 @@ export function ConversationsView({
                           ) : msg.sender === "BOT" ? (
                             <>
                               <Workflow size={11} /> Chatbot
+                            </>
+                          ) : msg.sender === "FOLLOWUP" ? (
+                            <>
+                              <CalendarClock size={11} /> {msg.authorName || "Recontato"}
                             </>
                           ) : (
                             <>

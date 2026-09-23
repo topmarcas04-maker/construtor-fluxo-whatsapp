@@ -549,6 +549,15 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_at timestamptz;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_ended_at timestamptz;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_last_id uuid;
 
+-- Recontato automático
+CREATE TABLE IF NOT EXISTS followup_settings (
+  id varchar(64) PRIMARY KEY,
+  config jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS fu_count integer NOT NULL DEFAULT 0;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS fu_last_at timestamptz;
+
 -- Migrações que rodam uma única vez
 CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());
 DO $$ BEGIN

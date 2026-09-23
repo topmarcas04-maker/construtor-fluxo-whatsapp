@@ -334,6 +334,9 @@ export const leads = pgTable(
     botEndedAt: timestamp("bot_ended_at", { withTimezone: true }),
     /** Último chatbot que atendeu (para não repetir o mesmo logo em seguida) */
     botLastId: uuid("bot_last_id"),
+    /** Recontato automático: quantas tentativas já foram e quando foi a última */
+    fuCount: integer("fu_count").notNull().default(0),
+    fuLastAt: timestamp("fu_last_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -578,6 +581,17 @@ export const aiActions = pgTable(
   },
   (table) => [index("ai_actions_account_idx").on(table.accountId)]
 );
+
+// ============================================================================
+// RECONTATO AUTOMÁTICO (FOLLOW-UP)
+// ============================================================================
+
+/** Configuração do recontato de cada conta (id = id da conta). Ver lib/followup/common.ts */
+export const followupSettings = pgTable("followup_settings", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  config: jsonb("config").notNull().default({}),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 // ============================================================================
 // CHATBOT (MENUS AUTOMÁTICOS SEM IA)

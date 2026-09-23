@@ -45,6 +45,7 @@ import {
   funnelColumns,
   funnels,
   chatbots,
+  followupSettings,
 } from "../src/db/schema";
 import { eq, and, desc, gte, lt, isNull, sql, inArray } from "drizzle-orm";
 import { runSdrAgent, pickSeller, type AgentDecision } from "../src/lib/ai/sdrAgent";
@@ -87,6 +88,9 @@ import {
   type Chatbot,
   type BotOption,
 } from "../src/lib/chatbot/common";
+import { followupCandidates, ensureDisqualifiedColumn, type FollowupCandidate } from "../src/lib/followup/shared";
+import { withDefaults, fillName, type FollowupSettings } from "../src/lib/followup/common";
+import { generateFollowup } from "../src/lib/ai/followup";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
 import { spawn } from "node:child_process";
@@ -107,7 +111,7 @@ const db = drizzle(pool, { schema });
 const AI_DEBOUNCE_MS = Number(process.env.AI_DEBOUNCE_MS || 6000);
 const SELFTEST = process.env.FLOW_ENGINE_SELFTEST === "1";
 
-type Sender = "AI" | "HUMAN" | "AUTO" | "BOT";
+type Sender = "AI" | "HUMAN" | "AUTO" | "BOT" | "FOLLOWUP";
 
 /** Espera um pouco antes do chatbot responder, para juntar mensagens seguidas */
 const BOT_DEBOUNCE_MS = Number(process.env.BOT_DEBOUNCE_MS || 1500);
@@ -677,7 +681,7 @@ async function sendText(accountId: string, phoneJid: string, text: string, sende
   const s = sessions.get(accountId);
   if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
   try {
-    const response = await s.sock.sendMessage(phoneJid, { text: await signed(accountId, text, authorName) });
+    const response = await s.sock.sendMessage(phoneJid, { text: sender === "HUMAN" ? await signed(accountId, text, authorName) : text });
     if (response?.key?.id) rememberSent(response.key.id);
     const conv = await db.query.conversations.findFirst({
       where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
@@ -833,7 +837,7 @@ async function metaSendText(accountId: string, phoneJid: string, text: string, s
   const { conv, conn, token } = await metaConnectionFor(accountId, phoneJid);
   if (!conn || !token) return { error: "Instagram/Facebook desta conta não está conectado" };
   try {
-    const out = plainForMeta(await signed(accountId, text, authorName));
+    const out = plainForMeta(sender === "HUMAN" ? await signed(accountId, text, authorName) : text);
     let lastId: string | null = null;
     for (const part of splitForMeta(out)) {
       lastId = await sendMetaText(token, metaUserId(phoneJid), part);
@@ -1913,6 +1917,127 @@ async function runChatbot(accountId: string, conversationId: string, ctx: Incomi
 }
 
 // ============================================================================
+// RECONTATO AUTOMÁTICO (lead que parou de responder)
+// ============================================================================
+
+let followupsRunning = false;
+const FOLLOWUP_PER_RUN = 15;
+
+async function processFollowups() {
+  if (followupsRunning) return;
+  followupsRunning = true;
+  try {
+    const rows = await db.select().from(followupSettings);
+    for (const row of rows) {
+      const s = withDefaults(row.config as Partial<FollowupSettings>);
+      if (!s.enabled) continue;
+      const accountId = row.id;
+      const acc = await loadAccount(accountId);
+      if (!acc || !acc.active) continue;
+      if (sessions.get(accountId)?.state !== "connected") continue; // sem WhatsApp não envia (tenta de novo depois)
+      const now = new Date();
+      const due = (await followupCandidates(db, accountId, s, now)).filter((c) => c.next.at.getTime() <= now.getTime());
+      for (const c of due.slice(0, FOLLOWUP_PER_RUN)) {
+        try {
+          if (c.next.kind === "SEND") await sendFollowup(accountId, s, c);
+          else await finishFollowup(accountId, s, c);
+        } catch (err) {
+          console.error(`[Recontato ${accountId.slice(0, 8)}] erro com ${c.phoneJid}:`, (err as Error)?.message || err);
+        }
+        await pause(SELFTEST ? 100 : 2500);
+      }
+    }
+  } catch (err) {
+    console.error("[Recontato] erro:", (err as Error)?.message || err);
+  } finally {
+    followupsRunning = false;
+  }
+}
+
+async function sendFollowup(accountId: string, s: FollowupSettings, c: FollowupCandidate) {
+  if (c.next.kind !== "SEND") return;
+  const k = c.next.attempt;
+  const total = s.attempts.length;
+  const attempt = s.attempts[k];
+
+  // Cliente parado no meio de um menu do chatbot: reenvia as opções junto
+  let menu: string | null = null;
+  if (c.botId) {
+    const bot = (await listChatbots(db, accountId)).find((b) => b.id === c.botId);
+    const step = bot?.steps.find((x) => x.id === c.botStep);
+    if (step?.options.length) menu = step.options.map((o) => `*${o.key}* - ${o.label}`).join("\n");
+  }
+
+  let text: string | null = null;
+  if (s.mode === "AI") {
+    const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
+    const key = settings?.enabled ? await resolveAiKey(accountId, loadAccount) : null;
+    if (settings?.enabled && key?.apiKey) {
+      const recent = await db.query.messages.findMany({
+        where: eq(messages.conversationId, c.conversationId),
+        orderBy: [desc(messages.sentAt)],
+        limit: 20,
+      });
+      try {
+        text = await generateFollowup(
+          {
+            systemPrompt: settings.systemPrompt,
+            instructions: s.aiInstructions,
+            leadName: c.name,
+            attempt: k + 1,
+            total,
+            pendingMenu: menu,
+            history: recent.reverse().map((m) => ({
+              direction: m.direction,
+              body: m.transcript ? `(áudio) ${m.transcript}` : m.body,
+              sender: m.sender,
+            })),
+          },
+          { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL }
+        );
+      } catch (err) {
+        console.warn(`[Recontato ${accountId.slice(0, 8)}] IA falhou, usando o texto fixo:`, (err as Error)?.message || err);
+      }
+    }
+  }
+  if (!text) text = fillName(attempt.text, c.name);
+  if (menu) text = `${text}\n\n${menu}`;
+
+  const r = await sendText(accountId, c.phoneJid, text, "FOLLOWUP", `Recontato ${k + 1}/${total}`);
+  if ("error" in r) {
+    console.warn(`[Recontato ${accountId.slice(0, 8)}] não enviei para ${c.phoneJid}:`, r.error);
+    return;
+  }
+  const set: Record<string, unknown> = { fuCount: k + 1, fuLastAt: new Date() };
+  if (c.botId) set.botAt = new Date(); // mantém o menu do chatbot valendo
+  await db.update(leads).set(set).where(eq(leads.id, c.leadId));
+  console.log(`[Recontato ${accountId.slice(0, 8)}] ${c.phoneJid}: tentativa ${k + 1}/${total} enviada`);
+}
+
+async function finishFollowup(accountId: string, s: FollowupSettings, c: FollowupCandidate) {
+  const set: Record<string, unknown> = {
+    fuCount: s.attempts.length + 1,
+    botId: null,
+    botStep: null,
+    botTries: 0,
+    lastAction: "Sem resposta (recontato)",
+    lastActionAt: new Date(),
+    updatedAt: new Date(),
+  };
+  if (s.moveToDisqualified) {
+    set.columnId = await ensureDisqualifiedColumn(db, accountId, c.funnelId, s.disqualifiedColumnName || "Desqualificado");
+  }
+  await db.update(leads).set(set).where(eq(leads.id, c.leadId));
+  const tagName = s.addTagName.trim();
+  if (tagName) {
+    let tag = await db.query.tags.findFirst({ where: and(eq(tags.accountId, accountId), sql`lower(${tags.name}) = lower(${tagName})`) });
+    if (!tag) [tag] = await db.insert(tags).values({ accountId, name: tagName.slice(0, 60), color: "gray" }).returning();
+    await db.insert(leadTags).values({ leadId: c.leadId, tagId: tag.id }).onConflictDoNothing();
+  }
+  console.log(`[Recontato ${accountId.slice(0, 8)}] ${c.phoneJid}: sem resposta — desqualificado`);
+}
+
+// ============================================================================
 // LEMBRETES DA AGENDA
 // ============================================================================
 
@@ -2122,6 +2247,7 @@ async function main() {
   await syncSessions();
   setInterval(() => syncSessions().catch((e) => console.error("[sync]", e)), 60_000);
   setInterval(() => processReminders(), SELFTEST ? 3_000 : 30_000);
+  setInterval(() => processFollowups(), SELFTEST ? 3_000 : 60_000);
 
   const shutdown = async () => {
     console.log("\n🛑 Encerrando motor...");
