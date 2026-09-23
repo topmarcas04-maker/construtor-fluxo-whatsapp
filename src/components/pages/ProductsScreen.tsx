@@ -22,6 +22,7 @@ export interface Category {
   sort: number;
   actionIds?: string[];
   primaryActionId?: string | null;
+  funnelId?: string | null;
 }
 
 /** Escolha das ações da IA (clique liga/desliga; estrela = principal) */
@@ -252,7 +253,8 @@ export function ProductsScreen() {
   /** Pode cadastrar/editar (senão, só visualiza) */
   const [canEdit, setCanEdit] = useState(false);
   const [actions, setActions] = useState<AiAction[]>([]);
-  const [catActions, setCatActions] = useState<{ cat: Category; ids: string[]; primary: string | null } | null>(null);
+  const [catActions, setCatActions] = useState<{ cat: Category; ids: string[]; primary: string | null; funnelId: string } | null>(null);
+  const [funnelList, setFunnelList] = useState<{ id: string; name: string; isDefault: boolean }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -264,6 +266,9 @@ export function ProductsScreen() {
     fetch("/api/products/settings")
       .then((r) => (r.ok ? r.json() : null))
       .then((s) => s && setCatalogAi(s.catalogEnabled));
+    fetch("/api/sdr/funnels")
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setFunnelList);
     fetch("/api/sdr/actions")
       .then((r) => (r.ok ? r.json() : []))
       .then(setActions);
@@ -585,11 +590,16 @@ export function ProductsScreen() {
                   <button onClick={() => deleteCategory(selectedCat)} className="font-medium text-red-500 hover:underline">Excluir</button>
                   <button
                     onClick={() =>
-                      setCatActions({ cat: selectedCat, ids: selectedCat.actionIds || [], primary: selectedCat.primaryActionId || null })
+                      setCatActions({
+                        cat: selectedCat,
+                        ids: selectedCat.actionIds || [],
+                        primary: selectedCat.primaryActionId || null,
+                        funnelId: selectedCat.funnelId || "",
+                      })
                     }
                     className="inline-flex items-center gap-1 font-medium text-violet-600 hover:underline"
                   >
-                    <Zap size={13} /> Ações da IA
+                    <Zap size={13} /> Ações e funil
                     {selectedCat.actionIds?.length ? ` (${selectedCat.actionIds.length})` : ""}
                   </button>
                 </>
@@ -1063,7 +1073,7 @@ export function ProductsScreen() {
 
       {/* Ações da categoria */}
       <Modal
-        title={catActions ? `Ações da IA — ${catActions.cat.name}` : ""}
+        title={catActions ? `Categoria ${catActions.cat.name}` : ""}
         open={catActions !== null}
         onClose={() => setCatActions(null)}
         footer={
@@ -1075,7 +1085,11 @@ export function ProductsScreen() {
                 const r = await fetch(`/api/products/categories/${catActions.cat.id}`, {
                   method: "PATCH",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ actionIds: catActions.ids, primaryActionId: catActions.primary }),
+                  body: JSON.stringify({
+                    actionIds: catActions.ids,
+                    primaryActionId: catActions.primary,
+                    funnelId: catActions.funnelId || null,
+                  }),
                 });
                 if (r.ok) {
                   setCatActions(null);
@@ -1089,8 +1103,23 @@ export function ProductsScreen() {
         }
       >
         {catActions && (
-          <div className="space-y-3">
-            <p className="text-sm text-slate-600">
+          <div className="space-y-5">
+            {funnelList.length > 1 && (
+              <Field label="Funil dos leads" hint="Quando o cliente se interessar por um produto desta categoria, o card vai para este funil.">
+                <Select value={catActions.funnelId} onChange={(e) => setCatActions({ ...catActions, funnelId: e.target.value })}>
+                  <option value="">Funil principal</option>
+                  {funnelList
+                    .filter((f) => !f.isDefault)
+                    .map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.name}
+                      </option>
+                    ))}
+                </Select>
+              </Field>
+            )}
+            <p className="text-sm font-medium text-slate-700">Ações da IA</p>
+            <p className="-mt-3 text-sm text-slate-600">
               Valem para todos os produtos da categoria <b>{catActions.cat.name}</b> que não tiverem ações próprias.
             </p>
             <ActionPicker

@@ -5,6 +5,7 @@ import { db } from "@/db/client";
 import { accounts } from "@/db/schema";
 import { requireUser, sellerScope } from "@/lib/auth/server";
 import { getSubtreeIds, isInSubtree } from "@/lib/tenancy/server";
+import { ensureFunnels } from "@/lib/funnel/shared";
 
 type Row = Record<string, unknown>;
 
@@ -50,8 +51,18 @@ export async function GET(req: NextRequest) {
 
   // Vendedor: filtro escolhido ou o próprio (se o usuário é vendedor)
   const sellerId = sellerScope(auth.user) || q.get("sellerId") || null;
-  const sellerLead = sellerId ? sql` AND l.seller_id = ${sellerId}::uuid` : sql``;
-  const sellerAppt = sellerId ? sql` AND a.seller_id = ${sellerId}::uuid` : sql``;
+  // Funil (da conta ativa): o principal inclui os cards sem funil
+  const funnelParam = q.get("funnel");
+  const funnelRow = funnelParam ? (await ensureFunnels(db, auth.accountId)).find((f) => f.id === funnelParam) : null;
+  const funnelCond = funnelRow
+    ? funnelRow.isDefault
+      ? sql` AND (l.funnel_id IS NULL OR l.funnel_id = ${funnelRow.id}::uuid)`
+      : sql` AND l.funnel_id = ${funnelRow.id}::uuid`
+    : sql``;
+  const sellerLead = sql`${sellerId ? sql` AND l.seller_id = ${sellerId}::uuid` : sql``}${funnelCond}`;
+  const sellerAppt = sql`${sellerId ? sql` AND a.seller_id = ${sellerId}::uuid` : sql``}${
+    funnelRow ? sql` AND a.lead_id IN (SELECT l.id FROM leads l WHERE l.account_id = ${auth.accountId}::uuid ${funnelCond})` : sql``
+  }`;
   const inAcc = list(ids);
 
   const [leadsQ, salesQ, apptQ, aiQ, hotQ] = await Promise.all([

@@ -46,14 +46,14 @@ type Form = {
 
 export function ActionsTab() {
   const [actions, setActions] = useState<AiAction[] | null>(null);
-  const [columns, setColumns] = useState<FunnelColumn[]>([]);
+  const [columns, setColumns] = useState<(FunnelColumn & { funnelName?: string })[]>([]);
   const [editing, setEditing] = useState<AiAction | "new" | null>(null);
   const [form, setForm] = useState<Form | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
-    const [a, c] = await Promise.all([api("/api/sdr/actions", "GET"), api("/api/sdr/columns", "GET").catch(() => [])]);
+    const [a, c] = await Promise.all([api("/api/sdr/actions", "GET"), api("/api/sdr/columns?all=1", "GET").catch(() => [])]);
     setActions(a);
     setColumns(c);
   }, []);
@@ -116,7 +116,12 @@ export function ActionsTab() {
   };
 
   if (!actions) return <p className="p-6 text-sm text-slate-400">Carregando...</p>;
-  const colName = (id: string | null) => columns.find((c) => c.id === id)?.name;
+  const manyFunnels = new Set(columns.map((c) => c.funnelId)).size > 1;
+  const colLabel = (c: FunnelColumn & { funnelName?: string }) => (manyFunnels && c.funnelName ? `${c.funnelName} → ${c.name}` : c.name);
+  const colName = (id: string | null) => {
+    const c = columns.find((x) => x.id === id);
+    return c ? colLabel(c) : undefined;
+  };
 
   return (
     <div className="space-y-5 p-4 md:p-6">
@@ -244,7 +249,7 @@ export function ActionsTab() {
                   .filter((c) => c.kind !== "SALE")
                   .map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name}
+                      {colLabel(c)}
                     </option>
                   ))}
               </Select>

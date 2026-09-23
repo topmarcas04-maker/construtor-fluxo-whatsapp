@@ -297,6 +297,8 @@ export const leads = pgTable(
     stage: leadStageEnum("stage").notNull().default("FIRST_CONTACT"),
     /** Coluna personalizada do funil (vazio = coluna do estágio) */
     columnId: uuid("column_id").references(() => funnelColumns.id, { onDelete: "set null" }),
+    /** Funil do lead (vazio = funil padrão) */
+    funnelId: uuid("funnel_id").references(() => funnels.id, { onDelete: "set null" }),
     city: varchar("city", { length: 120 }),
     email: varchar("email", { length: 200 }),
     phone: varchar("phone", { length: 40 }),
@@ -572,6 +574,22 @@ export const aiActions = pgTable(
 // FUNIL (COLUNAS PERSONALIZADAS)
 // ============================================================================
 
+/** Funis da conta (ex.: "Scooters", "Planos"). O funil padrão recebe os leads sem funil definido. */
+export const funnels = pgTable(
+  "funnels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 80 }).notNull(),
+    isDefault: boolean("is_default").notNull().default(false),
+    sort: integer("sort").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("funnels_account_idx").on(table.accountId)]
+);
+
 /**
  * Colunas do funil de cada conta. kind = FIRST_CONTACT | SECOND_CONTACT | HOT_LEAD | SALE
  * (colunas fixas, podem ser renomeadas) ou CUSTOM (criadas pelo usuário).
@@ -584,6 +602,8 @@ export const funnelColumns = pgTable(
     accountId: uuid("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
+    /** Funil ao qual a coluna pertence */
+    funnelId: uuid("funnel_id").references(() => funnels.id, { onDelete: "cascade" }),
     name: varchar("name", { length: 80 }).notNull(),
     kind: varchar("kind", { length: 20 }).notNull().default("CUSTOM"),
     aiRule: text("ai_rule"),
@@ -607,6 +627,8 @@ export const productCategories = pgTable(
       .references(() => accounts.id, { onDelete: "cascade" }),
     name: varchar("name", { length: 120 }).notNull(),
     sort: integer("sort").notNull().default(0),
+    /** Funil para onde vão os leads interessados nesta categoria */
+    funnelId: uuid("funnel_id"),
     /** Ações da IA permitidas para os produtos da categoria (ids) */
     actionIds: jsonb("action_ids").$type<string[]>().notNull().default([]),
     /** Ação principal (a IA oferece primeiro) */

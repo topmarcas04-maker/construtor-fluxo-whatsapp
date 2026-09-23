@@ -5,6 +5,30 @@ export type SystemKind = (typeof SYSTEM_KINDS)[number];
 
 export const COLUMN_COLORS = ["slate", "blue", "violet", "amber", "orange", "emerald", "rose", "cyan"] as const;
 
+/** Colunas de um funil novo (só as fixas) */
+export const NEW_FUNNEL_COLUMNS: { kind: string; name: string }[] = [
+  { kind: "FIRST_CONTACT", name: "Primeiro contato" },
+  { kind: "SECOND_CONTACT", name: "Interessado" },
+  { kind: "HOT_LEAD", name: "Lead quente" },
+  { kind: "SALE", name: "Vendas" },
+];
+
+export interface Funnel {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  sort: number;
+}
+
+export interface FunnelWithColumns extends Funnel {
+  columns: FunnelColumn[];
+}
+
+/** Funil do lead (o padrão quando não tem) */
+export function funnelOfLead<T extends { id: string; isDefault: boolean }>(lead: { funnelId?: string | null }, funnels: T[]) {
+  return funnels.find((f) => f.id === lead.funnelId) || funnels.find((f) => f.isDefault) || funnels[0];
+}
+
 export const DEFAULT_COLUMNS: { kind: string; name: string; aiRule?: string; color?: string }[] = [
   { kind: "FIRST_CONTACT", name: "Primeiro contato" },
   { kind: "SECOND_CONTACT", name: "Segundo contato" },
@@ -20,6 +44,7 @@ export const DEFAULT_COLUMNS: { kind: string; name: string; aiRule?: string; col
 
 export interface FunnelColumn {
   id: string;
+  funnelId?: string | null;
   name: string;
   kind: string;
   aiRule: string | null;

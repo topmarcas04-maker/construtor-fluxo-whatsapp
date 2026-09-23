@@ -7,7 +7,7 @@ import { leadDisplayName } from "@/lib/types/sdr";
 import { ExpandButton } from "@/components/layout/Fullscreen";
 import { ConversationsView } from "@/components/sdr/ConversationsView";
 import { FunnelView } from "@/components/sdr/FunnelView";
-import type { FunnelColumn } from "@/lib/funnel/common";
+import type { FunnelColumn, FunnelWithColumns } from "@/lib/funnel/common";
 
 type ViewMode = "conversas" | "funil";
 
@@ -22,7 +22,8 @@ export function LeadsScreen() {
   const [search, setSearch] = useState("");
   const [canEdit, setCanEdit] = useState(false);
   const [canManageColumns, setCanManageColumns] = useState(false);
-  const [columns, setColumns] = useState<FunnelColumn[]>([]);
+  const [funnels, setFunnels] = useState<FunnelWithColumns[]>([]);
+  const [funnelId, setFunnelId] = useState<string | null>(null);
 
   const loadLeads = useCallback(async () => {
     try {
@@ -44,9 +45,12 @@ export function LeadsScreen() {
         setCanEdit(Boolean(u?.canEditLeads));
         setCanManageColumns(Boolean(u?.canManage || u?.actingAs));
       });
-    fetch("/api/sdr/columns")
+    fetch("/api/sdr/funnels")
       .then((r) => (r.ok ? r.json() : []))
-      .then(setColumns);
+      .then((list: FunnelWithColumns[]) => {
+        setFunnels(list);
+        setFunnelId((cur) => cur || list.find((f) => f.isDefault)?.id || list[0]?.id || null);
+      });
     Promise.all([
       fetch("/api/sdr/tags").then((r) => (r.ok ? r.json() : [])),
       fetch("/api/sdr/sellers").then((r) => (r.ok ? r.json() : [])),
@@ -141,7 +145,7 @@ export function LeadsScreen() {
             selectedLeadId={selectedLeadId}
             onSelectLead={setSelectedLeadId}
             canEdit={canEdit}
-            columns={columns}
+            funnels={funnels}
           />
         ) : (
           <FunnelView
@@ -149,8 +153,13 @@ export function LeadsScreen() {
             sellers={sellers}
             onLeadUpdated={loadLeads}
             canEdit={canEdit}
-            columns={columns}
-            onColumnsChanged={setColumns}
+            funnels={funnels}
+            funnelId={funnelId}
+            onSelectFunnel={setFunnelId}
+            onFunnelsChanged={(list) => {
+              setFunnels(list);
+              setFunnelId((cur) => (list.some((f) => f.id === cur) ? cur : list.find((f) => f.isDefault)?.id || null));
+            }}
             canManageColumns={canManageColumns}
             onOpenConversation={(leadId) => {
               setSelectedLeadId(leadId);

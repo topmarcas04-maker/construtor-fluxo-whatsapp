@@ -13,7 +13,7 @@ import {
   CHANNEL_BADGE,
 } from "@/lib/types/sdr";
 import { LeadPanel } from "./LeadPanel";
-import { columnOfLead, type FunnelColumn } from "@/lib/funnel/common";
+import { columnOfLead, funnelOfLead, type FunnelWithColumns } from "@/lib/funnel/common";
 import { MessageMedia, mediaCaption } from "./MessageMedia";
 
 /** Mostra o *negrito* do WhatsApp como negrito no painel */
@@ -36,7 +36,7 @@ interface Props {
   onSelectLead: (leadId: string) => void;
   /** Pode editar o card (estágio, vendedor, dados) */
   canEdit: boolean;
-  columns: FunnelColumn[];
+  funnels: FunnelWithColumns[];
 }
 
 type Filter = "todos" | "ia" | "vendedor" | "quentes";
@@ -88,13 +88,14 @@ export function ConversationsView({
   selectedLeadId,
   onSelectLead,
   canEdit,
-  columns,
+  funnels,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("todos");
   const [channelFilter, setChannelFilter] = useState<string>("todos");
+  const [funnelFilter, setFunnelFilter] = useState<string>("todos");
   const channels = useMemo(
     () => [...new Set(leads.map((l) => l.conversation.channel || "WHATSAPP"))],
     [leads]
@@ -103,8 +104,9 @@ export function ConversationsView({
   const lastCountRef = useRef(0);
 
   const visible = useMemo(() => {
+    const byFunnel = funnelFilter === "todos" ? leads : leads.filter((l) => funnelOfLead(l, funnels)?.id === funnelFilter);
     const byChannel =
-      channelFilter === "todos" ? leads : leads.filter((l) => (l.conversation.channel || "WHATSAPP") === channelFilter);
+      channelFilter === "todos" ? byFunnel : byFunnel.filter((l) => (l.conversation.channel || "WHATSAPP") === channelFilter);
     switch (filter) {
       case "ia":
         return byChannel.filter((l) => !l.aiPaused && !l.seller);
@@ -115,7 +117,7 @@ export function ConversationsView({
       default:
         return byChannel;
     }
-  }, [leads, filter, channelFilter]);
+  }, [leads, filter, channelFilter, funnelFilter, funnels]);
 
   // Celular/tablet: uma tela por vez (lista → conversa) e a ficha abre por cima
   const [mobilePane, setMobilePane] = useState<"list" | "chat">("list");
@@ -214,6 +216,21 @@ export function ConversationsView({
             </button>
           ))}
         </div>
+        {funnels.length > 1 && (
+          <div className="flex gap-1.5 overflow-x-auto border-b border-slate-100 px-3 py-2">
+            {[{ id: "todos", name: "Todos os funis" }, ...funnels].map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setFunnelFilter(f.id)}
+                className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition ${
+                  funnelFilter === f.id ? "border-violet-500 text-violet-700" : "border-slate-200 text-slate-500 hover:border-slate-300"
+                }`}
+              >
+                {f.name}
+              </button>
+            ))}
+          </div>
+        )}
         {channels.length > 1 && (
           <div className="flex gap-1.5 overflow-x-auto border-b border-slate-100 px-3 py-2">
             {["todos", ...channels].map((c) => (
@@ -340,19 +357,35 @@ export function ConversationsView({
               >
                 <IdCard size={16} /> Ficha
               </button>
-              <select
-                value={columnOfLead(selectedLead, columns)?.id || ""}
-                disabled={!canEdit || columns.length === 0}
-                title={canEdit ? "Coluna do funil" : "Sem permissão para editar o card"}
-                onChange={(e) => patchLead({ columnId: e.target.value })}
-                className="max-w-[180px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
-              >
-                {columns.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+              {(() => {
+                const lf = funnelOfLead(selectedLead, funnels);
+                const current = lf ? columnOfLead(selectedLead, lf.columns) : undefined;
+                return (
+                  <select
+                    value={current?.id || ""}
+                    disabled={!canEdit || !lf}
+                    title={canEdit ? "Funil e coluna do card" : "Sem permissão para editar o card"}
+                    onChange={(e) => patchLead({ columnId: e.target.value })}
+                    className="max-w-[200px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+                  >
+                    {funnels.length > 1
+                      ? funnels.map((f) => (
+                          <optgroup key={f.id} label={f.name}>
+                            {f.columns.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {f.id === lf?.id ? c.name : `${f.name} → ${c.name}`}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))
+                      : (lf?.columns || []).map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                  </select>
+                );
+              })()}
               {selectedLead.aiPaused ? (
                 <button
                   onClick={() => patchLead({ aiPaused: false })}

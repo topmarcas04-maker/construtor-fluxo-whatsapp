@@ -4,13 +4,15 @@ import { useState } from "react";
 import { Bot, MessageSquare, MapPin, UserRound, Package, Pencil, Plus, ChevronLeft, ChevronRight, Trash2, X, Sparkles } from "lucide-react";
 import type { Lead, Seller } from "@/lib/types/sdr";
 import { leadDisplayName, TAG_DOT_CLASSES } from "@/lib/types/sdr";
-import { columnOfLead, COLUMN_COLORS, type FunnelColumn } from "@/lib/funnel/common";
+import { columnOfLead, funnelOfLead, COLUMN_COLORS, type FunnelColumn, type FunnelWithColumns } from "@/lib/funnel/common";
 
 interface Props {
   leads: Lead[];
   sellers: Seller[];
-  columns: FunnelColumn[];
-  onColumnsChanged: (cols: FunnelColumn[]) => void;
+  funnels: FunnelWithColumns[];
+  funnelId: string | null;
+  onSelectFunnel: (id: string) => void;
+  onFunnelsChanged: (list: FunnelWithColumns[]) => void;
   onLeadUpdated: () => void;
   onOpenConversation: (leadId: string) => void;
   canEdit: boolean;
@@ -62,10 +64,12 @@ async function api(url: string, method: string, body?: unknown) {
 
 function ColumnEditor({
   column,
+  funnelId,
   onClose,
   onSaved,
 }: {
   column: FunnelColumn | null;
+  funnelId: string | null;
   onClose: () => void;
   onSaved: (cols: FunnelColumn[]) => void;
 }) {
@@ -82,7 +86,7 @@ function ColumnEditor({
     try {
       const body: Record<string, unknown> = { name, color };
       if (!column || column.kind !== "SALE") body.aiRule = isCustom ? aiRule : undefined;
-      onSaved(column ? await api(`/api/sdr/columns/${column.id}`, "PATCH", body) : await api("/api/sdr/columns", "POST", body));
+      onSaved(column ? await api(`/api/sdr/columns/${column.id}`, "PATCH", body) : await api("/api/sdr/columns", "POST", { ...body, funnelId }));
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -174,11 +178,93 @@ function currency(value: number) {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+/** Criar / renomear / apagar funil */
+function FunnelEditor({
+  funnel,
+  onClose,
+  onSaved,
+}: {
+  funnel: FunnelWithColumns | null;
+  onClose: () => void;
+  onSaved: (list: FunnelWithColumns[]) => void;
+}) {
+  const [name, setName] = useState(funnel?.name || "");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      onSaved(funnel ? await api(`/api/sdr/funnels/${funnel.id}`, "PATCH", { name }) : await api("/api/sdr/funnels", "POST", { name }));
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const remove = async () => {
+    if (!funnel || !confirm(`Apagar o funil "${funnel.name}"? Os cards dele voltam para o funil principal, na mesma etapa.`)) return;
+    try {
+      onSaved(await api(`/api/sdr/funnels/${funnel.id}`, "DELETE"));
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <h3 className="font-semibold text-slate-900">{funnel ? "Editar funil" : "Novo funil"}</h3>
+          <button onClick={onClose} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100" aria-label="Fechar">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="space-y-3 px-5 py-4">
+          <label className="block">
+            <span className="text-sm font-medium text-slate-700">Nome</span>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && name.trim() && save()}
+              placeholder="Ex.: Scooters, Planos, Serviços"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+            />
+          </label>
+          {!funnel && (
+            <p className="text-xs text-slate-500">
+              O funil novo começa com as etapas Primeiro contato, Interessado, Lead quente e Vendas. Depois você cria as colunas que quiser.
+              Para os leads entrarem nele sozinhos, ligue a categoria de produtos a este funil em Produtos.
+            </p>
+          )}
+          {error && <p className="text-sm text-red-600">{error}</p>}
+        </div>
+        <div className="flex items-center justify-between border-t border-slate-100 px-5 py-4">
+          {funnel && !funnel.isDefault ? (
+            <button onClick={remove} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50">
+              <Trash2 size={15} /> Apagar
+            </button>
+          ) : (
+            <span />
+          )}
+          <button onClick={save} disabled={saving || !name.trim()} className="btn-primary rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-50">
+            {saving ? "Salvando..." : "Salvar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function FunnelView({
-  leads,
+  leads: allLeads,
   sellers,
-  columns,
-  onColumnsChanged,
+  funnels,
+  funnelId,
+  onSelectFunnel,
+  onFunnelsChanged,
   onLeadUpdated,
   onOpenConversation,
   canEdit,
@@ -186,6 +272,12 @@ export function FunnelView({
 }: Props) {
   const [dragOver, setDragOver] = useState<string | null>(null);
   const [editing, setEditing] = useState<FunnelColumn | "new" | null>(null);
+  const [editingFunnel, setEditingFunnel] = useState<FunnelWithColumns | "new" | null>(null);
+  const current = funnels.find((f) => f.id === funnelId) || funnels.find((f) => f.isDefault) || funnels[0];
+  const columns = current?.columns || [];
+  const leads = allLeads.filter((l) => funnelOfLead(l, funnels)?.id === current?.id);
+  const onColumnsChanged = (cols: FunnelColumn[]) =>
+    onFunnelsChanged(funnels.map((f) => (f.id === current?.id ? { ...f, columns: cols } : f)));
 
   const move = async (index: number, dir: -1 | 1) => {
     const ids = columns.map((c) => c.id);
@@ -193,7 +285,7 @@ export function FunnelView({
     if (j < 0 || j >= ids.length) return;
     [ids[index], ids[j]] = [ids[j], ids[index]];
     try {
-      onColumnsChanged(await api("/api/sdr/columns/reorder", "POST", { ids }));
+      onColumnsChanged(await api("/api/sdr/columns/reorder", "POST", { ids, funnelId: current?.id }));
     } catch {}
   };
 
@@ -206,8 +298,40 @@ export function FunnelView({
     onLeadUpdated();
   };
 
+  const countIn = (f: FunnelWithColumns) => allLeads.filter((l) => funnelOfLead(l, funnels)?.id === f.id).length;
+
   return (
-    <div className="flex h-full gap-4 overflow-x-auto bg-slate-50 p-3 md:p-6">
+    <div className="flex h-full flex-col bg-slate-50">
+      {(funnels.length > 1 || canManageColumns) && (
+        <div className="flex items-center gap-2 overflow-x-auto border-b border-slate-200 bg-white px-3 py-2 md:px-6">
+          {funnels.map((f) => (
+            <span
+              key={f.id}
+              className={`group/f inline-flex shrink-0 items-center rounded-full border text-sm font-medium transition ${
+                f.id === current?.id ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <button onClick={() => onSelectFunnel(f.id)} className="py-1.5 pl-3.5 pr-2">
+                {f.name} <span className="opacity-70">({countIn(f)})</span>
+              </button>
+              {canManageColumns && (
+                <button onClick={() => setEditingFunnel(f)} className="rounded-full py-1.5 pr-2.5 opacity-60 hover:opacity-100" title="Renomear ou apagar funil">
+                  <Pencil size={12} />
+                </button>
+              )}
+            </span>
+          ))}
+          {canManageColumns && (
+            <button
+              onClick={() => setEditingFunnel("new")}
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-slate-300 px-3.5 py-1.5 text-sm font-medium text-slate-500 hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              <Plus size={14} /> Novo funil
+            </button>
+          )}
+        </div>
+      )}
+    <div className="flex min-h-0 flex-1 gap-4 overflow-x-auto p-3 md:p-6">
       {columns.map((column, index) => {
         const columnLeads = leads.filter((l) => columnOfLead(l, columns)?.id === column.id);
         const total = columnLeads.reduce((sum, l) => sum + (l.dealValue || 0), 0);
@@ -374,13 +498,26 @@ export function FunnelView({
           <Plus size={22} /> Nova coluna
         </button>
       )}
+      {editingFunnel && (
+        <FunnelEditor
+          funnel={editingFunnel === "new" ? null : editingFunnel}
+          onClose={() => setEditingFunnel(null)}
+          onSaved={(list) => {
+            const added = editingFunnel === "new" ? list.find((f) => !funnels.some((o) => o.id === f.id)) : null;
+            onFunnelsChanged(list);
+            if (added) onSelectFunnel(added.id);
+          }}
+        />
+      )}
       {editing && (
         <ColumnEditor
+          funnelId={current?.id || null}
           column={editing === "new" ? null : editing}
           onClose={() => setEditing(null)}
           onSaved={onColumnsChanged}
         />
       )}
+    </div>
     </div>
   );
 }

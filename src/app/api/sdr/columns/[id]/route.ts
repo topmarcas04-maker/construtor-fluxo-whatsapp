@@ -26,7 +26,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   // A coluna "Vendas" não recebe leads pela IA
   if (col.kind === "SALE") delete parsed.values.aiRule;
   if (Object.keys(parsed.values).length) await db.update(funnelColumns).set(parsed.values).where(eq(funnelColumns.id, id));
-  return NextResponse.json(await ensureColumns(db, auth.accountId));
+  return NextResponse.json(await ensureColumns(db, auth.accountId, col.funnelId));
 }
 
 /** DELETE — só colunas criadas pelo usuário; os leads voltam para a coluna do estágio deles */
@@ -43,5 +43,5 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     return NextResponse.json({ error: "Esta coluna é fixa do funil: pode renomear, mas não apagar." }, { status: 400 });
   }
   await db.delete(funnelColumns).where(eq(funnelColumns.id, id));
-  return NextResponse.json(await ensureColumns(db, auth.accountId));
+  return NextResponse.json(await ensureColumns(db, auth.accountId, col.funnelId));
 }

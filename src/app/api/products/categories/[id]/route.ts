@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db/client";
-import { productCategories } from "@/db/schema";
+import { productCategories, funnels } from "@/db/schema";
 import { requireUser } from "@/lib/auth/server";
 import { actionRefs } from "@/lib/actions/validate";
 
@@ -15,6 +15,13 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   const { id } = await ctx.params;
   const body = await req.json();
   const set: Record<string, unknown> = actionRefs(body);
+  if (body.funnelId !== undefined) {
+    const f = body.funnelId
+      ? await db.query.funnels.findFirst({ where: and(eq(funnels.id, String(body.funnelId)), eq(funnels.accountId, auth.accountId)) })
+      : null;
+    if (body.funnelId && !f) return NextResponse.json({ error: "Funil inválido" }, { status: 400 });
+    set.funnelId = f && !f.isDefault ? f.id : null;
+  }
   if (body.name !== undefined) {
     const n = String(body.name || "").trim();
     if (!n) return NextResponse.json({ error: "Informe o nome da categoria" }, { status: 400 });

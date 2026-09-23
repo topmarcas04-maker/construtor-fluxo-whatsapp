@@ -141,6 +141,8 @@ export function OverviewScreen() {
   const [custom, setCustom] = useState(() => ({ from: addDays(spToday(), -29), to: spToday() }));
   const [scope, setScope] = useState("all");
   const [sellerId, setSellerId] = useState("");
+  const [funnelId, setFunnelId] = useState("");
+  const [funnelList, setFunnelList] = useState<{ id: string; name: string }[]>([]);
   const [data, setData] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -156,6 +158,9 @@ export function OverviewScreen() {
             .then((d) => setTree(d.accounts || []));
         }
       });
+    fetch("/api/sdr/funnels")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((l) => setFunnelList(Array.isArray(l) ? l : []));
     fetch("/api/sdr/sellers")
       .then((r) => (r.ok ? r.json() : []))
       .then(setSellers);
@@ -168,12 +173,13 @@ export function OverviewScreen() {
     setError(null);
     const params = new URLSearchParams({ from: range.from.toISOString(), to: range.to.toISOString(), scope });
     if (sellerId) params.set("sellerId", sellerId);
+    if (funnelId) params.set("funnel", funnelId);
     const res = await fetch(`/api/dashboard/overview?${params}`, { cache: "no-store" });
     const d = await res.json();
     if (!res.ok) setError(d.error || "Não foi possível carregar");
     else setData(d);
     setLoading(false);
-  }, [range, scope, sellerId]);
+  }, [range, scope, sellerId, funnelId]);
 
   useEffect(() => {
     load();
@@ -255,6 +261,20 @@ export function OverviewScreen() {
               {sellers.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {funnelList.length > 1 && (scope === "all" || scope === me?.account.id) && (
+            <select
+              value={funnelId}
+              onChange={(e) => setFunnelId(e.target.value)}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm outline-none"
+            >
+              <option value="">Todos os funis</option>
+              {funnelList.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
                 </option>
               ))}
             </select>

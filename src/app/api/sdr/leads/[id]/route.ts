@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
-import { leads, leadTags, conversations, sellers, tags, funnelColumns, products } from "@/db/schema";
+import { leads, leadTags, conversations, sellers, tags, funnelColumns, products, funnels } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { requireUser, sellerScope } from "@/lib/auth/server";
 
@@ -53,6 +53,17 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       set.closed = body.stage === "SALE";
       set.closedAt = body.stage === "SALE" ? new Date() : null;
     }
+    // Trocar de funil: o card entra na coluna da etapa em que está
+    if (body.funnelId !== undefined && body.columnId === undefined) {
+      const f = body.funnelId
+        ? await db.query.funnels.findFirst({
+            where: and(eq(funnels.id, String(body.funnelId)), eq(funnels.accountId, auth.accountId)),
+          })
+        : null;
+      if (body.funnelId && !f) return NextResponse.json({ error: "Funil inválido" }, { status: 400 });
+      set.funnelId = f && !f.isDefault ? f.id : null;
+      set.columnId = null;
+    }
     // Mover para uma coluna do funil: coluna fixa muda o estágio; coluna personalizada guarda o columnId
     if (body.columnId !== undefined) {
       const col = body.columnId
@@ -61,6 +72,11 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
           })
         : null;
       if (body.columnId && !col) return NextResponse.json({ error: "Coluna inválida" }, { status: 400 });
+      // A coluna escolhida define o funil do card
+      if (col?.funnelId) {
+        const f = await db.query.funnels.findFirst({ where: eq(funnels.id, col.funnelId) });
+        set.funnelId = f && !f.isDefault ? f.id : null;
+      }
       if (!col || col.kind !== "CUSTOM") {
         set.columnId = null;
         if (col && STAGES.includes(col.kind)) {

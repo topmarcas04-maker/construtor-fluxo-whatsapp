@@ -26,6 +26,8 @@ export interface Lead {
   stage: string;
   /** Coluna personalizada do funil (vazio = coluna do estágio) */
   columnId?: string | null;
+  /** Funil do card (vazio = funil principal) */
+  funnelId?: string | null;
   /** Última ação feita pela IA (ex.: "Reservar") */
   lastAction?: string | null;
   lastActionAt?: string | null;

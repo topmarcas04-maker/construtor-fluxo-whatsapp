@@ -45,6 +45,7 @@ export async function GET() {
         cardName: lead.cardName,
         stage: lead.stage,
         columnId: lead.columnId,
+        funnelId: lead.funnelId,
         product: lead.product || null,
         lastAction: lead.lastAction,
         lastActionAt: lead.lastActionAt,

@@ -71,7 +71,7 @@ import {
   kindDetails,
   KIND_LABEL,
 } from "../src/lib/products/format";
-import { ensureColumns } from "../src/lib/funnel/shared";
+import { ensureColumns, ensureFunnels } from "../src/lib/funnel/shared";
 import { ensureActions, type AiAction } from "../src/lib/actions/shared";
 import { normalizeStage } from "../src/lib/funnel/common";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
@@ -1152,9 +1152,13 @@ async function runAi(accountId: string, conversationId: string) {
   // Ações (procedimentos) ativas da conta
   const actions = (await ensureActions(db, accountId)).filter((a) => a.active);
   const catalog = settings.catalogEnabled ? await loadCatalog(accountId, actions) : [];
-  // Colunas do funil com regra para a IA (ex.: "Ligação")
-  const funnel = await ensureColumns(db, accountId);
-  const ruleColumns = funnel.filter((c) => c.kind === "CUSTOM" && c.aiRule?.trim());
+  // Colunas com regra para a IA (ex.: "Ligação") de todos os funis; a do funil do lead tem preferência
+  const funnelList = await ensureFunnels(db, accountId);
+  const allColumns = (await Promise.all(funnelList.map((f) => ensureColumns(db, accountId, f.id)))).flat();
+  const leadFunnelId = lead.funnelId || funnelList.find((f) => f.isDefault)?.id || null;
+  const ruleColumns = allColumns
+    .filter((c) => c.kind === "CUSTOM" && c.aiRule?.trim())
+    .filter((c, _i, arr) => c.funnelId === leadFunnelId || !arr.some((o) => o.funnelId === leadFunnelId && o.name.trim().toLowerCase() === c.name.trim().toLowerCase()));
 
   const decision = await runSdrAgent(
     {
@@ -1223,12 +1227,12 @@ async function runAi(accountId: string, conversationId: string) {
     decision.appointment.subject = (interestName && !base.includes(interestName) ? `${base} – ${interestName}` : base).slice(0, 200);
   }
 
-  await applyDecision(accountId, lead.id, conversationId, decision, allTags, ruleColumns, catalog);
+  await applyDecision(accountId, lead.id, conversationId, decision, allTags, ruleColumns, catalog, funnelList);
   if (decision.appointment && settings.schedulingEnabled) {
     const sched = action?.kind === "SCHEDULE" ? action : null;
     await saveAiAppointment(accountId, lead.id, decision, settings, currentAppt?.id || null, sched?.appointmentMinutes || null);
   }
-  if (action) await recordAction(lead.id, action);
+  if (action) await recordAction(lead.id, action, allColumns, funnelList);
 
   const parts = decision.reply
     .split(/\n\s*\n/)
@@ -1303,11 +1307,21 @@ function productActionNames(
 }
 
 /** Registra no card a ação feita pela IA (e move para a coluna da ação, se tiver) */
-async function recordAction(leadId: string, action: AiAction) {
+async function recordAction(
+  leadId: string,
+  action: AiAction,
+  columns: { id: string; funnelId?: string | null }[],
+  funnelList: { id: string; isDefault: boolean }[]
+) {
   const current = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
   if (!current) return;
   const set: Record<string, unknown> = { lastAction: action.name, lastActionAt: new Date(), updatedAt: new Date() };
-  if (action.columnId && current.stage !== "SALE") set.columnId = action.columnId;
+  if (action.columnId && current.stage !== "SALE") {
+    set.columnId = action.columnId;
+    // A coluna da ação define o funil do card
+    const col = columns.find((c) => c.id === action.columnId);
+    if (col?.funnelId) set.funnelId = funnelList.find((f) => f.id === col.funnelId)?.isDefault ? null : col.funnelId;
+  }
   // Reserva, ligação e agenda deixam o lead quente
   const order = ["FIRST_CONTACT", "SECOND_CONTACT", "HOT_LEAD", "SALE"];
   if (["RESERVE", "CALL", "SCHEDULE", "HANDOFF"].includes(action.kind) && order.indexOf(current.stage) < 2) set.stage = "HOT_LEAD";
@@ -1336,6 +1350,7 @@ async function loadCatalog(accountId: string, actions: AiAction[] = []) {
       actionIds: products.actionIds,
       primaryActionId: products.primaryActionId,
       catActionIds: productCategories.actionIds,
+      catFunnelId: productCategories.funnelId,
       catPrimaryActionId: productCategories.primaryActionId,
       category: productCategories.name,
     })
@@ -1361,6 +1376,7 @@ async function loadCatalog(accountId: string, actions: AiAction[] = []) {
   const withPhoto = new Set(activePhotos.map((r) => r.productId));
   return rows.map((r, i) => ({
     id: r.id,
+    funnelId: r.catFunnelId,
     ai: {
       code: `P${i + 1}`,
       name: r.name,
@@ -1440,8 +1456,9 @@ async function applyDecision(
   conversationId: string,
   d: AgentDecision,
   allTags: { id: string; name: string }[],
-  ruleColumns: { id: string; name: string }[] = [],
-  catalog: { id: string; ai: { code: string; name: string } }[] = []
+  ruleColumns: { id: string; name: string; funnelId?: string | null }[] = [],
+  catalog: { id: string; funnelId?: string | null; ai: { code: string; name: string } }[] = [],
+  funnelList: { id: string; isDefault: boolean }[] = []
 ) {
   const current = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
   if (!current) return;
@@ -1456,7 +1473,9 @@ async function applyDecision(
     ...(d.columnName && normalizeStage(current.stage) !== "SALE"
       ? (() => {
           const target = ruleColumns.find((c) => c.name.trim().toLowerCase() === d.columnName!.trim().toLowerCase());
-          return target ? { columnId: target.id } : {};
+          if (!target) return {};
+          const f = funnelList.find((x) => x.id === (target as { funnelId?: string | null }).funnelId);
+          return { columnId: target.id, funnelId: f && !f.isDefault ? f.id : null };
         })()
       : {}),
     score: d.score,
@@ -1470,6 +1489,14 @@ async function applyDecision(
   if (interest) {
     set.productId = interest.id;
     if (!d.interest) set.interest = interest.ai.name.slice(0, 255);
+    // A categoria do produto leva o card para o funil dela (ex.: "Planos")
+    if (interest.funnelId && interest.funnelId !== current.funnelId && current.stage !== "SALE" && set.columnId === undefined) {
+      const f = funnelList.find((x) => x.id === interest.funnelId);
+      if (f) {
+        set.funnelId = f.isDefault ? null : f.id;
+        set.columnId = null;
+      }
+    }
   }
   if (d.interest) set.interest = d.interest;
   if (d.saleType !== "ANY") set.saleType = d.saleType;

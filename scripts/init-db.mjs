@@ -484,6 +484,20 @@ CREATE TABLE IF NOT EXISTS meta_pending (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Vários funis
+CREATE TABLE IF NOT EXISTS funnels (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name varchar(80) NOT NULL,
+  is_default boolean NOT NULL DEFAULT false,
+  sort integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS funnels_account_idx ON funnels (account_id);
+ALTER TABLE funnel_columns ADD COLUMN IF NOT EXISTS funnel_id uuid REFERENCES funnels(id) ON DELETE CASCADE;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS funnel_id uuid REFERENCES funnels(id) ON DELETE SET NULL;
+ALTER TABLE product_categories ADD COLUMN IF NOT EXISTS funnel_id uuid;
+
 -- Ações da IA
 CREATE TABLE IF NOT EXISTS ai_actions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
