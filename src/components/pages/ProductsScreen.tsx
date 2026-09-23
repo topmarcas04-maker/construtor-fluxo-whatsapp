@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Search, Package, ImagePlus, X, Pencil, Trash2, Bot, Tag, Check, Eye, EyeOff, Truck, Clock, CreditCard } from "lucide-react";
+import { Plus, Search, Package, ImagePlus, X, Pencil, Trash2, Bot, Tag, Check, Eye, EyeOff, Truck, Clock, CreditCard, Star, Zap } from "lucide-react";
+import type { AiAction } from "@/lib/actions/common";
 import {
   installmentRows,
   installmentText,
@@ -19,6 +20,65 @@ export interface Category {
   id: string;
   name: string;
   sort: number;
+  actionIds?: string[];
+  primaryActionId?: string | null;
+}
+
+/** Escolha das ações da IA (clique liga/desliga; estrela = principal) */
+function ActionPicker({
+  actions,
+  ids,
+  primary,
+  onChange,
+}: {
+  actions: AiAction[];
+  ids: string[];
+  primary: string | null;
+  onChange: (ids: string[], primary: string | null) => void;
+}) {
+  if (!actions.length) {
+    return <p className="text-xs text-slate-500">Nenhuma ação cadastrada. Crie em Configurações → Ações da IA.</p>;
+  }
+  return (
+    <div className="flex flex-wrap gap-2">
+      {actions.map((a) => {
+        const on = ids.includes(a.id);
+        const isPrimary = on && primary === a.id;
+        return (
+          <span
+            key={a.id}
+            className={`inline-flex items-center overflow-hidden rounded-full border text-sm ${
+              on ? "border-[var(--accent)] bg-[var(--accent)]/5 text-[var(--accent)]" : "border-slate-200 text-slate-600"
+            } ${a.active ? "" : "opacity-50"}`}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                const next = on ? ids.filter((x) => x !== a.id) : [...ids, a.id];
+                const p = next.includes(primary || "") ? primary : next[0] || null;
+                onChange(next, p);
+              }}
+              className="px-3 py-1.5 font-medium"
+              title={a.active ? undefined : "Ação desligada em Configurações"}
+            >
+              {on && <Check size={13} className="mr-1 inline" />}
+              {a.name}
+            </button>
+            {on && (
+              <button
+                type="button"
+                onClick={() => onChange(ids, a.id)}
+                className={`border-l border-[var(--accent)]/30 px-2 py-1.5 ${isPrimary ? "text-amber-500" : "text-slate-300 hover:text-amber-400"}`}
+                title={isPrimary ? "Ação principal (a IA oferece primeiro)" : "Tornar principal"}
+              >
+                <Star size={14} fill={isPrimary ? "currentColor" : "none"} />
+              </button>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 export interface Product {
@@ -39,6 +99,8 @@ export interface Product {
   availability?: string;
   leadTimeDays?: number | null;
   installments?: Installment[];
+  actionIds?: string[];
+  primaryActionId?: string | null;
   images: {
     id: string;
     url: string;
@@ -128,6 +190,8 @@ async function compress(file: File): Promise<string> {
 }
 
 type Form = {
+  actionIds: string[];
+  primaryActionId: string | null;
   kind: "PHYSICAL" | "PLAN" | "SERVICE";
   billingPeriod: "MONTH" | "YEAR";
   setupFee: string;
@@ -187,6 +251,8 @@ export function ProductsScreen() {
   const [catalogAi, setCatalogAi] = useState<boolean | null>(null);
   /** Pode cadastrar/editar (senão, só visualiza) */
   const [canEdit, setCanEdit] = useState(false);
+  const [actions, setActions] = useState<AiAction[]>([]);
+  const [catActions, setCatActions] = useState<{ cat: Category; ids: string[]; primary: string | null } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -198,6 +264,9 @@ export function ProductsScreen() {
     fetch("/api/products/settings")
       .then((r) => (r.ok ? r.json() : null))
       .then((s) => s && setCatalogAi(s.catalogEnabled));
+    fetch("/api/sdr/actions")
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setActions);
     fetch("/api/auth/me")
       .then((r) => (r.ok ? r.json() : null))
       .then((u) => setCanEdit(Boolean(u?.canEditProducts)));
@@ -216,6 +285,8 @@ export function ProductsScreen() {
 
   const openNew = () => {
     setForm({
+      actionIds: [],
+      primaryActionId: null,
       kind: "PHYSICAL",
       billingPeriod: "MONTH",
       setupFee: "",
@@ -240,6 +311,8 @@ export function ProductsScreen() {
   const openEdit = (p: Product) => {
     setViewing(null);
     setForm({
+      actionIds: p.actionIds || [],
+      primaryActionId: p.primaryActionId || null,
       kind: p.kind === "PLAN" || p.kind === "SERVICE" ? p.kind : "PHYSICAL",
       billingPeriod: p.billingPeriod === "YEAR" ? "YEAR" : "MONTH",
       setupFee: toInput(p.setupFee ?? null),
@@ -300,6 +373,8 @@ export function ProductsScreen() {
           code: form.code,
           description: form.description,
           active: form.active,
+          actionIds: form.actionIds,
+          primaryActionId: form.primaryActionId,
           kind: form.kind,
           billingPeriod: form.billingPeriod,
           setupFee: form.kind === "PLAN" ? form.setupFee : null,
@@ -508,6 +583,15 @@ export function ProductsScreen() {
                 <>
                   <button onClick={() => setEditCat({ id: selectedCat.id, name: selectedCat.name })} className="font-medium text-[var(--accent)] hover:underline">Renomear</button>
                   <button onClick={() => deleteCategory(selectedCat)} className="font-medium text-red-500 hover:underline">Excluir</button>
+                  <button
+                    onClick={() =>
+                      setCatActions({ cat: selectedCat, ids: selectedCat.actionIds || [], primary: selectedCat.primaryActionId || null })
+                    }
+                    className="inline-flex items-center gap-1 font-medium text-violet-600 hover:underline"
+                  >
+                    <Zap size={13} /> Ações da IA
+                    {selectedCat.actionIds?.length ? ` (${selectedCat.actionIds.length})` : ""}
+                  </button>
                 </>
               )}
             </>
@@ -641,7 +725,23 @@ export function ProductsScreen() {
           )
         }
       >
-        {viewing && <ProductDetail p={viewing} category={catName(viewing.categoryId)} />}
+        {viewing && (
+          <ProductDetail
+            p={viewing}
+            category={catName(viewing.categoryId)}
+            actionNames={(() => {
+              const own = (viewing.actionIds || []).length > 0;
+              const cat = data?.categories.find((c) => c.id === viewing.categoryId);
+              const ids = own ? viewing.actionIds! : cat?.actionIds || [];
+              const primary = own ? viewing.primaryActionId : cat?.primaryActionId;
+              return ids
+                .map((id) => actions.find((a) => a.id === id))
+                .filter((a): a is AiAction => Boolean(a))
+                .sort((a, b) => (a.id === primary ? -1 : b.id === primary ? 1 : 0))
+                .map((a) => a.name + (a.id === primary ? " ★" : "") + (own ? "" : " (da categoria)"));
+            })()}
+          />
+        )}
       </Modal>
 
       {/* Editar/criar */}
@@ -934,6 +1034,24 @@ export function ProductsScreen() {
               </div>
             )}
 
+            <div className="rounded-xl border border-violet-100 bg-violet-50/40 p-4">
+              <p className="mb-1 flex items-center gap-2 text-sm font-semibold text-slate-800">
+                <Zap size={15} className="text-violet-600" /> Ações da IA para este {form.kind === "PLAN" ? "plano" : form.kind === "SERVICE" ? "serviço" : "produto"}
+              </p>
+              <p className="mb-3 text-xs text-slate-500">
+                O que a IA conduz quando o cliente se interessa: clique para marcar e use a ★ para a principal (oferecida primeiro).
+                {form.categoryId && data?.categories.find((c) => c.id === form.categoryId)?.actionIds?.length
+                  ? " Deixe vazio para usar as ações da categoria."
+                  : " Deixe vazio para a IA seguir as instruções gerais."}
+              </p>
+              <ActionPicker
+                actions={actions}
+                ids={form.actionIds}
+                primary={form.primaryActionId}
+                onChange={(ids, primary) => setForm({ ...form, actionIds: ids, primaryActionId: primary })}
+              />
+            </div>
+
             <Field label="Descrição" hint="Tudo que a IA pode contar ao cliente: características, medidas, autonomia, garantia, condições de pagamento...">
               <Textarea rows={6} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
             </Field>
@@ -942,11 +1060,53 @@ export function ProductsScreen() {
           </div>
         )}
       </Modal>
+
+      {/* Ações da categoria */}
+      <Modal
+        title={catActions ? `Ações da IA — ${catActions.cat.name}` : ""}
+        open={catActions !== null}
+        onClose={() => setCatActions(null)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setCatActions(null)}>Cancelar</Button>
+            <Button
+              onClick={async () => {
+                if (!catActions) return;
+                const r = await fetch(`/api/products/categories/${catActions.cat.id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ actionIds: catActions.ids, primaryActionId: catActions.primary }),
+                });
+                if (r.ok) {
+                  setCatActions(null);
+                  load();
+                } else setError((await r.json().catch(() => ({}))).error || "Falha ao salvar");
+              }}
+            >
+              Salvar
+            </Button>
+          </>
+        }
+      >
+        {catActions && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-600">
+              Valem para todos os produtos da categoria <b>{catActions.cat.name}</b> que não tiverem ações próprias.
+            </p>
+            <ActionPicker
+              actions={actions}
+              ids={catActions.ids}
+              primary={catActions.primary}
+              onChange={(ids, primary) => setCatActions({ ...catActions, ids, primary })}
+            />
+          </div>
+        )}
+      </Modal>
     </Page>
   );
 }
 
-export function ProductDetail({ p, category }: { p: Product; category?: string | null }) {
+export function ProductDetail({ p, category, actionNames }: { p: Product; category?: string | null; actionNames?: string[] }) {
   const [idx, setIdx] = useState(0);
   const img = p.images[idx];
   return (
@@ -998,6 +1158,18 @@ export function ProductDetail({ p, category }: { p: Product; category?: string |
         )}
         {(!p.kind || p.kind === "PHYSICAL") && <DeliveryBadge a={effectiveAvailability(p, img)} />}
         {img?.label && img.active === false && <Badge tone="red">Cor desligada</Badge>}
+        {actionNames && actionNames.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="flex items-center gap-1 text-xs font-semibold text-violet-700">
+              <Zap size={12} /> Ações da IA:
+            </span>
+            {actionNames.map((n) => (
+              <span key={n} className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700">
+                {n}
+              </span>
+            ))}
+          </div>
+        )}
         <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{p.description || "Sem descrição."}</p>
       </div>
     </div>

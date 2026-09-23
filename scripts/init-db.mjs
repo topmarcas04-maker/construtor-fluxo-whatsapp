@@ -484,6 +484,29 @@ CREATE TABLE IF NOT EXISTS meta_pending (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Ações da IA
+CREATE TABLE IF NOT EXISTS ai_actions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name varchar(80) NOT NULL,
+  kind varchar(12) NOT NULL DEFAULT 'INFO',
+  instructions text,
+  appointment_title varchar(120),
+  appointment_minutes integer,
+  column_id uuid REFERENCES funnel_columns(id) ON DELETE SET NULL,
+  handoff boolean NOT NULL DEFAULT false,
+  active boolean NOT NULL DEFAULT true,
+  sort integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ai_actions_account_idx ON ai_actions (account_id);
+ALTER TABLE product_categories ADD COLUMN IF NOT EXISTS action_ids jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE product_categories ADD COLUMN IF NOT EXISTS primary_action_id uuid;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS action_ids jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS primary_action_id uuid;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_action varchar(120);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_action_at timestamptz;
+
 -- Migrações que rodam uma única vez
 CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());
 DO $$ BEGIN

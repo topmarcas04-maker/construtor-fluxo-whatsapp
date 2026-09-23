@@ -1,3 +1,5 @@
+import { actionRefs } from "../actions/validate";
+
 /** Valida os campos do produto vindos do formulário */
 export function productValues(body: Record<string, unknown>, partial: boolean) {
   const v: Record<string, unknown> = {};
@@ -58,6 +60,7 @@ export function productValues(body: Record<string, unknown>, partial: boolean) {
     }
     v.installments = out.sort((a, b) => a.n - b.n);
   }
+  Object.assign(v, actionRefs(body));
   return { values: v } as const;
 }
 

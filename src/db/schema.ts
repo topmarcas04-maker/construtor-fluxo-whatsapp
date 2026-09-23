@@ -317,6 +317,9 @@ export const leads = pgTable(
     score: integer("score"),
     /** O que o lead procura (modelo, uso, quantidade…) */
     interest: varchar("interest", { length: 255 }),
+    /** Última ação feita pela IA (ex.: "Reservar") e quando */
+    lastAction: varchar("last_action", { length: 120 }),
+    lastActionAt: timestamp("last_action_at", { withTimezone: true }),
     /** Produto de interesse (a IA identifica pela conversa; a equipe pode trocar) */
     productId: uuid("product_id").references(() => products.id, { onDelete: "set null" }),
     saleType: saleTypeEnum("sale_type").notNull().default("ANY"),
@@ -533,6 +536,39 @@ export const metaPending = pgTable("meta_pending", {
 });
 
 // ============================================================================
+// AÇÕES DA IA (procedimentos por produto/categoria)
+// ============================================================================
+
+/**
+ * O que a IA faz quando o cliente se interessa por um produto.
+ * kind: SCHEDULE (marca na agenda) | CALL (pede ligação) | RESERVE (reserva) | HANDOFF (passa ao vendedor) | INFO (só explica)
+ */
+export const aiActions = pgTable(
+  "ai_actions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 80 }).notNull(),
+    kind: varchar("kind", { length: 12 }).notNull().default("INFO"),
+    /** Como a IA conduz: o que explicar, o que perguntar */
+    instructions: text("instructions"),
+    /** SCHEDULE: título na agenda e duração */
+    appointmentTitle: varchar("appointment_title", { length: 120 }),
+    appointmentMinutes: integer("appointment_minutes"),
+    /** Coluna do funil para onde vai o card ao concluir (opcional) */
+    columnId: uuid("column_id").references(() => funnelColumns.id, { onDelete: "set null" }),
+    /** Passar para um vendedor ao concluir */
+    handoff: boolean("handoff").notNull().default(false),
+    active: boolean("active").notNull().default(true),
+    sort: integer("sort").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("ai_actions_account_idx").on(table.accountId)]
+);
+
+// ============================================================================
 // FUNIL (COLUNAS PERSONALIZADAS)
 // ============================================================================
 
@@ -571,6 +607,10 @@ export const productCategories = pgTable(
       .references(() => accounts.id, { onDelete: "cascade" }),
     name: varchar("name", { length: 120 }).notNull(),
     sort: integer("sort").notNull().default(0),
+    /** Ações da IA permitidas para os produtos da categoria (ids) */
+    actionIds: jsonb("action_ids").$type<string[]>().notNull().default([]),
+    /** Ação principal (a IA oferece primeiro) */
+    primaryActionId: uuid("primary_action_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("product_categories_account_idx").on(table.accountId)]
@@ -608,6 +648,9 @@ export const products = pgTable(
     availability: varchar("availability", { length: 10 }).notNull().default("READY"),
     /** Prazo de entrega em dias (pedido/reserva) */
     leadTimeDays: integer("lead_time_days"),
+    /** Ações da IA deste produto (vazio = as da categoria) */
+    actionIds: jsonb("action_ids").$type<string[]>().notNull().default([]),
+    primaryActionId: uuid("primary_action_id"),
     /** Preços a prazo no cartão: até 3 opções [{ n: 12, total: 14990 }] */
     installments: jsonb("installments").$type<{ n: number; total: number | null }[]>().notNull().default([]),
     sort: integer("sort").notNull().default(0),

@@ -46,6 +46,8 @@ export async function GET() {
         stage: lead.stage,
         columnId: lead.columnId,
         product: lead.product || null,
+        lastAction: lead.lastAction,
+        lastActionAt: lead.lastActionAt,
         city: lead.city,
         phone: lead.phone,
         dealValue: lead.dealValue,

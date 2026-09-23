@@ -278,6 +278,11 @@ export function ConversationsView({
                         </span>
                       )}
                       <StatusChip lead={lead} />
+                      {lead.lastAction && (
+                        <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700" title="Última ação feita pela IA">
+                          ⚡ {lead.lastAction}
+                        </span>
+                      )}
                       {lead.product && (
                         <span className="max-w-[140px] truncate rounded-full bg-[var(--accent)]/10 px-2 py-0.5 text-[10px] font-semibold text-[var(--accent)]" title="Produto de interesse">
                           {lead.product.name}

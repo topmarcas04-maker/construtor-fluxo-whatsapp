@@ -299,6 +299,11 @@ export function FunnelView({
                         <Package size={12} className="shrink-0" /> <span className="truncate">{lead.product.name}</span>
                       </p>
                     )}
+                    {lead.lastAction && (
+                      <p className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700" title="Última ação feita pela IA">
+                        ⚡ {lead.lastAction}
+                      </p>
+                    )}
                     {lead.interest && lead.interest !== lead.product?.name && (
                       <p className="mt-2 line-clamp-2 text-sm text-slate-600">{lead.interest}</p>
                     )}

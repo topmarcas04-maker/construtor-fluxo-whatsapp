@@ -72,6 +72,7 @@ import {
   KIND_LABEL,
 } from "../src/lib/products/format";
 import { ensureColumns } from "../src/lib/funnel/shared";
+import { ensureActions, type AiAction } from "../src/lib/actions/shared";
 import { normalizeStage } from "../src/lib/funnel/common";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
@@ -1148,7 +1149,9 @@ async function runAi(accountId: string, conversationId: string) {
   });
 
   // Catálogo: produtos ativos da conta (códigos curtos P1, P2... para a IA)
-  const catalog = settings.catalogEnabled ? await loadCatalog(accountId) : [];
+  // Ações (procedimentos) ativas da conta
+  const actions = (await ensureActions(db, accountId)).filter((a) => a.active);
+  const catalog = settings.catalogEnabled ? await loadCatalog(accountId, actions) : [];
   // Colunas do funil com regra para a IA (ex.: "Ligação")
   const funnel = await ensureColumns(db, accountId);
   const ruleColumns = funnel.filter((c) => c.kind === "CUSTOM" && c.aiRule?.trim());
@@ -1182,6 +1185,7 @@ async function runAi(accountId: string, conversationId: string) {
           : null,
       },
       catalog: catalog.map((c) => c.ai),
+      actions: actions.map((a) => ({ name: a.name, kind: a.kind, instructions: a.instructions })),
       columns: ruleColumns.map((c) => ({ name: c.name, rule: c.aiRule!.trim() })),
     },
     { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL }
@@ -1200,10 +1204,31 @@ async function runAi(accountId: string, conversationId: string) {
     return;
   }
 
+  // Ação concluída: passa para vendedor, título/duração da agenda, coluna do funil
+  const action = decision.actionName
+    ? actions.find((a) => a.name.trim().toLowerCase() === decision.actionName!.trim().toLowerCase()) || null
+    : null;
+  const interestName = decision.interestCode ? catalog.find((c) => c.ai.code === decision.interestCode)?.ai.name : null;
+  if (action) {
+    if (action.handoff && !decision.handoff) {
+      decision.handoff = true;
+      decision.handoffReason = decision.handoffReason || `Ação: ${action.name}${interestName ? ` — ${interestName}` : ""}`;
+    }
+    if (action.kind === "HANDOFF") decision.handoff = true;
+  }
+  if (decision.appointment) {
+    // Assunto da agenda pela ação (ex.: "Test-drive – Scooter X1")
+    const sched = action?.kind === "SCHEDULE" ? action : null;
+    const base = sched?.appointmentTitle || sched?.name || decision.appointment.subject;
+    decision.appointment.subject = (interestName && !base.includes(interestName) ? `${base} – ${interestName}` : base).slice(0, 200);
+  }
+
   await applyDecision(accountId, lead.id, conversationId, decision, allTags, ruleColumns, catalog);
   if (decision.appointment && settings.schedulingEnabled) {
-    await saveAiAppointment(accountId, lead.id, decision, settings, currentAppt?.id || null);
+    const sched = action?.kind === "SCHEDULE" ? action : null;
+    await saveAiAppointment(accountId, lead.id, decision, settings, currentAppt?.id || null, sched?.appointmentMinutes || null);
   }
+  if (action) await recordAction(lead.id, action);
 
   const parts = decision.reply
     .split(/\n\s*\n/)
@@ -1264,9 +1289,34 @@ async function sendVoiceReply(accountId: string, phoneJid: string, text: string,
   }
 }
 
+/** Ações do produto (as dele; senão as da categoria), com a principal primeiro */
+function productActionNames(
+  r: { actionIds: string[]; primaryActionId: string | null; catActionIds: string[] | null; catPrimaryActionId: string | null },
+  actions: AiAction[]
+) {
+  const own = (r.actionIds || []).length > 0;
+  const ids = own ? r.actionIds : r.catActionIds || [];
+  const primary = own ? r.primaryActionId : r.catPrimaryActionId;
+  const list = ids.map((id) => actions.find((a) => a.id === id)).filter((a): a is AiAction => Boolean(a));
+  list.sort((a, b) => (a.id === primary ? -1 : b.id === primary ? 1 : 0));
+  return list.map((a) => a.name);
+}
+
+/** Registra no card a ação feita pela IA (e move para a coluna da ação, se tiver) */
+async function recordAction(leadId: string, action: AiAction) {
+  const current = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
+  if (!current) return;
+  const set: Record<string, unknown> = { lastAction: action.name, lastActionAt: new Date(), updatedAt: new Date() };
+  if (action.columnId && current.stage !== "SALE") set.columnId = action.columnId;
+  // Reserva, ligação e agenda deixam o lead quente
+  const order = ["FIRST_CONTACT", "SECOND_CONTACT", "HOT_LEAD", "SALE"];
+  if (["RESERVE", "CALL", "SCHEDULE", "HANDOFF"].includes(action.kind) && order.indexOf(current.stage) < 2) set.stage = "HOT_LEAD";
+  await db.update(leads).set(set).where(eq(leads.id, leadId));
+}
+
 const CATALOG_LIMIT = 80;
 
-async function loadCatalog(accountId: string) {
+async function loadCatalog(accountId: string, actions: AiAction[] = []) {
   const rows = await db
     .select({
       id: products.id,
@@ -1283,6 +1333,10 @@ async function loadCatalog(accountId: string) {
       commitmentMonths: products.commitmentMonths,
       trialDays: products.trialDays,
       durationMinutes: products.durationMinutes,
+      actionIds: products.actionIds,
+      primaryActionId: products.primaryActionId,
+      catActionIds: productCategories.actionIds,
+      catPrimaryActionId: productCategories.primaryActionId,
       category: productCategories.name,
     })
     .from(products)
@@ -1313,6 +1367,7 @@ async function loadCatalog(accountId: string) {
       category: r.category,
       price: kindPriceLabel(r),
       kind: KIND_LABEL[r.kind] || "Produto",
+      actions: productActionNames(r, actions),
       details: kindDetails(r),
       description: r.description ? r.description.replace(/\s+/g, " ").slice(0, 400) : null,
       hasPhoto: withPhoto.has(r.id),
@@ -1436,7 +1491,8 @@ async function saveAiAppointment(
   leadId: string,
   d: AgentDecision,
   settings: { reminderMessage: string | null; reminderMinutesBefore: number },
-  existingId: string | null
+  existingId: string | null,
+  durationMinutes: number | null = null
 ) {
   if (!d.appointment) return;
   const startsAt = fromSpDateTime(d.appointment.date, d.appointment.time);
@@ -1450,7 +1506,15 @@ async function saveAiAppointment(
     if (existing && existing.startsAt.getTime() === startsAt.getTime()) return; // já está marcado
     await db
       .update(appointments)
-      .set({ startsAt, title: d.appointment.subject, reminderSentAt: null, reminderError: null, updatedAt: new Date() })
+      .set({
+        startsAt,
+        title: d.appointment.subject,
+    ...(durationMinutes ? { durationMinutes } : {}),
+        ...(durationMinutes ? { durationMinutes } : {}),
+        reminderSentAt: null,
+        reminderError: null,
+        updatedAt: new Date(),
+      })
       .where(eq(appointments.id, existingId));
     return;
   }
@@ -1507,7 +1571,13 @@ async function handoffToSeller(
   const template = settings.handoffMessage ?? "";
   if (template.trim()) {
     await pause(1200);
-    await sendText(accountId, leadJid, fillTemplate(template, { vendedor: seller?.name || "um de nossos consultores" }), "AI");
+    // Sem vendedor definido: "passar para {vendedor}, nosso consultor," vira "passar para um de nossos consultores,"
+    const msg = seller?.name
+      ? fillTemplate(template, { vendedor: seller.name })
+      : fillTemplate(template.replace(/\{vendedor\}\s*,?\s*nosso consultor\s*,?/i, "{vendedor},"), {
+          vendedor: "um de nossos consultores",
+        });
+    await sendText(accountId, leadJid, msg, "AI");
   }
 
   if (seller && settings.notifySeller) {

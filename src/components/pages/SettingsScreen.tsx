@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Bot, Trash2, Plus, Check, Pencil, KeyRound, CalendarDays, AudioLines, Play, Loader2 } from "lucide-react";
+import { ActionsTab } from "@/components/settings/ActionsTab";
 import { REMINDER_OPTIONS } from "@/components/agenda/types";
 import type { QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import { TAG_COLOR_CLASSES, TAG_DOT_CLASSES, SALE_TYPE_LABEL } from "@/lib/types/sdr";
@@ -21,7 +22,7 @@ import {
   ErrorNote,
 } from "@/components/ui";
 
-type TabKey = "ia" | "whatsapp" | "vendedores" | "distribuicao" | "etiquetas" | "respostas";
+type TabKey = "ia" | "acoes" | "whatsapp" | "vendedores" | "distribuicao" | "etiquetas" | "respostas";
 
 interface Rule {
   id: string;
@@ -1030,6 +1031,7 @@ export function SettingsScreen() {
           onChange={setTab}
           tabs={[
             { key: "ia", label: "Atendimento IA" },
+            { key: "acoes", label: "Ações da IA" },
             { key: "whatsapp", label: "WhatsApp" },
             { key: "vendedores", label: "Vendedores" },
             { key: "distribuicao", label: "Distribuição" },
@@ -1038,6 +1040,7 @@ export function SettingsScreen() {
           ]}
         />
         {tab === "ia" && <AiTab />}
+        {tab === "acoes" && <ActionsTab />}
         {tab === "whatsapp" && <WhatsAppPrefsTab />}
         {tab === "vendedores" && <SellersTab />}
         {tab === "distribuicao" && <RulesTab />}

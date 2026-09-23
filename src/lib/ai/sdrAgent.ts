@@ -44,6 +44,8 @@ export interface AgentInput {
     /** Agendamento futuro que este lead já tem (texto) */
     current: string | null;
   };
+  /** Ações (procedimentos) que a IA pode conduzir */
+  actions?: { name: string; kind: string; instructions: string | null }[];
   /** Colunas do funil com regra: a IA coloca o lead nelas quando a regra se aplica */
   columns?: { name: string; rule: string }[];
   /** Catálogo de produtos que a IA pode consultar (código curto P1, P2...) */
@@ -66,6 +68,8 @@ export interface AgentInput {
     kind?: string;
     /** Adesão, fidelidade, teste grátis, duração */
     details?: string[];
+    /** Ações permitidas (a primeira é a principal) */
+    actions?: string[];
   }[];
 }
 
@@ -87,6 +91,8 @@ export interface AgentDecision {
   phone: string | null;
   /** Fotos a enviar: código do catálogo (P1, P2...) e, se houver, o nome da foto (ex.: a cor) */
   productCodes: { code: string; label: string | null }[];
+  /** Ação concluída/aceita pelo cliente (nome exato) */
+  actionName: string | null;
   /** Código do catálogo (P1, P2...) do produto que o cliente quer */
   interestCode: string | null;
   /** Nome da coluna do funil (com regra) para onde mover o lead */
@@ -158,6 +164,11 @@ const TOOL = {
         },
         required: ["data", "hora", "assunto"],
       },
+      executar_acao: {
+        type: "string",
+        description:
+          "Nome EXATO de uma ação da lista AÇÕES quando o cliente ACEITOU ou CONCLUIU essa ação agora (confirmou horário, a reserva, a ligação, quis o financiamento etc.). Omita se não for o caso.",
+      },
       produto_interesse: {
         type: "string",
         description:
@@ -209,7 +220,7 @@ REGRAS DE FORMATO
 - Não repita perguntas que o cliente já respondeu. Faça no máximo uma pergunta por vez.
 - Nunca invente preço, estoque, prazo ou condição que não esteja nas instruções ou no catálogo.
 - Se o cliente mandar áudio ou imagem que você não consegue ver, peça gentilmente para escrever.
-- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${channelBlock(input)}${schedulingBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
+- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
 }
 
 function channelName(channel?: string) {
@@ -240,6 +251,27 @@ AGENDA
 - Ao confirmar, repita dia e hora na resposta (ex.: "Combinado, quinta 25/09 às 14h!").`;
 }
 
+const KIND_TAG: Record<string, string> = {
+  SCHEDULE: "agenda",
+  CALL: "ligação",
+  RESERVE: "reserva",
+  HANDOFF: "passar para vendedor",
+  INFO: "explicar",
+};
+
+function actionsBlock(input: AgentInput) {
+  const list = input.actions || [];
+  if (!list.length) return "";
+  return `
+
+AÇÕES (procedimentos da empresa)
+${list.map((a) => `- "${a.name}" [${KIND_TAG[a.kind] || "explicar"}]${a.instructions ? `: ${a.instructions}` : ""}`).join("\n")}
+- Cada item do catálogo lista as "ações" dele. Quando o cliente se interessar por um item, conduza a conversa pelas ações daquele item, oferecendo primeiro a principal. Não ofereça ações que o item não tem (exceto passar para um vendedor, se o cliente pedir).
+- Itens sem ações seguem as instruções gerais.
+- Ações de agenda: combine dia e horário e preencha "agendamento" (assunto = nome da ação).
+- Quando o cliente ACEITAR ou CONCLUIR uma ação, preencha "executar_acao" com o nome exato dela.`;
+}
+
 function columnsBlock(input: AgentInput) {
   const cols = input.columns || [];
   if (!cols.length) return "";
@@ -259,6 +291,7 @@ function catalogBlock(input: AgentInput) {
     parts.push(`preço: ${p.price}`);
     if (p.description) parts.push(`detalhes: ${p.description}`);
     if (p.details?.length) parts.push(p.details.join("; "));
+    if (p.actions?.length) parts.push(`ações: ${p.actions.map((a, i) => (i === 0 ? `${a} (principal)` : a)).join(", ")}`);
     if (p.installments?.length) parts.push(`cartão: ${p.installments.join("; ")}`);
     if (p.delivery) parts.push(`entrega: ${p.delivery}`);
     if (p.colors?.length) {
@@ -345,6 +378,7 @@ export function parseDecision(raw: Record<string, unknown>, allowedTags: string[
     appointment: parseAppointment(raw.agendamento),
     phone: parsePhone(raw.telefone),
     columnName: clean(raw.mover_para_coluna, 80),
+    actionName: clean(raw.executar_acao, 80),
     interestCode: /^p\d{1,4}$/i.test(String(raw.produto_interesse || "").trim())
       ? String(raw.produto_interesse).trim().toUpperCase()
       : null,
