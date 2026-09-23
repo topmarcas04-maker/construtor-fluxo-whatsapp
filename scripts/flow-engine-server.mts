@@ -44,8 +44,11 @@ import {
 } from "../src/db/schema";
 import { eq, and, desc, gte, lt, isNull, sql, inArray } from "drizzle-orm";
 import { runSdrAgent, pickSeller, type AgentDecision } from "../src/lib/ai/sdrAgent";
-import { resolveAiKey } from "../src/lib/tenancy/aiKey";
+import { resolveAiKey, resolveVoiceKey } from "../src/lib/tenancy/aiKey";
+import { transcribeAudio, synthesizeSpeech } from "../src/lib/voice/providers";
 import { priceLabel } from "../src/lib/products/format";
+import { ensureColumns } from "../src/lib/funnel/shared";
+import { normalizeStage } from "../src/lib/funnel/common";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
 import { spawn } from "node:child_process";
@@ -526,7 +529,7 @@ async function handleIncomingMessage(accountId: string, msg: any) {
 
     const media = extracted.type !== "text" ? await downloadMedia(accountId, msg) : null;
     const sentAt = msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000) : new Date();
-    await db.insert(messages).values({
+    const [saved] = await db.insert(messages).values({
       conversationId: conversation.id,
       direction: "IN",
       body: extracted.text,
@@ -537,17 +540,36 @@ async function handleIncomingMessage(accountId: string, msg: any) {
       mediaDataUrl: media && "dataUrl" in media ? media.dataUrl : null,
       mediaMimeType: media && "mime" in media ? media.mime : null,
       mediaFileName: media && "fileName" in media ? media.fileName : null,
-    });
+    }).returning({ id: messages.id });
     await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
     await db.update(leads).set({ updatedAt: new Date() }).where(eq(leads.conversationId, conversation.id));
 
     console.log(`[Mensagem ${accountId.slice(0, 8)}] ${phoneJid}: "${extracted.text.slice(0, 60)}"`);
 
     const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
+    // Áudio do cliente: transcreve para a IA (e a equipe) entenderem
+    if (extracted.type === "audio" && saved && media && "dataUrl" in media && media.dataUrl && settings?.transcribeAudio !== false) {
+      await transcribeIncoming(accountId, saved.id, media.dataUrl);
+    }
     // Mensagem muito antiga (recuperada depois de uma queda longa): a IA não responde
     if (settings?.enabled && Date.now() - sentAt.getTime() < AI_RECOVERY_WINDOW_MS) scheduleAi(accountId, conversation.id);
   } catch (error) {
     console.error("[Error] handleIncomingMessage:", error);
+  }
+}
+
+async function transcribeIncoming(accountId: string, messageId: string, dataUrl: string) {
+  try {
+    const key = await resolveVoiceKey(accountId, "openai", loadAccount);
+    if (!key.apiKey) return;
+    const m = /^data:([^;,]+)[^,]*;base64,(.*)$/s.exec(dataUrl);
+    if (!m) return;
+    const text = await transcribeAudio(Buffer.from(m[2], "base64"), m[1], key.apiKey);
+    if (!text) return;
+    await db.update(messages).set({ transcript: text.slice(0, 4000) }).where(eq(messages.id, messageId));
+    console.log(`[Áudio ${accountId.slice(0, 8)}] transcrito: "${text.slice(0, 60)}"`);
+  } catch (err) {
+    console.warn(`[Áudio ${accountId.slice(0, 8)}] não consegui transcrever:`, (err as Error)?.message || err);
   }
 }
 
@@ -670,13 +692,15 @@ interface MediaPayload {
   mimetype: string;
   fileName?: string | null;
   caption?: string | null;
+  /** Texto do áudio (quando a IA responde por voz) */
+  transcript?: string | null;
 }
 
 async function sendMedia(accountId: string, phoneJid: string, media: MediaPayload, sender: Sender, authorName?: string | null) {
   const s = sessions.get(accountId);
   if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
   try {
-    let buffer = Buffer.from(media.base64, "base64");
+    let buffer: Buffer = Buffer.from(media.base64, "base64");
     if (!buffer.length) return { error: "Arquivo vazio" };
     let mime = media.mimetype || "application/octet-stream";
     const caption = media.caption?.trim() ? await signed(accountId, media.caption.trim(), authorName) : undefined;
@@ -723,6 +747,7 @@ async function sendMedia(accountId: string, phoneJid: string, media: MediaPayloa
         mediaDataUrl: buffer.length <= MAX_STORED_MEDIA ? `data:${mime.split(";")[0]};base64,${buffer.toString("base64")}` : null,
         mediaMimeType: mime.split(";")[0],
         mediaFileName: media.fileName || null,
+        transcript: media.transcript || null,
       });
       await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
     }
@@ -822,6 +847,9 @@ async function runAi(accountId: string, conversationId: string) {
 
   // Catálogo: produtos ativos da conta (códigos curtos P1, P2... para a IA)
   const catalog = settings.catalogEnabled ? await loadCatalog(accountId) : [];
+  // Colunas do funil com regra para a IA (ex.: "Ligação")
+  const funnel = await ensureColumns(db, accountId);
+  const ruleColumns = funnel.filter((c) => c.kind === "CUSTOM" && c.aiRule?.trim());
 
   const decision = await runSdrAgent(
     {
@@ -835,7 +863,11 @@ async function runAi(accountId: string, conversationId: string) {
         score: lead.score,
         summary: lead.aiSummary,
       },
-      history: history.map((m) => ({ direction: m.direction, body: m.body, sender: m.sender })),
+      history: history.map((m) => ({
+        direction: m.direction,
+        body: m.transcript ? (m.direction === "IN" ? `(áudio) ${m.transcript}` : m.transcript) : m.body,
+        sender: m.sender,
+      })),
       tags: allTags.map((t) => t.name),
       regions: [...new Set(rules.filter((r) => r.active && r.region).map((r) => r.region as string))],
       scheduling: {
@@ -847,6 +879,7 @@ async function runAi(accountId: string, conversationId: string) {
           : null,
       },
       catalog: catalog.map((c) => c.ai),
+      columns: ruleColumns.map((c) => ({ name: c.name, rule: c.aiRule!.trim() })),
     },
     { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL }
   );
@@ -864,7 +897,7 @@ async function runAi(accountId: string, conversationId: string) {
     return;
   }
 
-  await applyDecision(accountId, lead.id, conversationId, decision, allTags);
+  await applyDecision(accountId, lead.id, conversationId, decision, allTags, ruleColumns);
   if (decision.appointment && settings.schedulingEnabled) {
     await saveAiAppointment(accountId, lead.id, decision, settings, currentAppt?.id || null);
   }
@@ -874,9 +907,19 @@ async function runAi(accountId: string, conversationId: string) {
     .map((p) => p.trim())
     .filter(Boolean)
     .slice(0, 3);
-  for (let i = 0; i < parts.length; i++) {
-    if (i > 0) await pause(1200);
-    await sendText(accountId, conversation.phoneJid, parts[i], "AI");
+  // Cliente mandou áudio e a conta responde por voz: a resposta vai em áudio
+  const lastIn = history[history.length - 1];
+  const spoke =
+    parts.length > 0 &&
+    lastIn.messageType === "audio" &&
+    settings.voiceReplies &&
+    settings.voiceId &&
+    (await sendVoiceReply(accountId, conversation.phoneJid, parts.join("\n"), settings.voiceId));
+  if (!spoke) {
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) await pause(1200);
+      await sendText(accountId, conversation.phoneJid, parts[i], "AI");
+    }
   }
 
   // Fotos dos produtos que a IA escolheu mostrar
@@ -895,6 +938,27 @@ async function runAi(accountId: string, conversationId: string) {
     `[IA ${accountId.slice(0, 8)}] ${conversation.phoneJid} — nota ${decision.score}` +
       `${decision.appointment ? " — agendou" : ""}${decision.handoff ? " — transferido" : ""}`
   );
+}
+
+/** Gera a resposta em voz (ElevenLabs) e envia como áudio do WhatsApp. false = mandar em texto. */
+async function sendVoiceReply(accountId: string, phoneJid: string, text: string, voiceId: string) {
+  try {
+    const key = await resolveVoiceKey(accountId, "eleven", loadAccount);
+    if (!key.apiKey) return false;
+    const mp3 = await synthesizeSpeech(text, voiceId, key.apiKey);
+    const r = await sendMedia(
+      accountId,
+      phoneJid,
+      { kind: "audio", base64: mp3.toString("base64"), mimetype: "audio/mpeg", transcript: text },
+      "AI",
+      null
+    );
+    if ("error" in r) throw new Error(r.error);
+    return true;
+  } catch (err) {
+    console.warn(`[Voz ${accountId.slice(0, 8)}] respondendo em texto:`, (err as Error)?.message || err);
+    return false;
+  }
 }
 
 const CATALOG_LIMIT = 80;
@@ -967,7 +1031,8 @@ async function applyDecision(
   leadId: string,
   conversationId: string,
   d: AgentDecision,
-  allTags: { id: string; name: string }[]
+  allTags: { id: string; name: string }[],
+  ruleColumns: { id: string; name: string }[] = []
 ) {
   const current = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
   if (!current) return;
@@ -978,6 +1043,13 @@ async function applyDecision(
 
   const set: Record<string, unknown> = {
     stage,
+    // Coluna com regra (ex.: "Ligação"): a IA coloca o lead nela
+    ...(d.columnName && normalizeStage(current.stage) !== "SALE"
+      ? (() => {
+          const target = ruleColumns.find((c) => c.name.trim().toLowerCase() === d.columnName!.trim().toLowerCase());
+          return target ? { columnId: target.id } : {};
+        })()
+      : {}),
     score: d.score,
     aiSummary: d.summary || current.aiSummary,
     updatedAt: new Date(),
@@ -1138,7 +1210,13 @@ async function processReminders() {
         continue; // tenta de novo na próxima rodada
       }
       const seller = appt.sellerId ? await db.query.sellers.findFirst({ where: eq(sellers.id, appt.sellerId) }) : null;
-      const name = lead.cardName && lead.cardName !== "Lead" ? lead.cardName : lead.conversation.leadName || "";
+      // Sem nome conhecido: "Olá, {nome}!" vira "Olá!"
+      const name =
+        lead.cardName && lead.cardName !== "Lead"
+          ? lead.cardName
+          : lead.conversation.leadName && lead.conversation.leadName !== "Lead"
+          ? lead.conversation.leadName
+          : "";
       const text = fillTemplate(
         appt.reminderMessage ||
           "Olá, {nome}! Passando para lembrar do nosso compromisso: {assunto} em {data} às {hora}. Até já! 😊",
@@ -1149,7 +1227,10 @@ async function processReminders() {
           assunto: appt.title,
           vendedor: seller?.name || "",
         }
-      ).replace(/\s+([!,.])/g, "$1");
+      )
+        .replace(/\s+([!,.?])/g, "$1")
+        .replace(/,([!.?])/g, "$1")
+        .replace(/ {2,}/g, " ");
       const r = await sendText(appt.accountId, lead.conversation.phoneJid, text, "AUTO");
       if ("error" in r) {
         await db.update(appointments).set({ reminderError: String(r.error).slice(0, 300) }).where(eq(appointments.id, appt.id));

@@ -24,6 +24,8 @@ export interface Lead {
   conversationId: string;
   cardName: string | null;
   stage: string;
+  /** Coluna personalizada do funil (vazio = coluna do estágio) */
+  columnId?: string | null;
   city: string | null;
   dealValue: number | null;
   closed: boolean;
@@ -60,6 +62,8 @@ export interface Message {
   sender: "LEAD" | "AI" | "HUMAN" | "FLOW" | "AUTO" | null;
   /** Nome de quem enviou pelo painel */
   authorName: string | null;
+  /** Texto do áudio (transcrição) */
+  transcript?: string | null;
 }
 
 export interface QuickReply {

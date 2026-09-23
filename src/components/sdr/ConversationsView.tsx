@@ -5,13 +5,13 @@ import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowL
 import type { Lead, Message, QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import {
   TAG_DOT_CLASSES,
-  FUNNEL_COLUMNS,
   funnelColumn,
   leadDisplayName,
   formatPhone,
   timeLabel,
 } from "@/lib/types/sdr";
 import { LeadPanel } from "./LeadPanel";
+import { columnOfLead, type FunnelColumn } from "@/lib/funnel/common";
 import { MessageMedia, mediaCaption } from "./MessageMedia";
 
 /** Mostra o *negrito* do WhatsApp como negrito no painel */
@@ -34,6 +34,7 @@ interface Props {
   onSelectLead: (leadId: string) => void;
   /** Pode editar o card (estágio, vendedor, dados) */
   canEdit: boolean;
+  columns: FunnelColumn[];
 }
 
 type Filter = "todos" | "ia" | "vendedor" | "quentes";
@@ -85,6 +86,7 @@ export function ConversationsView({
   selectedLeadId,
   onSelectLead,
   canEdit,
+  columns,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
@@ -298,15 +300,15 @@ export function ConversationsView({
                 <IdCard size={16} /> Ficha
               </button>
               <select
-                value={funnelColumn(selectedLead.stage)}
-                disabled={!canEdit}
-                title={canEdit ? undefined : "Sem permissão para editar o card"}
-                onChange={(e) => patchLead({ stage: e.target.value })}
-                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+                value={columnOfLead(selectedLead, columns)?.id || ""}
+                disabled={!canEdit || columns.length === 0}
+                title={canEdit ? "Coluna do funil" : "Sem permissão para editar o card"}
+                onChange={(e) => patchLead({ columnId: e.target.value })}
+                className="max-w-[180px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
               >
-                {FUNNEL_COLUMNS.map((c) => (
-                  <option key={c.stage} value={c.stage}>
-                    {c.label}
+                {columns.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
                   </option>
                 ))}
               </select>
@@ -373,6 +375,16 @@ export function ConversationsView({
                         <div className="space-y-1.5">
                           <MessageMedia msg={msg} out={out} />
                           {mediaCaption(msg) && <p className="whitespace-pre-wrap break-words">{waFormat(mediaCaption(msg))}</p>}
+                          {msg.transcript && (
+                            <p
+                              className={`whitespace-pre-wrap break-words border-l-2 pl-2 text-[13px] italic ${
+                                out ? "border-white/40 text-white/85" : "border-slate-300 text-slate-600"
+                              }`}
+                              title="Texto do áudio"
+                            >
+                              “{msg.transcript}”
+                            </p>
+                          )}
                         </div>
                       ) : (
                         <p className="whitespace-pre-wrap break-words">{waFormat(msg.body)}</p>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Bot, Trash2, Plus, Check, Pencil, KeyRound, CalendarDays } from "lucide-react";
+import { Bot, Trash2, Plus, Check, Pencil, KeyRound, CalendarDays, AudioLines, Play, Loader2 } from "lucide-react";
 import { REMINDER_OPTIONS } from "@/components/agenda/types";
 import type { QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import { TAG_COLOR_CLASSES, TAG_DOT_CLASSES, SALE_TYPE_LABEL } from "@/lib/types/sdr";
@@ -53,6 +53,21 @@ interface AiSettings {
     reason: string;
     providerName: string | null;
   };
+  transcribeAudio: boolean;
+  voiceReplies: boolean;
+  voiceId: string | null;
+  voiceName: string | null;
+  voice: {
+    openai: VoiceKeyInfo;
+    eleven: VoiceKeyInfo;
+  };
+}
+
+interface VoiceKeyInfo {
+  ready: boolean;
+  reason: string;
+  providerName: string | null;
+  ownKeyHint: string | null;
 }
 
 const MODELS = [
@@ -176,6 +191,242 @@ function IntegrationCard({ s, onChanged }: { s: AiSettings; onChanged: (next: Ai
   );
 }
 
+// ---------------------------------------------------------------------------
+function VoiceKeyRow({
+  label,
+  info,
+  source,
+  field,
+  placeholder,
+  provider,
+  onChanged,
+}: {
+  label: string;
+  info: VoiceKeyInfo;
+  source: "OWN" | "PARENT" | "NONE";
+  field: "openaiKey" | "elevenKey";
+  placeholder: string;
+  provider: "openai" | "eleven";
+  onChanged: (next: AiSettings) => void;
+}) {
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const saveKey = async (value: string) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      onChanged(await api("/api/sdr/settings", "PUT", { [field]: value }));
+      setKey("");
+      setMsg({ ok: true, text: value ? "Chave salva." : "Chave removida." });
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const test = async () => {
+    setBusy(true);
+    setMsg(null);
+    const r = await api("/api/sdr/settings/voice-test", "POST", { provider }).catch((e) => ({ ok: false, error: (e as Error).message }));
+    setMsg(r.ok ? { ok: true, text: "Funcionando!" } : { ok: false, text: r.error });
+    setBusy(false);
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-slate-700">{label}</span>
+        {info.ready ? <Badge tone="green">Pronta</Badge> : source === "NONE" ? <Badge>Indisponível</Badge> : <Badge tone="amber">Falta a chave</Badge>}
+      </div>
+      {source === "PARENT" && (
+        <p className="text-sm text-slate-600">
+          Usa a chave de <b>{info.providerName || "quem cadastrou esta conta"}</b>.
+          {!info.ready && " (Ainda não cadastrada lá.)"}
+        </p>
+      )}
+      {source === "OWN" && (
+        <>
+          {info.ownKeyHint && (
+            <p className="text-sm">
+              Chave cadastrada: <code className="rounded bg-slate-100 px-1.5 py-0.5">{info.ownKeyHint}</code>
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Input
+              type="password"
+              className="max-w-md"
+              placeholder={info.ownKeyHint ? "Colar nova chave para trocar" : placeholder}
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+            />
+            <Button onClick={() => saveKey(key)} disabled={busy || !key.trim()}>
+              Salvar chave
+            </Button>
+            {info.ownKeyHint && (
+              <Button variant="ghost" onClick={() => confirm("Remover a chave?") && saveKey("")} disabled={busy}>
+                Remover
+              </Button>
+            )}
+          </div>
+        </>
+      )}
+      {source !== "NONE" && (
+        <div className="flex items-center gap-3">
+          <Button variant="secondary" onClick={test} disabled={busy || !info.ready}>
+            Testar
+          </Button>
+          {msg && <span className={`text-sm ${msg.ok ? "text-emerald-700" : "text-red-600"}`}>{msg.text}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface VoiceOption {
+  id: string;
+  name: string;
+  description: string;
+}
+
+function VoiceCard({
+  s,
+  onChanged,
+  save,
+}: {
+  s: AiSettings;
+  onChanged: (next: AiSettings) => void;
+  save: (patch: Partial<AiSettings>) => Promise<void>;
+}) {
+  const source = s.integration.source;
+  const [voices, setVoices] = useState<VoiceOption[] | null>(null);
+  const [loadingVoices, setLoadingVoices] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+
+  const loadVoices = useCallback(async () => {
+    setLoadingVoices(true);
+    setVoiceError(null);
+    try {
+      setVoices(await api("/api/sdr/settings/voices", "GET"));
+    } catch (e) {
+      setVoiceError((e as Error).message);
+    } finally {
+      setLoadingVoices(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (s.voice.eleven.ready && voices === null) loadVoices();
+  }, [s.voice.eleven.ready, voices, loadVoices]);
+
+  const preview = async () => {
+    if (!s.voiceId) return;
+    setPreviewing(true);
+    setVoiceError(null);
+    try {
+      const r = await fetch("/api/sdr/settings/voices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voiceId: s.voiceId }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "Não consegui gerar a amostra");
+      const url = URL.createObjectURL(await r.blob());
+      const audio = new Audio(url);
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play();
+    } catch (e) {
+      setVoiceError((e as Error).message);
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-200 p-5">
+      <p className="mb-1 flex items-center gap-2 font-semibold text-slate-900">
+        <AudioLines size={17} /> Áudio: ouvir e responder por voz
+      </p>
+      <p className="mb-4 text-sm text-slate-600">
+        A IA do Claude lê texto; para entender áudios usamos a OpenAI (transforma a voz em texto) e para responder falando
+        usamos a ElevenLabs (voz natural). Cada uma tem a própria chave e cobra pelo uso.
+      </p>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="space-y-4 rounded-lg bg-slate-50 p-4">
+          <p className="font-medium text-slate-900">1. Entender os áudios dos clientes</p>
+          <VoiceKeyRow
+            label="Chave da OpenAI (platform.openai.com → API keys)"
+            info={s.voice.openai}
+            source={source}
+            field="openaiKey"
+            placeholder="Cole aqui a chave sk-..."
+            provider="openai"
+            onChanged={onChanged}
+          />
+          <Toggle
+            checked={s.transcribeAudio}
+            onChange={(v) => save({ transcribeAudio: v })}
+            label="Transcrever áudios dos clientes"
+          />
+          <p className="text-xs text-slate-500">O texto do áudio aparece embaixo do áudio na conversa e a IA responde com base nele.</p>
+        </div>
+
+        <div className="space-y-4 rounded-lg bg-slate-50 p-4">
+          <p className="font-medium text-slate-900">2. Responder em áudio</p>
+          <VoiceKeyRow
+            label="Chave da ElevenLabs (elevenlabs.io → API Keys)"
+            info={s.voice.eleven}
+            source={source}
+            field="elevenKey"
+            placeholder="Cole aqui a chave da ElevenLabs"
+            provider="eleven"
+            onChanged={(next) => {
+              onChanged(next);
+              setVoices(null);
+            }}
+          />
+          <Field label="Voz da atendente">
+            <div className="flex gap-2">
+              <Select
+                value={s.voiceId || ""}
+                disabled={!voices?.length}
+                onChange={(e) => {
+                  const v = voices?.find((x) => x.id === e.target.value);
+                  save({ voiceId: v?.id || null, voiceName: v?.name || null });
+                }}
+              >
+                <option value="">{loadingVoices ? "Carregando vozes..." : voices?.length ? "Escolha uma voz" : "Cadastre a chave para ver as vozes"}</option>
+                {s.voiceId && !voices?.some((v) => v.id === s.voiceId) && <option value={s.voiceId}>{s.voiceName || s.voiceId}</option>}
+                {voices?.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                    {v.description ? ` — ${v.description}` : ""}
+                  </option>
+                ))}
+              </Select>
+              <Button variant="secondary" onClick={preview} disabled={!s.voiceId || previewing} title="Ouvir uma amostra">
+                {previewing ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+              </Button>
+            </div>
+          </Field>
+          {voiceError && <p className="text-sm text-red-600">{voiceError}</p>}
+          <Toggle
+            checked={s.voiceReplies}
+            onChange={(v) => save({ voiceReplies: v })}
+            label="Quando o cliente mandar áudio, responder em áudio"
+          />
+          <p className="text-xs text-slate-500">
+            Se o cliente escrever, a IA responde por escrito. Se a voz falhar por algum motivo, a resposta vai em texto.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AiTab() {
   const [s, setS] = useState<AiSettings | null>(null);
   const [saved, setSaved] = useState(false);
@@ -193,8 +444,9 @@ function AiTab() {
     setError(null);
     try {
       const next = { ...s, ...patch };
-      const { integration: _i, ...body } = next;
+      const { integration: _i, voice: _v, ...body } = next;
       void _i;
+      void _v;
       setS(await api("/api/sdr/settings", "PUT", body));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -230,6 +482,8 @@ function AiTab() {
       </div>
 
       <IntegrationCard s={s} onChanged={setS} />
+
+      <VoiceCard s={s} onChanged={setS} save={save} />
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Field label="Modelo de IA" hint="Sonnet atende bem a maioria dos casos.">

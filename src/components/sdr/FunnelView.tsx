@@ -1,31 +1,201 @@
 "use client";
 
 import { useState } from "react";
-import { Bot, MessageSquare, MapPin, UserRound } from "lucide-react";
+import { Bot, MessageSquare, MapPin, UserRound, Pencil, Plus, ChevronLeft, ChevronRight, Trash2, X, Sparkles } from "lucide-react";
 import type { Lead, Seller } from "@/lib/types/sdr";
-import { FUNNEL_COLUMNS, funnelColumn, leadDisplayName, TAG_DOT_CLASSES } from "@/lib/types/sdr";
+import { leadDisplayName, TAG_DOT_CLASSES } from "@/lib/types/sdr";
+import { columnOfLead, COLUMN_COLORS, type FunnelColumn } from "@/lib/funnel/common";
 
 interface Props {
   leads: Lead[];
   sellers: Seller[];
+  columns: FunnelColumn[];
+  onColumnsChanged: (cols: FunnelColumn[]) => void;
   onLeadUpdated: () => void;
   onOpenConversation: (leadId: string) => void;
   canEdit: boolean;
+  /** Pode criar/renomear/apagar colunas */
+  canManageColumns: boolean;
 }
 
-const COLUMN_COLORS: Record<string, string> = {
-  FIRST_CONTACT: "bg-sky-500",
-  SECOND_CONTACT: "bg-violet-500",
-  HOT_LEAD: "bg-orange-500",
-  SALE: "bg-emerald-500",
+/** Cor padrão das colunas fixas */
+const KIND_COLOR: Record<string, string> = {
+  FIRST_CONTACT: "cyan",
+  SECOND_CONTACT: "violet",
+  HOT_LEAD: "orange",
+  SALE: "emerald",
+  CUSTOM: "slate",
 };
+
+export const DOT_CLASS: Record<string, string> = {
+  slate: "bg-slate-400",
+  blue: "bg-blue-500",
+  violet: "bg-violet-500",
+  amber: "bg-amber-500",
+  orange: "bg-orange-500",
+  emerald: "bg-emerald-500",
+  rose: "bg-rose-500",
+  cyan: "bg-sky-500",
+};
+
+export function columnDot(c: { color: string | null; kind: string }) {
+  return DOT_CLASS[c.color || KIND_COLOR[c.kind] || "slate"] || "bg-slate-400";
+}
+
+const KIND_HINT: Record<string, string> = {
+  FIRST_CONTACT: "Coluna fixa: todo lead novo começa aqui.",
+  SECOND_CONTACT: "Coluna fixa: a IA move para cá quando a conversa avança.",
+  HOT_LEAD: "Coluna fixa: a IA move para cá quando o cliente quer comprar, agenda ou é passado ao vendedor.",
+  SALE: "Coluna fixa: vendas fechadas. Só uma pessoa move o card para cá, e a IA para de responder.",
+};
+
+async function api(url: string, method: string, body?: unknown) {
+  const r = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(data?.error || "Não foi possível salvar");
+  return data;
+}
+
+function ColumnEditor({
+  column,
+  onClose,
+  onSaved,
+}: {
+  column: FunnelColumn | null;
+  onClose: () => void;
+  onSaved: (cols: FunnelColumn[]) => void;
+}) {
+  const [name, setName] = useState(column?.name || "");
+  const [color, setColor] = useState(column?.color || (column ? KIND_COLOR[column.kind] : "blue") || "blue");
+  const [aiRule, setAiRule] = useState(column?.aiRule || "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const isCustom = !column || column.kind === "CUSTOM";
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const body: Record<string, unknown> = { name, color };
+      if (!column || column.kind !== "SALE") body.aiRule = isCustom ? aiRule : undefined;
+      onSaved(column ? await api(`/api/sdr/columns/${column.id}`, "PATCH", body) : await api("/api/sdr/columns", "POST", body));
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!column || !confirm(`Apagar a coluna "${column.name}"? Os leads dela voltam para a coluna da etapa em que estão.`)) return;
+    try {
+      onSaved(await api(`/api/sdr/columns/${column.id}`, "DELETE"));
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <h3 className="font-semibold text-slate-900">{column ? "Editar coluna" : "Nova coluna"}</h3>
+          <button onClick={onClose} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100" aria-label="Fechar">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="space-y-4 px-5 py-4">
+          <label className="block">
+            <span className="text-sm font-medium text-slate-700">Nome</span>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Ex.: Ligação, Aguardando pagamento..."
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+            />
+          </label>
+          <div>
+            <span className="text-sm font-medium text-slate-700">Cor</span>
+            <div className="mt-1.5 flex flex-wrap gap-2">
+              {COLUMN_COLORS.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setColor(c)}
+                  className={`h-7 w-7 rounded-full ${DOT_CLASS[c]} ${color === c ? "ring-2 ring-slate-900 ring-offset-2" : ""}`}
+                  aria-label={c}
+                />
+              ))}
+            </div>
+          </div>
+          {isCustom ? (
+            <label className="block">
+              <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
+                <Sparkles size={14} className="text-violet-600" /> A IA coloca o lead aqui quando... (opcional)
+              </span>
+              <textarea
+                value={aiRule}
+                onChange={(e) => setAiRule(e.target.value)}
+                rows={3}
+                placeholder="Ex.: O cliente pediu para receber uma ligação."
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+              />
+              <span className="mt-1 block text-xs text-slate-500">Deixe vazio para só a equipe mover os cards para esta coluna.</span>
+            </label>
+          ) : (
+            <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">{KIND_HINT[column!.kind]}</p>
+          )}
+          {error && <p className="text-sm text-red-600">{error}</p>}
+        </div>
+        <div className="flex items-center justify-between border-t border-slate-100 px-5 py-4">
+          {column?.kind === "CUSTOM" ? (
+            <button onClick={remove} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50">
+              <Trash2 size={15} /> Apagar
+            </button>
+          ) : (
+            <span />
+          )}
+          <button onClick={save} disabled={saving || !name.trim()} className="btn-primary rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-50">
+            {saving ? "Salvando..." : "Salvar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function currency(value: number) {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-export function FunnelView({ leads, sellers, onLeadUpdated, onOpenConversation, canEdit }: Props) {
+export function FunnelView({
+  leads,
+  sellers,
+  columns,
+  onColumnsChanged,
+  onLeadUpdated,
+  onOpenConversation,
+  canEdit,
+  canManageColumns,
+}: Props) {
   const [dragOver, setDragOver] = useState<string | null>(null);
+  const [editing, setEditing] = useState<FunnelColumn | "new" | null>(null);
+
+  const move = async (index: number, dir: -1 | 1) => {
+    const ids = columns.map((c) => c.id);
+    const j = index + dir;
+    if (j < 0 || j >= ids.length) return;
+    [ids[index], ids[j]] = [ids[j], ids[index]];
+    try {
+      onColumnsChanged(await api("/api/sdr/columns/reorder", "POST", { ids }));
+    } catch {}
+  };
 
   const patchLead = async (leadId: string, fields: Record<string, unknown>) => {
     await fetch(`/api/sdr/leads/${leadId}`, {
@@ -37,37 +207,55 @@ export function FunnelView({ leads, sellers, onLeadUpdated, onOpenConversation, 
   };
 
   return (
-    <div className="flex h-full gap-4 overflow-x-auto bg-slate-50 p-6">
-      {FUNNEL_COLUMNS.map((column) => {
-        const columnLeads = leads.filter((l) => funnelColumn(l.stage) === column.stage);
+    <div className="flex h-full gap-4 overflow-x-auto bg-slate-50 p-3 md:p-6">
+      {columns.map((column, index) => {
+        const columnLeads = leads.filter((l) => columnOfLead(l, columns)?.id === column.id);
         const total = columnLeads.reduce((sum, l) => sum + (l.dealValue || 0), 0);
 
         return (
           <div
-            key={column.stage}
-            className={`flex min-w-[290px] flex-1 flex-col rounded-2xl border bg-slate-100/70 transition ${
-              dragOver === column.stage ? "border-[var(--accent)] bg-[var(--accent)]/5" : "border-slate-200"
+            key={column.id}
+            className={`group/col flex w-[280px] min-w-[280px] flex-1 flex-col rounded-2xl border bg-slate-100/70 transition md:w-auto md:min-w-[270px] ${
+              dragOver === column.id ? "border-[var(--accent)] bg-[var(--accent)]/5" : "border-slate-200"
             }`}
             onDragOver={(e) => {
               if (!canEdit) return;
               e.preventDefault();
-              setDragOver(column.stage);
+              setDragOver(column.id);
             }}
             onDragLeave={() => setDragOver(null)}
             onDrop={(e) => {
               setDragOver(null);
               const leadId = e.dataTransfer.getData("text/lead-id");
-              if (leadId) patchLead(leadId, { stage: column.stage });
+              if (leadId) patchLead(leadId, { columnId: column.id });
             }}
           >
             <div className="px-4 pb-2 pt-4">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-2 font-semibold text-slate-800">
-                  <span className={`h-2.5 w-2.5 rounded-full ${COLUMN_COLORS[column.stage]}`} />
-                  {column.label}
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex min-w-0 items-center gap-2 font-semibold text-slate-800">
+                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${columnDot(column)}`} />
+                  <span className="truncate">{column.name}</span>
+                  {column.aiRule && (
+                    <span title={`A IA coloca aqui: ${column.aiRule}`} className="text-violet-500">
+                      <Sparkles size={13} />
+                    </span>
+                  )}
                 </span>
-                <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-slate-600">
-                  {columnLeads.length}
+                <span className="flex shrink-0 items-center gap-0.5">
+                  {canManageColumns && (
+                    <span className="flex items-center md:hidden md:group-hover/col:flex">
+                      <button onClick={() => move(index, -1)} disabled={index === 0} className="rounded p-1 text-slate-400 hover:bg-white hover:text-slate-700 disabled:opacity-30" title="Mover para a esquerda">
+                        <ChevronLeft size={15} />
+                      </button>
+                      <button onClick={() => move(index, 1)} disabled={index === columns.length - 1} className="rounded p-1 text-slate-400 hover:bg-white hover:text-slate-700 disabled:opacity-30" title="Mover para a direita">
+                        <ChevronRight size={15} />
+                      </button>
+                      <button onClick={() => setEditing(column)} className="rounded p-1 text-slate-400 hover:bg-white hover:text-slate-700" title="Editar coluna">
+                        <Pencil size={14} />
+                      </button>
+                    </span>
+                  )}
+                  <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-slate-600">{columnLeads.length}</span>
                 </span>
               </div>
               <p className="mt-1 text-xs text-slate-500">{currency(total)}</p>
@@ -166,6 +354,21 @@ export function FunnelView({ leads, sellers, onLeadUpdated, onOpenConversation, 
           </div>
         );
       })}
+      {canManageColumns && (
+        <button
+          onClick={() => setEditing("new")}
+          className="flex w-[200px] min-w-[200px] flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 text-sm font-medium text-slate-500 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+        >
+          <Plus size={22} /> Nova coluna
+        </button>
+      )}
+      {editing && (
+        <ColumnEditor
+          column={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={onColumnsChanged}
+        />
+      )}
     </div>
   );
 }

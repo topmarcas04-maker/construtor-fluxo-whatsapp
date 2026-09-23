@@ -5,7 +5,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { accounts } from "@/db/schema";
 import { ALL_MODULE_KEYS, modulesAllowedForType, type AccountType, type ModuleKey } from "@/lib/auth/modules";
-import { resolveAiKey } from "./aiKey";
+import { resolveAiKey, resolveVoiceKey } from "./aiKey";
 
 export type AccountRow = typeof accounts.$inferSelect;
 
@@ -65,6 +65,10 @@ export async function getAccountModules(account: AccountRow | null): Promise<Mod
 
 export async function resolveAccountAiKey(accountId: string) {
   return resolveAiKey(accountId, (id) => getAccount(id));
+}
+
+export async function resolveAccountVoiceKey(accountId: string, provider: "openai" | "eleven") {
+  return resolveVoiceKey(accountId, provider, (id) => getAccount(id));
 }
 
 /** Gera um identificador curto e único para o link de login */

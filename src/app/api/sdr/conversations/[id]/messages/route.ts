@@ -29,6 +29,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         sentAt: messages.sentAt,
         sender: messages.sender,
         authorName: messages.authorName,
+        transcript: messages.transcript,
         mediaMimeType: messages.mediaMimeType,
         mediaFileName: messages.mediaFileName,
         hasMedia: sql<boolean>`(${messages.mediaDataUrl} is not null)`,

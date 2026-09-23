@@ -43,6 +43,7 @@ export async function GET() {
         conversationId: lead.conversationId,
         cardName: lead.cardName,
         stage: lead.stage,
+        columnId: lead.columnId,
         city: lead.city,
         phone: lead.phone,
         dealValue: lead.dealValue,

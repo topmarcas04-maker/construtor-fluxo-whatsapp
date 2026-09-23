@@ -115,6 +115,10 @@ export const accounts = pgTable(
     aiSource: varchar("ai_source", { length: 10 }).notNull().default("PARENT"),
     /** Chave da API de IA, criptografada */
     aiApiKeyEnc: text("ai_api_key_enc"),
+    /** Chave OpenAI (transcrever áudios) — segue a mesma regra de herança da IA */
+    openaiKeyEnc: text("openai_key_enc"),
+    /** Chave ElevenLabs (responder em áudio) — segue a mesma regra de herança da IA */
+    elevenKeyEnc: text("eleven_key_enc"),
     /** Manter o WhatsApp desta conta conectado no motor */
     waEnabled: boolean("wa_enabled").notNull().default(false),
     /** Situação do WhatsApp, gravada pelo motor: connected | reconnecting | logged_out | idle */
@@ -260,6 +264,8 @@ export const messages = pgTable(
     sender: varchar("sender", { length: 20 }),
     /** Nome de quem enviou pelo painel (vendedor/atendente) */
     authorName: varchar("author_name", { length: 150 }),
+    /** Texto do áudio (transcrição do cliente ou o que a IA falou) */
+    transcript: text("transcript"),
   },
   (table) => [
     index("messages_conversation_id_idx").on(table.conversationId),
@@ -281,6 +287,8 @@ export const leads = pgTable(
       .references(() => conversations.id, { onDelete: "cascade" }),
     cardName: varchar("card_name", { length: 200 }),
     stage: leadStageEnum("stage").notNull().default("FIRST_CONTACT"),
+    /** Coluna personalizada do funil (vazio = coluna do estágio) */
+    columnId: uuid("column_id").references(() => funnelColumns.id, { onDelete: "set null" }),
     city: varchar("city", { length: 120 }),
     email: varchar("email", { length: 200 }),
     phone: varchar("phone", { length: 40 }),
@@ -402,6 +410,13 @@ export const aiSettings = pgTable("ai_settings", {
   catalogEnabled: boolean("catalog_enabled").notNull().default(true),
   /** WhatsApp que recebe alertas (ex.: WhatsApp desconectado) */
   alertPhone: varchar("alert_phone", { length: 40 }),
+  /** Transcrever os áudios dos clientes para a IA entender */
+  transcribeAudio: boolean("transcribe_audio").notNull().default(true),
+  /** Responder em áudio quando o cliente mandar áudio */
+  voiceReplies: boolean("voice_replies").notNull().default(false),
+  /** Voz da ElevenLabs usada nas respostas */
+  voiceId: varchar("voice_id", { length: 80 }),
+  voiceName: varchar("voice_name", { length: 120 }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -461,6 +476,32 @@ export const platformSettings = pgTable("platform_settings", {
   accent: varchar("accent", { length: 20 }).notNull().default("#155e75"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ============================================================================
+// FUNIL (COLUNAS PERSONALIZADAS)
+// ============================================================================
+
+/**
+ * Colunas do funil de cada conta. kind = FIRST_CONTACT | SECOND_CONTACT | HOT_LEAD | SALE
+ * (colunas fixas, podem ser renomeadas) ou CUSTOM (criadas pelo usuário).
+ * aiRule: quando preenchido, a IA coloca o lead nesta coluna quando a regra se aplica.
+ */
+export const funnelColumns = pgTable(
+  "funnel_columns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 80 }).notNull(),
+    kind: varchar("kind", { length: 20 }).notNull().default("CUSTOM"),
+    aiRule: text("ai_rule"),
+    color: varchar("color", { length: 20 }),
+    sort: integer("sort").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("funnel_columns_account_idx").on(table.accountId)]
+);
 
 // ============================================================================
 // PRODUTOS (CATÁLOGO)

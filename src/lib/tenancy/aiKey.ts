@@ -14,6 +14,8 @@ export interface AccountAiRow {
   name: string;
   aiSource: string;
   aiApiKeyEnc: string | null;
+  openaiKeyEnc?: string | null;
+  elevenKeyEnc?: string | null;
 }
 
 export interface AiKeyResolution {
@@ -37,6 +39,33 @@ export async function resolveAiKey(
     }
     if (current.aiSource === "OWN" || !current.parentId) {
       const own = decryptSecret(current.aiApiKeyEnc) || (current.type === "MASTER" ? envKey : "");
+      return own
+        ? { apiKey: own, providerAccountId: current.id, providerAccountName: current.name, reason: "OK" }
+        : { apiKey: null, providerAccountId: current.id, providerAccountName: current.name, reason: "MISSING_KEY" };
+    }
+    current = await loadAccount(current.parentId);
+  }
+  return { apiKey: null, providerAccountId: null, providerAccountName: null, reason: "MISSING_KEY" };
+}
+
+/**
+ * Mesma regra de herança da IA, para as chaves de áudio:
+ * openai = transcrever os áudios; eleven = responder por voz.
+ */
+export async function resolveVoiceKey(
+  accountId: string,
+  provider: "openai" | "eleven",
+  loadAccount: (id: string) => Promise<AccountAiRow | null | undefined>
+): Promise<AiKeyResolution> {
+  const env = provider === "openai" ? process.env.OPENAI_API_KEY || "" : process.env.ELEVENLABS_API_KEY || "";
+  let current = await loadAccount(accountId);
+  for (let depth = 0; current && depth < 6; depth++) {
+    if (current.aiSource === "NONE") {
+      return { apiKey: null, providerAccountId: null, providerAccountName: null, reason: "NONE" };
+    }
+    if (current.aiSource === "OWN" || !current.parentId) {
+      const enc = provider === "openai" ? current.openaiKeyEnc : current.elevenKeyEnc;
+      const own = decryptSecret(enc) || (current.type === "MASTER" ? env : "");
       return own
         ? { apiKey: own, providerAccountId: current.id, providerAccountName: current.name, reason: "OK" }
         : { apiKey: null, providerAccountId: current.id, providerAccountName: current.name, reason: "MISSING_KEY" };

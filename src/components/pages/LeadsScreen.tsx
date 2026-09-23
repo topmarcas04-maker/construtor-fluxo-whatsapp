@@ -7,6 +7,7 @@ import { leadDisplayName } from "@/lib/types/sdr";
 import { ExpandButton } from "@/components/layout/Fullscreen";
 import { ConversationsView } from "@/components/sdr/ConversationsView";
 import { FunnelView } from "@/components/sdr/FunnelView";
+import type { FunnelColumn } from "@/lib/funnel/common";
 
 type ViewMode = "conversas" | "funil";
 
@@ -20,6 +21,8 @@ export function LeadsScreen() {
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [canEdit, setCanEdit] = useState(false);
+  const [canManageColumns, setCanManageColumns] = useState(false);
+  const [columns, setColumns] = useState<FunnelColumn[]>([]);
 
   const loadLeads = useCallback(async () => {
     try {
@@ -37,7 +40,13 @@ export function LeadsScreen() {
     loadLeads();
     fetch("/api/auth/me")
       .then((r) => (r.ok ? r.json() : null))
-      .then((u) => setCanEdit(Boolean(u?.canEditLeads)));
+      .then((u) => {
+        setCanEdit(Boolean(u?.canEditLeads));
+        setCanManageColumns(Boolean(u?.canManage || u?.actingAs));
+      });
+    fetch("/api/sdr/columns")
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setColumns);
     Promise.all([
       fetch("/api/sdr/tags").then((r) => (r.ok ? r.json() : [])),
       fetch("/api/sdr/sellers").then((r) => (r.ok ? r.json() : [])),
@@ -132,6 +141,7 @@ export function LeadsScreen() {
             selectedLeadId={selectedLeadId}
             onSelectLead={setSelectedLeadId}
             canEdit={canEdit}
+            columns={columns}
           />
         ) : (
           <FunnelView
@@ -139,6 +149,9 @@ export function LeadsScreen() {
             sellers={sellers}
             onLeadUpdated={loadLeads}
             canEdit={canEdit}
+            columns={columns}
+            onColumnsChanged={setColumns}
+            canManageColumns={canManageColumns}
             onOpenConversation={(leadId) => {
               setSelectedLeadId(leadId);
               setView("conversas");

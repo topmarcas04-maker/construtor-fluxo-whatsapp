@@ -417,6 +417,29 @@ CREATE TABLE IF NOT EXISTS product_images (
 CREATE INDEX IF NOT EXISTS product_images_product_idx ON product_images (product_id);
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS catalog_enabled boolean NOT NULL DEFAULT true;
 
+-- Funil com colunas personalizadas
+CREATE TABLE IF NOT EXISTS funnel_columns (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name varchar(80) NOT NULL,
+  kind varchar(20) NOT NULL DEFAULT 'CUSTOM',
+  ai_rule text,
+  color varchar(20),
+  sort integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS funnel_columns_account_idx ON funnel_columns (account_id);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS column_id uuid REFERENCES funnel_columns(id) ON DELETE SET NULL;
+
+-- Áudio: ouvir (OpenAI) e responder por voz (ElevenLabs)
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS openai_key_enc text;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS eleven_key_enc text;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS transcribe_audio boolean NOT NULL DEFAULT true;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS voice_replies boolean NOT NULL DEFAULT false;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS voice_id varchar(80);
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS voice_name varchar(120);
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript text;
+
 -- Migrações que rodam uma única vez
 CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());
 DO $$ BEGIN

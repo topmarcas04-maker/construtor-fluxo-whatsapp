@@ -42,6 +42,8 @@ export interface AgentInput {
     /** Agendamento futuro que este lead já tem (texto) */
     current: string | null;
   };
+  /** Colunas do funil com regra: a IA coloca o lead nelas quando a regra se aplica */
+  columns?: { name: string; rule: string }[];
   /** Catálogo de produtos que a IA pode consultar (código curto P1, P2...) */
   catalog?: {
     code: string;
@@ -69,6 +71,8 @@ export interface AgentDecision {
   appointment: { date: string; time: string; subject: string } | null;
   /** Códigos do catálogo (P1, P2...) cujas fotos devem ser enviadas */
   productCodes: string[];
+  /** Nome da coluna do funil (com regra) para onde mover o lead */
+  columnName: string | null;
 }
 
 export const TOOL_NAME = "registrar_atendimento";
@@ -135,6 +139,11 @@ const TOOL = {
         },
         required: ["data", "hora", "assunto"],
       },
+      mover_para_coluna: {
+        type: "string",
+        description:
+          "Nome EXATO de uma coluna da lista COLUNAS DO FUNIL quando a regra dela se aplica a este cliente. Omita se nenhuma se aplica.",
+      },
       enviar_fotos: {
         type: "array",
         items: { type: "string" },
@@ -176,7 +185,7 @@ REGRAS DE FORMATO
 - Não repita perguntas que o cliente já respondeu. Faça no máximo uma pergunta por vez.
 - Nunca invente preço, estoque, prazo ou condição que não esteja nas instruções ou no catálogo.
 - Se o cliente mandar áudio ou imagem que você não consegue ver, peça gentilmente para escrever.
-- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${schedulingBlock(input)}${catalogBlock(input)}`;
+- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${schedulingBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
 }
 
 function schedulingBlock(input: AgentInput) {
@@ -192,6 +201,15 @@ AGENDA
 - Horários já ocupados: ${sc.busy.length ? sc.busy.join(", ") : "nenhum"}.
 - ${sc.current ? `Este cliente já tem agendado: ${sc.current}. Se ele quiser remarcar, preencha "agendamento" com o novo horário.` : "Este cliente ainda não tem nada agendado."}
 - Ao confirmar, repita dia e hora na resposta (ex.: "Combinado, quinta 25/09 às 14h!").`;
+}
+
+function columnsBlock(input: AgentInput) {
+  const cols = input.columns || [];
+  if (!cols.length) return "";
+  return `
+
+COLUNAS DO FUNIL (preencha "mover_para_coluna" quando a regra se aplicar)
+${cols.map((c) => `- "${c.name}": ${c.rule}`).join("\n")}`;
 }
 
 function catalogBlock(input: AgentInput) {
@@ -270,6 +288,7 @@ export function parseDecision(raw: Record<string, unknown>, allowedTags: string[
     handoff: raw.transferir === true,
     handoffReason: clean(raw.motivo_transferencia, 500),
     appointment: parseAppointment(raw.agendamento),
+    columnName: clean(raw.mover_para_coluna, 80),
     productCodes: Array.isArray(raw.enviar_fotos)
       ? [...new Set(raw.enviar_fotos.map((c) => String(c).trim().toUpperCase()).filter((c) => /^P\d{1,4}$/.test(c)))].slice(0, 3)
       : [],

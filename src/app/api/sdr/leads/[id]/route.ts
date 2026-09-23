@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
-import { leads, leadTags, conversations, sellers, tags } from "@/db/schema";
+import { leads, leadTags, conversations, sellers, tags, funnelColumns } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { requireUser, sellerScope } from "@/lib/auth/server";
 
@@ -10,7 +10,7 @@ const SALE_TYPES = ["ANY", "WHOLESALE", "RETAIL"];
 
 /**
  * PATCH /api/sdr/leads/[id]
- * Body (tudo opcional): stage, sellerId, dealValue, city, cardName, note, aiPaused,
+ * Body (tudo opcional): stage, columnId, sellerId, dealValue, city, cardName, note, aiPaused,
  * saleType, interest, addTagId, removeTagId
  */
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -52,6 +52,32 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       set.stage = body.stage;
       set.closed = body.stage === "SALE";
       set.closedAt = body.stage === "SALE" ? new Date() : null;
+    }
+    // Mover para uma coluna do funil: coluna fixa muda o estágio; coluna personalizada guarda o columnId
+    if (body.columnId !== undefined) {
+      const col = body.columnId
+        ? await db.query.funnelColumns.findFirst({
+            where: and(eq(funnelColumns.id, String(body.columnId)), eq(funnelColumns.accountId, auth.accountId)),
+          })
+        : null;
+      if (body.columnId && !col) return NextResponse.json({ error: "Coluna inválida" }, { status: 400 });
+      if (!col || col.kind !== "CUSTOM") {
+        set.columnId = null;
+        if (col && STAGES.includes(col.kind)) {
+          set.stage = col.kind;
+          set.closed = col.kind === "SALE";
+          set.closedAt = col.kind === "SALE" ? new Date() : null;
+        }
+      } else {
+        set.columnId = col.id;
+        if (lead.stage === "SALE") {
+          set.stage = "HOT_LEAD";
+          set.closed = false;
+          set.closedAt = null;
+        }
+      }
+    } else if (set.stage !== undefined) {
+      set.columnId = null;
     }
     if (body.sellerId !== undefined) {
       if (body.sellerId) {

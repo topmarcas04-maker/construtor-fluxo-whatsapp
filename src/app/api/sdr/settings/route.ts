@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { accounts, aiSettings } from "@/db/schema";
 import { requireUser } from "@/lib/auth/server";
-import { getAccount, resolveAccountAiKey } from "@/lib/tenancy/server";
+import { getAccount, resolveAccountAiKey, resolveAccountVoiceKey } from "@/lib/tenancy/server";
 import { decryptSecret, encryptSecret, maskKey } from "@/lib/tenancy/secret";
 
 function defaultPrompt(company: string) {
@@ -53,6 +53,16 @@ async function payload(accountId: string) {
   const ai = await resolveAccountAiKey(accountId);
   const ownKey = decryptSecret(account?.aiApiKeyEnc);
   const parent = await getAccount(account?.parentId);
+  const [openai, eleven] = await Promise.all([
+    resolveAccountVoiceKey(accountId, "openai"),
+    resolveAccountVoiceKey(accountId, "eleven"),
+  ]);
+  const voiceInfo = (r: typeof openai, enc: string | null | undefined) => ({
+    ready: Boolean(r.apiKey),
+    reason: r.reason,
+    providerName: r.providerAccountName,
+    ownKeyHint: maskKey(decryptSecret(enc)),
+  });
   return {
     ...s,
     handoffMessage: s.handoffMessage ?? DEFAULT_HANDOFF,
@@ -66,6 +76,10 @@ async function payload(accountId: string) {
       ready: Boolean(ai.apiKey),
       reason: ai.reason,
       providerName: ai.providerAccountName,
+    },
+    voice: {
+      openai: voiceInfo(openai, account?.openaiKeyEnc),
+      eleven: voiceInfo(eleven, account?.elevenKeyEnc),
     },
   };
 }
@@ -102,7 +116,34 @@ export async function PUT(req: NextRequest) {
       .where(eq(accounts.id, auth.accountId));
   }
 
+  // Chaves de áudio (mesma regra: só quem tem integração própria cadastra)
+  for (const [field, column, prefix, label] of [
+    ["openaiKey", "openaiKeyEnc", "sk-", "OpenAI"],
+    ["elevenKey", "elevenKeyEnc", "", "ElevenLabs"],
+  ] as const) {
+    if (body[field] === undefined) continue;
+    const source = account?.type === "MASTER" ? "OWN" : account?.aiSource;
+    if (source !== "OWN") {
+      return NextResponse.json(
+        { error: "Esta conta usa as integrações de quem a cadastrou. Peça para liberar integração própria." },
+        { status: 403 }
+      );
+    }
+    const key = String(body[field] || "").trim();
+    if (key && prefix && !key.startsWith(prefix)) {
+      return NextResponse.json({ error: `Chave da ${label} inválida. Ela começa com ${prefix}...` }, { status: 400 });
+    }
+    await db
+      .update(accounts)
+      .set({ [column]: key ? encryptSecret(key) : null })
+      .where(eq(accounts.id, auth.accountId));
+  }
+
   const set: Record<string, unknown> = { updatedAt: new Date() };
+  if (typeof body.transcribeAudio === "boolean") set.transcribeAudio = body.transcribeAudio;
+  if (typeof body.voiceReplies === "boolean") set.voiceReplies = body.voiceReplies;
+  if (body.voiceId !== undefined) set.voiceId = String(body.voiceId || "").slice(0, 80) || null;
+  if (body.voiceName !== undefined) set.voiceName = String(body.voiceName || "").slice(0, 120) || null;
   if (typeof body.systemPrompt === "string") set.systemPrompt = body.systemPrompt;
   if (typeof body.enabled === "boolean") set.enabled = body.enabled;
   if (typeof body.notifySeller === "boolean") set.notifySeller = body.notifySeller;
