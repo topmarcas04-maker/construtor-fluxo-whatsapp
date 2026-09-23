@@ -10,7 +10,12 @@ export function productValues(body: Record<string, unknown>, partial: boolean) {
   }
   const money = (x: unknown) => {
     if (x === null || x === undefined || x === "") return null;
-    const n = Number(String(x).replace(/\./g, "").replace(",", "."));
+    if (typeof x === "number") return Number.isFinite(x) && x >= 0 ? x : NaN;
+    // Aceita "10990", "10.990", "10.990,00", "R$ 10.990,00"
+    if (!String(x).trim()) return null;
+    const clean = String(x).replace(/[^\d.,-]/g, "");
+    if (!/\d/.test(clean)) return NaN;
+    const n = Number(clean.replace(/\./g, "").replace(",", "."));
     return Number.isFinite(n) && n >= 0 ? n : NaN;
   };
   for (const f of ["price", "promoPrice"] as const) {
@@ -55,7 +60,7 @@ export function productValues(body: Record<string, unknown>, partial: boolean) {
       if (!n) continue;
       if (n < 2 || n > 48) return { error: "Parcelas devem ser entre 2x e 48x" } as const;
       const total = money(it?.total);
-      if (Number.isNaN(total)) return { error: "Preço a prazo inválido" } as const;
+      if (Number.isNaN(total)) return { error: `Total a prazo de ${n}x inválido. Use só números, ex.: 10990 ou 10.990,00` } as const;
       if (!out.some((o) => o.n === n)) out.push({ n, total });
     }
     v.installments = out.sort((a, b) => a.n - b.n);

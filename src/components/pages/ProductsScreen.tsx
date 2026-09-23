@@ -226,6 +226,10 @@ type Form = {
   }[];
 };
 
+/** Quantidades sugeridas (aparecem em cinza): se o total foi preenchido e a quantidade não, usa a sugerida */
+const SUGGESTED_N = ["12", "18", "21"];
+const installmentN = (it: { n: string; total: string }, k: number) => it.n.trim() || (it.total.trim() ? SUGGESTED_N[k] || "" : "");
+
 const EMPTY_INSTALLMENTS = [
   { n: "", total: "" },
   { n: "", total: "" },
@@ -234,8 +238,10 @@ const EMPTY_INSTALLMENTS = [
 
 /** "1.234,56" → 1234.56 */
 function parseMoney(v: string) {
-  if (!v.trim()) return null;
-  const n = Number(v.replace(/\./g, "").replace(",", "."));
+  if (!(v || "").trim()) return null;
+  const clean = v.replace(/[^\d.,-]/g, "");
+  if (!/\d/.test(clean)) return NaN;
+  const n = Number(clean.replace(/\./g, "").replace(",", "."));
   return Number.isFinite(n) ? n : NaN;
 }
 
@@ -370,8 +376,18 @@ export function ProductsScreen() {
     setError(null);
     try {
       const isNew = editing === "new";
+      // Confere as parcelas antes de enviar (o erro aparece ao lado do botão Salvar)
+      for (const [k, it] of form.installments.entries()) {
+        if (!it.n.trim() && !it.total.trim()) continue;
+        const n = Number(installmentN(it, k));
+        if (n < 2 || n > 48) throw new Error("Parcelas devem ser entre 2x e 48x.");
+        if (it.total.trim() && Number.isNaN(parseMoney(it.total))) throw new Error(`Total de ${n}x inválido. Use só números, ex.: 10990 ou 10.990,00`);
+      }
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 60000);
       const res = await fetch(isNew ? "/api/products" : `/api/products/${(editing as Product).id}`, {
         method: isNew ? "POST" : "PATCH",
+        signal: ctrl.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: form.name,
@@ -392,8 +408,9 @@ export function ProductsScreen() {
           availability: form.availability,
           leadTimeDays: form.availability === "ORDER" ? form.leadTimeDays : null,
           installments: form.installments
-            .filter((it) => it.n.trim())
-            .map((it) => ({ n: Number(it.n), total: it.total.trim() ? it.total : null })),
+            .map((it, k) => ({ n: installmentN(it, k), total: it.total.trim() ? it.total : null }))
+            .filter((it) => it.n)
+            .map((it) => ({ n: Number(it.n), total: it.total })),
           images: form.photos.map((ph) => {
             const extra = {
               label: ph.label,
@@ -405,12 +422,14 @@ export function ProductsScreen() {
           }),
         }),
       });
-      const out = await res.json();
-      if (!res.ok) throw new Error(out.error || "Falha ao salvar");
+      clearTimeout(timer);
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.error || `O servidor não conseguiu salvar (erro ${res.status}). Tente de novo.`);
       setEditing(null);
       load();
     } catch (e) {
-      setError((e as Error).message);
+      const err = e as Error;
+      setError(err.name === "AbortError" ? "O servidor demorou demais para responder. Verifique a internet e tente de novo." : err.message);
     } finally {
       setSaving(false);
     }
@@ -765,6 +784,7 @@ export function ProductsScreen() {
         title={editing === "new" ? "Novo produto" : "Editar produto"}
         footer={
           <>
+            {error && <p className="mr-auto max-w-md self-center text-sm font-semibold text-red-600">{error}</p>}
             <Button variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button>
             <Button onClick={save} disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>
           </>
@@ -964,7 +984,7 @@ export function ProductsScreen() {
                 </p>
                 <div className="space-y-2">
                   {form.installments.map((it, k) => {
-                    const n = Number(it.n);
+                    const n = Number(installmentN(it, k));
                     const cash = parseMoney(form.promoPrice) ?? parseMoney(form.price);
                     const total = it.total.trim() ? parseMoney(it.total) : cash;
                     const each = n >= 2 && total != null && !Number.isNaN(total) ? total / n : null;
@@ -973,7 +993,7 @@ export function ProductsScreen() {
                         <input
                           inputMode="numeric"
                           className="w-14 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm outline-none focus:border-[var(--accent)]"
-                          placeholder={["12", "18", "21"][k]}
+                          placeholder={SUGGESTED_N[k]}
                           value={it.n}
                           onChange={(e) =>
                             setForm({
@@ -996,8 +1016,12 @@ export function ProductsScreen() {
                             })
                           }
                         />
-                        <span className="min-w-[120px] text-sm font-semibold text-slate-800">
-                          {each != null ? `= ${n}x de ${brl(Math.round(each * 100) / 100)}` : ""}
+                        <span className={`min-w-[120px] text-sm font-semibold ${Number.isNaN(total as number) ? "text-red-600" : "text-slate-800"}`}>
+                          {Number.isNaN(total as number)
+                            ? "valor inválido"
+                            : each != null
+                            ? `= ${n}x de ${brl(Math.round(each * 100) / 100)}`
+                            : ""}
                         </span>
                       </div>
                     );
