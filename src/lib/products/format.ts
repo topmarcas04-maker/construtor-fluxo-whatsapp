@@ -57,3 +57,55 @@ export function availabilityText(a: { availability: Availability; days: number |
   if (a.availability === "READY") return "Pronta entrega";
   return a.days ? `Pedido/reserva: entrega em até ${a.days} dias` : "Pedido/reserva (prazo a confirmar)";
 }
+
+export type ProductKind = "PHYSICAL" | "PLAN" | "SERVICE";
+
+export const KIND_LABEL: Record<string, string> = {
+  PHYSICAL: "Produto",
+  PLAN: "Plano / mensalidade",
+  SERVICE: "Serviço",
+};
+
+type PriceInfo = {
+  kind?: string | null;
+  price: number | null;
+  promoPrice: number | null;
+  billingPeriod?: string | null;
+};
+
+/** Sufixo do preço de planos: "/mês" ou "/ano" */
+export function periodSuffix(p: { kind?: string | null; billingPeriod?: string | null }) {
+  if (p.kind !== "PLAN") return "";
+  return p.billingPeriod === "YEAR" ? "/ano" : "/mês";
+}
+
+/** Preço conforme o tipo: produto (à vista), plano (por mês/ano) ou serviço */
+export function kindPriceLabel(p: PriceInfo) {
+  const base = priceLabel(p);
+  if (p.price == null && p.promoPrice == null) {
+    return p.kind === "SERVICE" ? "Sob orçamento" : base;
+  }
+  return base + periodSuffix(p);
+}
+
+/** Linhas extras de planos e serviços (adesão, fidelidade, teste grátis, duração) */
+export function kindDetails(p: {
+  kind?: string | null;
+  setupFee?: number | null;
+  commitmentMonths?: number | null;
+  trialDays?: number | null;
+  durationMinutes?: number | null;
+}) {
+  const out: string[] = [];
+  if (p.kind === "PLAN") {
+    out.push(p.setupFee ? `Adesão: ${brl(p.setupFee)}` : "Sem taxa de adesão");
+    out.push(p.commitmentMonths ? `Fidelidade: ${p.commitmentMonths} meses` : "Sem fidelidade");
+    if (p.trialDays) out.push(`Teste grátis: ${p.trialDays} dias`);
+  }
+  if (p.kind === "SERVICE" && p.durationMinutes) {
+    const h = Math.floor(p.durationMinutes / 60);
+    const m = p.durationMinutes % 60;
+    out.push(`Duração: ${h ? `${h}h` : ""}${m ? `${h ? " " : ""}${m}min` : ""}`);
+  }
+  return out;
+}

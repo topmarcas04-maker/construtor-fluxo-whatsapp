@@ -7,6 +7,10 @@ import {
   installmentText,
   effectiveAvailability,
   availabilityText,
+  kindPriceLabel,
+  kindDetails,
+  periodSuffix,
+  KIND_LABEL,
   type Installment,
 } from "@/lib/products/format";
 import { Page, PageHeader, Card, Button, Field, Input, Select, Textarea, Toggle, Badge, Modal, EmptyState, ErrorNote } from "@/components/ui";
@@ -26,6 +30,12 @@ export interface Product {
   promoPrice: number | null;
   code: string | null;
   active: boolean;
+  kind?: string;
+  billingPeriod?: string;
+  setupFee?: number | null;
+  commitmentMonths?: number | null;
+  trialDays?: number | null;
+  durationMinutes?: number | null;
   availability?: string;
   leadTimeDays?: number | null;
   installments?: Installment[];
@@ -56,19 +66,42 @@ export function DeliveryBadge({ a, small }: { a: { availability: string; days: n
 
 const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-export function PriceTag({ p, big }: { p: Pick<Product, "price" | "promoPrice">; big?: boolean }) {
+export function PriceTag({
+  p,
+  big,
+}: {
+  p: Pick<Product, "price" | "promoPrice"> & { kind?: string; billingPeriod?: string };
+  big?: boolean;
+}) {
   const size = big ? "text-xl" : "text-base";
+  const suffix = periodSuffix(p);
+  const per = suffix ? <span className="text-sm font-medium text-slate-500">{suffix}</span> : null;
   if (p.promoPrice != null) {
     return (
       <div>
-        {p.price != null && <p className="text-xs text-slate-400 line-through">{brl(p.price)}</p>}
-        <p className={`${size} font-bold text-emerald-600`}>{brl(p.promoPrice)}</p>
+        {p.price != null && <p className="text-xs text-slate-400 line-through">{brl(p.price)}{suffix}</p>}
+        <p className={`${size} font-bold text-emerald-600`}>
+          {brl(p.promoPrice)}
+          {per}
+        </p>
       </div>
     );
   }
-  if (p.price != null) return <p className={`${size} font-bold text-slate-900`}>{brl(p.price)}</p>;
-  return <p className="text-sm font-medium text-slate-500">Preço sob consulta</p>;
+  if (p.price != null)
+    return (
+      <p className={`${size} font-bold text-slate-900`}>
+        {brl(p.price)}
+        {per}
+      </p>
+    );
+  return <p className="text-sm font-medium text-slate-500">{p.kind === "SERVICE" ? "Sob orçamento" : "Preço sob consulta"}</p>;
 }
+
+const KIND_BADGE: Record<string, string> = {
+  PHYSICAL: "bg-slate-100 text-slate-600",
+  PLAN: "bg-violet-50 text-violet-700",
+  SERVICE: "bg-sky-50 text-sky-700",
+};
 
 /** Reduz a foto para até 1200px (JPEG) antes de salvar */
 async function compress(file: File): Promise<string> {
@@ -95,6 +128,12 @@ async function compress(file: File): Promise<string> {
 }
 
 type Form = {
+  kind: "PHYSICAL" | "PLAN" | "SERVICE";
+  billingPeriod: "MONTH" | "YEAR";
+  setupFee: string;
+  commitmentMonths: string;
+  trialDays: string;
+  durationMinutes: string;
   name: string;
   categoryId: string;
   price: string;
@@ -177,6 +216,12 @@ export function ProductsScreen() {
 
   const openNew = () => {
     setForm({
+      kind: "PHYSICAL",
+      billingPeriod: "MONTH",
+      setupFee: "",
+      commitmentMonths: "",
+      trialDays: "",
+      durationMinutes: "",
       name: "",
       categoryId: cat !== "all" && cat !== "none" ? cat : "",
       price: "",
@@ -195,6 +240,12 @@ export function ProductsScreen() {
   const openEdit = (p: Product) => {
     setViewing(null);
     setForm({
+      kind: p.kind === "PLAN" || p.kind === "SERVICE" ? p.kind : "PHYSICAL",
+      billingPeriod: p.billingPeriod === "YEAR" ? "YEAR" : "MONTH",
+      setupFee: toInput(p.setupFee ?? null),
+      commitmentMonths: p.commitmentMonths ? String(p.commitmentMonths) : "",
+      trialDays: p.trialDays ? String(p.trialDays) : "",
+      durationMinutes: p.durationMinutes ? String(p.durationMinutes) : "",
       name: p.name,
       categoryId: p.categoryId || "",
       price: toInput(p.price),
@@ -249,6 +300,12 @@ export function ProductsScreen() {
           code: form.code,
           description: form.description,
           active: form.active,
+          kind: form.kind,
+          billingPeriod: form.billingPeriod,
+          setupFee: form.kind === "PLAN" ? form.setupFee : null,
+          commitmentMonths: form.kind === "PLAN" ? form.commitmentMonths : null,
+          trialDays: form.kind === "PLAN" ? form.trialDays : null,
+          durationMinutes: form.kind === "SERVICE" ? form.durationMinutes : null,
           availability: form.availability,
           leadTimeDays: form.availability === "ORDER" ? form.leadTimeDays : null,
           installments: form.installments
@@ -543,9 +600,17 @@ export function ProductsScreen() {
                       })}
                   </div>
                 )}
-                <DeliveryBadge a={effectiveAvailability(p)} small />
+                <div className="flex flex-wrap gap-1.5">
+                  {p.kind && p.kind !== "PHYSICAL" && (
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${KIND_BADGE[p.kind]}`}>{KIND_LABEL[p.kind]}</span>
+                  )}
+                  {(!p.kind || p.kind === "PHYSICAL") && <DeliveryBadge a={effectiveAvailability(p)} small />}
+                </div>
                 <PriceTag p={p} />
-                {installmentRows(p).length > 0 && (
+                {p.kind && p.kind !== "PHYSICAL" && kindDetails(p).length > 0 && (
+                  <p className="text-xs text-slate-500">{kindDetails(p).join(" · ")}</p>
+                )}
+                {(!p.kind || p.kind === "PHYSICAL") && installmentRows(p).length > 0 && (
                   <p className="text-xs text-slate-500">
                     ou {installmentText(installmentRows(p)[installmentRows(p).length - 1])}
                   </p>
@@ -630,9 +695,10 @@ export function ProductsScreen() {
                       onChange={(e) =>
                         setForm({ ...form, photos: form.photos.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })
                       }
-                      placeholder="Cor (ex.: Azul)"
+                      placeholder={form.kind === "PHYSICAL" ? "Cor (ex.: Azul)" : "Nome da foto"}
                       className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1 text-xs outline-none focus:border-[var(--accent)]"
                     />
+                    {form.kind === "PHYSICAL" && (
                     <select
                       value={ph.availability}
                       onChange={(e) =>
@@ -650,7 +716,8 @@ export function ProductsScreen() {
                       <option value="READY">Pronta entrega</option>
                       <option value="ORDER">Pedido/reserva</option>
                     </select>
-                    {ph.availability === "ORDER" && (
+                    )}
+                    {form.kind === "PHYSICAL" && ph.availability === "ORDER" && (
                       <input
                         inputMode="numeric"
                         value={ph.leadTimeDays}
@@ -676,8 +743,34 @@ export function ProductsScreen() {
               </div>
             </div>
 
+            <div>
+              <p className="mb-2 text-sm font-semibold text-slate-800">Tipo</p>
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    { v: "PHYSICAL", label: "Produto", hint: "scooter, capacete, peça" },
+                    { v: "PLAN", label: "Plano / mensalidade", hint: "cobrança mensal ou anual" },
+                    { v: "SERVICE", label: "Serviço", hint: "instalação, revisão, consultoria" },
+                  ] as const
+                ).map((o) => (
+                  <button
+                    key={o.v}
+                    onClick={() => setForm({ ...form, kind: o.v })}
+                    className={`rounded-xl border px-4 py-2 text-left ${
+                      form.kind === o.v
+                        ? "border-[var(--accent)] bg-[var(--accent)]/5"
+                        : "border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className={`block text-sm font-semibold ${form.kind === o.v ? "text-[var(--accent)]" : "text-slate-800"}`}>{o.label}</span>
+                    <span className="block text-xs text-slate-500">{o.hint}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="grid gap-4 md:grid-cols-[2fr_1fr]">
-              <Field label="Nome do produto *">
+              <Field label={form.kind === "PLAN" ? "Nome do plano *" : form.kind === "SERVICE" ? "Nome do serviço *" : "Nome do produto *"}>
                 <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus />
               </Field>
               <Field label="Categoria">
@@ -690,7 +783,10 @@ export function ProductsScreen() {
               </Field>
             </div>
             <div className="grid gap-4 md:grid-cols-3">
-              <Field label="Preço (R$)" hint="Vazio = sob consulta">
+              <Field
+                label={form.kind === "PLAN" ? (form.billingPeriod === "YEAR" ? "Valor por ano (R$)" : "Valor por mês (R$)") : "Preço (R$)"}
+                hint={form.kind === "SERVICE" ? "Vazio = sob orçamento" : "Vazio = sob consulta"}
+              >
                 <Input inputMode="decimal" placeholder="0,00" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} />
               </Field>
               <Field label="Preço promocional (R$)" hint="Opcional">
@@ -700,6 +796,7 @@ export function ProductsScreen() {
                 <Input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
               </Field>
             </div>
+            {form.kind === "PHYSICAL" && (
             <div className="grid gap-4 md:grid-cols-2">
               <div className="rounded-xl border border-slate-200 p-4">
                 <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
@@ -795,6 +892,47 @@ export function ProductsScreen() {
                 </div>
               </div>
             </div>
+            )}
+
+            {form.kind === "PLAN" && (
+              <div className="rounded-xl border border-violet-100 bg-violet-50/40 p-4">
+                <p className="mb-3 text-sm font-semibold text-slate-800">Condições do plano</p>
+                <div className="grid gap-4 md:grid-cols-4">
+                  <Field label="Cobrança">
+                    <Select value={form.billingPeriod} onChange={(e) => setForm({ ...form, billingPeriod: e.target.value === "YEAR" ? "YEAR" : "MONTH" })}>
+                      <option value="MONTH">Mensal</option>
+                      <option value="YEAR">Anual</option>
+                    </Select>
+                  </Field>
+                  <Field label="Taxa de adesão (R$)" hint="Vazio = sem adesão">
+                    <Input inputMode="decimal" placeholder="0,00" value={form.setupFee} onChange={(e) => setForm({ ...form, setupFee: e.target.value })} />
+                  </Field>
+                  <Field label="Fidelidade (meses)" hint="Vazio = sem fidelidade">
+                    <Input inputMode="numeric" placeholder="12" value={form.commitmentMonths} onChange={(e) => setForm({ ...form, commitmentMonths: e.target.value.replace(/\D/g, "") })} />
+                  </Field>
+                  <Field label="Teste grátis (dias)" hint="Opcional">
+                    <Input inputMode="numeric" placeholder="7" value={form.trialDays} onChange={(e) => setForm({ ...form, trialDays: e.target.value.replace(/\D/g, "") })} />
+                  </Field>
+                </div>
+              </div>
+            )}
+
+            {form.kind === "SERVICE" && (
+              <div className="rounded-xl border border-sky-100 bg-sky-50/40 p-4">
+                <p className="mb-3 text-sm font-semibold text-slate-800">Serviço</p>
+                <div className="flex items-center gap-2 text-sm text-slate-600">
+                  Duração
+                  <input
+                    inputMode="numeric"
+                    className="w-20 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                    placeholder="60"
+                    value={form.durationMinutes}
+                    onChange={(e) => setForm({ ...form, durationMinutes: e.target.value.replace(/\D/g, "") })}
+                  />
+                  minutos
+                </div>
+              </div>
+            )}
 
             <Field label="Descrição" hint="Tudo que a IA pode contar ao cliente: características, medidas, autonomia, garantia, condições de pagamento...">
               <Textarea rows={6} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
@@ -840,15 +978,25 @@ export function ProductDetail({ p, category }: { p: Product; category?: string |
           {p.code && <Badge>Cód. {p.code}</Badge>}
           {!p.active && <Badge tone="red">Inativo</Badge>}
         </div>
+        {p.kind && p.kind !== "PHYSICAL" && (
+          <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${KIND_BADGE[p.kind]}`}>{KIND_LABEL[p.kind]}</span>
+        )}
         <PriceTag p={p} big />
-        {installmentRows(p).length > 0 && (
+        {p.kind && p.kind !== "PHYSICAL" && kindDetails(p).length > 0 && (
+          <div className="space-y-0.5 text-sm text-slate-600">
+            {kindDetails(p).map((d) => (
+              <p key={d}>{d}</p>
+            ))}
+          </div>
+        )}
+        {(!p.kind || p.kind === "PHYSICAL") && installmentRows(p).length > 0 && (
           <div className="space-y-0.5 text-sm text-slate-600">
             {installmentRows(p).map((r) => (
               <p key={r.n}>ou {installmentText(r)}</p>
             ))}
           </div>
         )}
-        <DeliveryBadge a={effectiveAvailability(p, img)} />
+        {(!p.kind || p.kind === "PHYSICAL") && <DeliveryBadge a={effectiveAvailability(p, img)} />}
         {img?.label && img.active === false && <Badge tone="red">Cor desligada</Badge>}
         <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{p.description || "Sem descrição."}</p>
       </div>

@@ -317,6 +317,8 @@ export const leads = pgTable(
     score: integer("score"),
     /** O que o lead procura (modelo, uso, quantidade…) */
     interest: varchar("interest", { length: 255 }),
+    /** Produto de interesse (a IA identifica pela conversa; a equipe pode trocar) */
+    productId: uuid("product_id").references(() => products.id, { onDelete: "set null" }),
     saleType: saleTypeEnum("sale_type").notNull().default("ANY"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -590,6 +592,18 @@ export const products = pgTable(
     promoPrice: doublePrecision("promo_price"),
     code: varchar("code", { length: 60 }),
     active: boolean("active").notNull().default(true),
+    /** PHYSICAL = produto físico | PLAN = plano/mensalidade | SERVICE = serviço */
+    kind: varchar("kind", { length: 10 }).notNull().default("PHYSICAL"),
+    /** Planos: MONTH (mensal) | YEAR (anual) */
+    billingPeriod: varchar("billing_period", { length: 10 }).notNull().default("MONTH"),
+    /** Planos: taxa de adesão */
+    setupFee: doublePrecision("setup_fee"),
+    /** Planos: fidelidade em meses */
+    commitmentMonths: integer("commitment_months"),
+    /** Planos: dias de teste grátis */
+    trialDays: integer("trial_days"),
+    /** Serviços: duração em minutos */
+    durationMinutes: integer("duration_minutes"),
     /** READY = pronta entrega | ORDER = pedido/reserva (com prazo) */
     availability: varchar("availability", { length: 10 }).notNull().default("READY"),
     /** Prazo de entrega em dias (pedido/reserva) */
@@ -756,6 +770,7 @@ export const leadsRelations = relations(leads, ({ one, many }) => ({
   }),
   leadTags: many(leadTags),
   appointments: many(appointments),
+  product: one(products, { fields: [leads.productId], references: [products.id] }),
 }));
 
 export const partnersRelations = relations(partners, ({ many }) => ({

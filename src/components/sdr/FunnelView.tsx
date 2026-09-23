@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Bot, MessageSquare, MapPin, UserRound, Pencil, Plus, ChevronLeft, ChevronRight, Trash2, X, Sparkles } from "lucide-react";
+import { Bot, MessageSquare, MapPin, UserRound, Package, Pencil, Plus, ChevronLeft, ChevronRight, Trash2, X, Sparkles } from "lucide-react";
 import type { Lead, Seller } from "@/lib/types/sdr";
 import { leadDisplayName, TAG_DOT_CLASSES } from "@/lib/types/sdr";
 import { columnOfLead, COLUMN_COLORS, type FunnelColumn } from "@/lib/funnel/common";
@@ -294,7 +294,14 @@ export function FunnelView({
                       )}
                     </div>
 
-                    {lead.interest && <p className="mt-2 line-clamp-2 text-sm text-slate-600">{lead.interest}</p>}
+                    {lead.product && (
+                      <p className="mt-2 inline-flex max-w-full items-center gap-1 truncate rounded-md bg-[var(--accent)]/10 px-2 py-0.5 text-xs font-semibold text-[var(--accent)]">
+                        <Package size={12} className="shrink-0" /> <span className="truncate">{lead.product.name}</span>
+                      </p>
+                    )}
+                    {lead.interest && lead.interest !== lead.product?.name && (
+                      <p className="mt-2 line-clamp-2 text-sm text-slate-600">{lead.interest}</p>
+                    )}
 
                     <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
                       {lead.city && (

@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
-import { leads, leadTags, conversations, sellers, tags, funnelColumns } from "@/db/schema";
+import { leads, leadTags, conversations, sellers, tags, funnelColumns, products } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { requireUser, sellerScope } from "@/lib/auth/server";
 
@@ -91,6 +91,15 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     if (body.dealValue !== undefined) {
       const v = body.dealValue === null || body.dealValue === "" ? null : Number(body.dealValue);
       set.dealValue = v === null || Number.isNaN(v) ? null : v;
+    }
+    if (body.productId !== undefined) {
+      if (body.productId) {
+        const prod = await db.query.products.findFirst({
+          where: and(eq(products.id, String(body.productId)), eq(products.accountId, auth.accountId)),
+        });
+        if (!prod) return NextResponse.json({ error: "Produto inválido" }, { status: 400 });
+        set.productId = prod.id;
+      } else set.productId = null;
     }
     if (body.city !== undefined) set.city = String(body.city || "").trim() || null;
     if (body.note !== undefined) set.note = String(body.note || "") || null;

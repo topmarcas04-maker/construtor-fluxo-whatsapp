@@ -278,6 +278,11 @@ export function ConversationsView({
                         </span>
                       )}
                       <StatusChip lead={lead} />
+                      {lead.product && (
+                        <span className="max-w-[140px] truncate rounded-full bg-[var(--accent)]/10 px-2 py-0.5 text-[10px] font-semibold text-[var(--accent)]" title="Produto de interesse">
+                          {lead.product.name}
+                        </span>
+                      )}
                       {lead.city && (
                         <span className="inline-flex items-center gap-0.5 text-[11px] text-slate-500">
                           <MapPin size={11} /> {lead.city}

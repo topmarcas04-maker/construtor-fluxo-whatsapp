@@ -67,6 +67,9 @@ import {
   installmentText,
   effectiveAvailability,
   availabilityText,
+  kindPriceLabel,
+  kindDetails,
+  KIND_LABEL,
 } from "../src/lib/products/format";
 import { ensureColumns } from "../src/lib/funnel/shared";
 import { normalizeStage } from "../src/lib/funnel/common";
@@ -1197,7 +1200,7 @@ async function runAi(accountId: string, conversationId: string) {
     return;
   }
 
-  await applyDecision(accountId, lead.id, conversationId, decision, allTags, ruleColumns);
+  await applyDecision(accountId, lead.id, conversationId, decision, allTags, ruleColumns, catalog);
   if (decision.appointment && settings.schedulingEnabled) {
     await saveAiAppointment(accountId, lead.id, decision, settings, currentAppt?.id || null);
   }
@@ -1274,6 +1277,12 @@ async function loadCatalog(accountId: string) {
       availability: products.availability,
       leadTimeDays: products.leadTimeDays,
       installments: products.installments,
+      kind: products.kind,
+      billingPeriod: products.billingPeriod,
+      setupFee: products.setupFee,
+      commitmentMonths: products.commitmentMonths,
+      trialDays: products.trialDays,
+      durationMinutes: products.durationMinutes,
       category: productCategories.name,
     })
     .from(products)
@@ -1302,15 +1311,20 @@ async function loadCatalog(accountId: string) {
       code: `P${i + 1}`,
       name: r.name,
       category: r.category,
-      price: priceLabel(r),
+      price: kindPriceLabel(r),
+      kind: KIND_LABEL[r.kind] || "Produto",
+      details: kindDetails(r),
       description: r.description ? r.description.replace(/\s+/g, " ").slice(0, 400) : null,
       hasPhoto: withPhoto.has(r.id),
       photoLabels: activePhotos.filter((ph) => ph.productId === r.id && ph.label?.trim()).map((ph) => ph.label!.trim()),
-      delivery: availabilityText(effectiveAvailability(r)),
-      installments: installmentRows(r).map(installmentText),
+      delivery: r.kind === "PHYSICAL" ? availabilityText(effectiveAvailability(r)) : undefined,
+      installments: r.kind === "PHYSICAL" ? installmentRows(r).map(installmentText) : [],
       colors: activePhotos
         .filter((ph) => ph.productId === r.id && ph.label?.trim())
-        .map((ph) => ({ name: ph.label!.trim(), delivery: availabilityText(effectiveAvailability(r, ph)) })),
+        .map((ph) => ({
+          name: ph.label!.trim(),
+          delivery: r.kind === "PHYSICAL" ? availabilityText(effectiveAvailability(r, ph)) : "",
+        })),
     },
   }));
 }
@@ -1344,10 +1358,19 @@ async function sendProductPhoto(
       (imgs.find((i) => i.label && norm(i.label) === wanted) ||
         imgs.find((i) => i.label && (norm(i.label).includes(wanted) || wanted.includes(norm(i.label)))))) ||
     imgs[0];
-  const lines = [`*${product.name}*${img?.label ? ` — ${img.label}` : ""}`, product.price != null || product.promoPrice != null ? `${priceLabel(product)} à vista` : priceLabel(product)];
-  const inst = installmentRows(product);
-  if (inst.length) lines.push(`ou ${inst.map(installmentText).join(" | ")}`);
-  lines.push(availabilityText(effectiveAvailability(product, img)));
+  const physical = product.kind === "PHYSICAL";
+  const hasPrice = product.price != null || product.promoPrice != null;
+  const lines = [
+    `*${product.name}*${img?.label ? ` — ${img.label}` : ""}`,
+    physical && hasPrice ? `${priceLabel(product)} à vista` : kindPriceLabel(product),
+  ];
+  if (physical) {
+    const inst = installmentRows(product);
+    if (inst.length) lines.push(`ou ${inst.map(installmentText).join(" | ")}`);
+    lines.push(availabilityText(effectiveAvailability(product, img)));
+  } else {
+    lines.push(...kindDetails(product));
+  }
   if (withDescription && product.description?.trim()) lines.push("", product.description.trim().slice(0, 700));
   const caption = lines.join("\n");
   if (!img) return sendText(accountId, phoneJid, caption, sender, authorName);
@@ -1362,7 +1385,8 @@ async function applyDecision(
   conversationId: string,
   d: AgentDecision,
   allTags: { id: string; name: string }[],
-  ruleColumns: { id: string; name: string }[] = []
+  ruleColumns: { id: string; name: string }[] = [],
+  catalog: { id: string; ai: { code: string; name: string } }[] = []
 ) {
   const current = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
   if (!current) return;
@@ -1386,6 +1410,12 @@ async function applyDecision(
   };
   if (d.city) set.city = d.city;
   if (d.phone && !current.phone) set.phone = d.phone;
+  // Produto de interesse identificado pela IA
+  const interest = d.interestCode ? catalog.find((c) => c.ai.code === d.interestCode) : null;
+  if (interest) {
+    set.productId = interest.id;
+    if (!d.interest) set.interest = interest.ai.name.slice(0, 255);
+  }
   if (d.interest) set.interest = d.interest;
   if (d.saleType !== "ANY") set.saleType = d.saleType;
   const conv = await db.query.conversations.findFirst({ where: eq(conversations.id, conversationId) });

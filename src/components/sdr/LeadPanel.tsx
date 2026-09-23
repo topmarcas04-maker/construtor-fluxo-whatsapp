@@ -7,6 +7,16 @@ import { type Appointment, STATUS_LABEL, STATUS_STYLE, spParts } from "@/compone
 import type { Lead, Seller, Tag } from "@/lib/types/sdr";
 import { TAG_COLOR_CLASSES, SALE_TYPE_LABEL } from "@/lib/types/sdr";
 
+/** Lista de produtos (carregada uma vez) para escolher o produto de interesse */
+let productCache: Promise<{ id: string; name: string; kind: string; active: boolean }[]> | null = null;
+function loadProducts() {
+  productCache ||= fetch("/api/products")
+    .then((r) => (r.ok ? r.json() : { products: [] }))
+    .then((d) => d.products || [])
+    .catch(() => []);
+  return productCache;
+}
+
 function scoreTone(score: number) {
   if (score >= 70) return { bar: "bg-emerald-500", text: "text-emerald-700", label: "Quente" };
   if (score >= 40) return { bar: "bg-amber-500", text: "text-amber-700", label: "Morno" };
@@ -57,6 +67,10 @@ export function LeadPanel({
   canEdit: boolean;
 }) {
   const leadTagIds = new Set(lead.tags.map((t) => t.id));
+  const [productList, setProductList] = useState<{ id: string; name: string; kind: string; active: boolean }[]>([]);
+  useEffect(() => {
+    loadProducts().then(setProductList);
+  }, []);
   const [note, setNote] = useState(lead.note || "");
   useEffect(() => setNote(lead.note || ""), [lead.id, lead.note]);
 
@@ -177,6 +191,27 @@ export function LeadPanel({
             onSave={(v) => onPatch({ dealValue: v })}
           />
         </div>
+      </div>
+
+      <div>
+        <span className={labelCls}>Produto de interesse</span>
+        <select
+          value={lead.product?.id || ""}
+          onChange={(e) => onPatch({ productId: e.target.value || null })}
+          className={inputCls}
+        >
+          <option value="">{productList.length ? "Nenhum (a IA identifica pela conversa)" : "Nenhum produto cadastrado"}</option>
+          {lead.product && !productList.some((p) => p.id === lead.product!.id) && (
+            <option value={lead.product.id}>{lead.product.name}</option>
+          )}
+          {productList.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+              {p.kind === "PLAN" ? " (plano)" : p.kind === "SERVICE" ? " (serviço)" : ""}
+              {!p.active ? " — desligado" : ""}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div>

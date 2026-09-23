@@ -22,6 +22,23 @@ export function productValues(body: Record<string, unknown>, partial: boolean) {
   if (body.code !== undefined) v.code = String(body.code || "").trim().slice(0, 60) || null;
   if (body.active !== undefined) v.active = Boolean(body.active);
   if (body.categoryId !== undefined) v.categoryId = body.categoryId || null;
+  if (body.kind !== undefined) v.kind = ["PLAN", "SERVICE"].includes(String(body.kind)) ? String(body.kind) : "PHYSICAL";
+  if (body.billingPeriod !== undefined) v.billingPeriod = body.billingPeriod === "YEAR" ? "YEAR" : "MONTH";
+  if (body.setupFee !== undefined) {
+    const n = money(body.setupFee);
+    if (Number.isNaN(n)) return { error: "Taxa de adesão inválida" } as const;
+    v.setupFee = n;
+  }
+  for (const [f, max, label] of [
+    ["commitmentMonths", 120, "Fidelidade"],
+    ["trialDays", 365, "Teste grátis"],
+    ["durationMinutes", 24 * 60, "Duração"],
+  ] as const) {
+    if (body[f] === undefined) continue;
+    const d = body[f] === "" || body[f] === null ? null : Math.round(Number(body[f]));
+    if (d !== null && (!Number.isFinite(d) || d < 0 || d > max)) return { error: `${label} inválida` } as const;
+    v[f] = d || null;
+  }
   if (body.availability !== undefined) v.availability = body.availability === "ORDER" ? "ORDER" : "READY";
   if (body.leadTimeDays !== undefined) {
     const d = body.leadTimeDays === "" || body.leadTimeDays === null ? null : Math.round(Number(body.leadTimeDays));

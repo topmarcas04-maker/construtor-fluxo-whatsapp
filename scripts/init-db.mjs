@@ -424,6 +424,13 @@ ALTER TABLE product_images ADD COLUMN IF NOT EXISTS lead_time_days integer;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS availability varchar(10) NOT NULL DEFAULT 'READY';
 ALTER TABLE products ADD COLUMN IF NOT EXISTS lead_time_days integer;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS installments jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS kind varchar(10) NOT NULL DEFAULT 'PHYSICAL';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS billing_period varchar(10) NOT NULL DEFAULT 'MONTH';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS setup_fee double precision;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS commitment_months integer;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS trial_days integer;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS duration_minutes integer;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS product_id uuid REFERENCES products(id) ON DELETE SET NULL;
 
 -- Funil com colunas personalizadas
 CREATE TABLE IF NOT EXISTS funnel_columns (

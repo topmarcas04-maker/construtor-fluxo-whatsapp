@@ -26,6 +26,8 @@ export interface Lead {
   stage: string;
   /** Coluna personalizada do funil (vazio = coluna do estágio) */
   columnId?: string | null;
+  /** Produto de interesse */
+  product?: { id: string; name: string; kind: string } | null;
   city: string | null;
   dealValue: number | null;
   closed: boolean;

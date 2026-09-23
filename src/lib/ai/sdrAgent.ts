@@ -62,6 +62,10 @@ export interface AgentInput {
     installments?: string[];
     /** Cores ativas com a entrega de cada uma */
     colors?: { name: string; delivery: string }[];
+    /** "Produto" | "Plano / mensalidade" | "Serviço" */
+    kind?: string;
+    /** Adesão, fidelidade, teste grátis, duração */
+    details?: string[];
   }[];
 }
 
@@ -83,6 +87,8 @@ export interface AgentDecision {
   phone: string | null;
   /** Fotos a enviar: código do catálogo (P1, P2...) e, se houver, o nome da foto (ex.: a cor) */
   productCodes: { code: string; label: string | null }[];
+  /** Código do catálogo (P1, P2...) do produto que o cliente quer */
+  interestCode: string | null;
   /** Nome da coluna do funil (com regra) para onde mover o lead */
   columnName: string | null;
 }
@@ -151,6 +157,11 @@ const TOOL = {
           assunto: { type: "string", description: "Assunto curto, ex.: Visita à loja, Test-drive, Ligação" },
         },
         required: ["data", "hora", "assunto"],
+      },
+      produto_interesse: {
+        type: "string",
+        description:
+          "Código do CATÁLOGO (ex.: P3) do produto/plano/serviço em que o cliente está interessado agora. Omita se ainda não está claro.",
       },
       mover_para_coluna: {
         type: "string",
@@ -243,9 +254,11 @@ function catalogBlock(input: AgentInput) {
   if (!items.length) return "";
   const lines = items.map((p) => {
     const parts = [`${p.code} | ${p.name}`];
+    if (p.kind && p.kind !== "Produto") parts.push(`tipo: ${p.kind}`);
     if (p.category) parts.push(`categoria: ${p.category}`);
     parts.push(`preço: ${p.price}`);
     if (p.description) parts.push(`detalhes: ${p.description}`);
+    if (p.details?.length) parts.push(p.details.join("; "));
     if (p.installments?.length) parts.push(`cartão: ${p.installments.join("; ")}`);
     if (p.delivery) parts.push(`entrega: ${p.delivery}`);
     if (p.colors?.length) {
@@ -264,6 +277,9 @@ CATÁLOGO DE PRODUTOS (use SOMENTE estes dados para preço e informações)
 ${lines.join("\n")}
 - Quando o cliente perguntar por um produto, preço ou detalhes, responda com base no catálogo acima. Os preços do catálogo PODEM ser informados ao cliente.
 - Se o produto tiver "de X por Y", informe a promoção. O preço do catálogo é o valor à vista.
+- Planos/mensalidades: o preço é por mês (ou por ano, se indicado). Informe adesão, fidelidade e teste grátis quando fizer sentido. Nunca fale "à vista" para planos.
+- Serviços: "Sob orçamento" significa que um consultor passa o valor; informe a duração se o cliente perguntar.
+- Sempre que o cliente mostrar interesse em um item do catálogo, preencha "produto_interesse" com o código dele e concentre a conversa nesse item.
 - Parcelamento: informe as opções de "cartão" exatamente como estão (quantidade de parcelas e valor de cada uma). Não calcule outras opções.
 - Entrega: se o produto ou a cor for "Pedido/reserva", SEMPRE avise o prazo de entrega ao falar dele (ex.: "essa é sob reserva, entrega em até 15 dias"). Se for "Pronta entrega", pode destacar isso.
 - Só ofereça as cores listadas em "cores disponíveis". Se o cliente pedir outra cor, diga que no momento não tem e mostre as disponíveis.
@@ -329,6 +345,9 @@ export function parseDecision(raw: Record<string, unknown>, allowedTags: string[
     appointment: parseAppointment(raw.agendamento),
     phone: parsePhone(raw.telefone),
     columnName: clean(raw.mover_para_coluna, 80),
+    interestCode: /^p\d{1,4}$/i.test(String(raw.produto_interesse || "").trim())
+      ? String(raw.produto_interesse).trim().toUpperCase()
+      : null,
     productCodes: parsePhotoRefs(raw.enviar_fotos),
   };
 }
