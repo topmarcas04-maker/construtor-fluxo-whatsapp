@@ -588,6 +588,12 @@ export const products = pgTable(
     promoPrice: doublePrecision("promo_price"),
     code: varchar("code", { length: 60 }),
     active: boolean("active").notNull().default(true),
+    /** READY = pronta entrega | ORDER = pedido/reserva (com prazo) */
+    availability: varchar("availability", { length: 10 }).notNull().default("READY"),
+    /** Prazo de entrega em dias (pedido/reserva) */
+    leadTimeDays: integer("lead_time_days"),
+    /** Preços a prazo no cartão: até 3 opções [{ n: 12, total: 14990 }] */
+    installments: jsonb("installments").$type<{ n: number; total: number | null }[]>().notNull().default([]),
     sort: integer("sort").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -606,6 +612,11 @@ export const productImages = pgTable(
     dataUrl: text("data_url").notNull(),
     /** Nome da foto (ex.: a cor "Azul") — a IA usa para mandar a foto certa */
     label: varchar("label", { length: 60 }),
+    /** Cor ligada/desligada (desligada: a IA não oferece nem envia) */
+    active: boolean("active").notNull().default(true),
+    /** Vazio = igual ao produto | READY | ORDER */
+    availability: varchar("availability", { length: 10 }),
+    leadTimeDays: integer("lead_time_days"),
     sort: integer("sort").notNull().default(0),
   },
   (table) => [index("product_images_product_idx").on(table.productId)]

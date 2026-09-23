@@ -15,7 +15,7 @@ interface PickerProduct {
   price: number | null;
   promoPrice: number | null;
   active: boolean;
-  images: { id: string; url: string; label?: string | null }[];
+  images: { id: string; url: string; label?: string | null; active?: boolean }[];
 }
 
 const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -238,10 +238,10 @@ export function Composer({
                     </span>
                   </span>
                 </button>
-                {p.images.some((im) => im.label) && (
+                {p.images.some((im) => im.label && im.active !== false) && (
                   <div className="flex flex-wrap gap-1.5 px-3 pb-2 pl-[68px]">
                     {p.images
-                      .filter((im) => im.label)
+                      .filter((im) => im.label && im.active !== false)
                       .map((im) => (
                         <button
                           key={im.id}

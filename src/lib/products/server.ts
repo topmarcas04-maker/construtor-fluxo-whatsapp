@@ -23,7 +23,15 @@ export async function listProducts(accountId: string) {
   const ids = prods.map((p) => p.id);
   const imgs = ids.length
     ? await db
-        .select({ id: productImages.id, productId: productImages.productId, sort: productImages.sort, label: productImages.label })
+        .select({
+          id: productImages.id,
+          productId: productImages.productId,
+          sort: productImages.sort,
+          label: productImages.label,
+          active: productImages.active,
+          availability: productImages.availability,
+          leadTimeDays: productImages.leadTimeDays,
+        })
         .from(productImages)
         .where(inArray(productImages.productId, ids))
         .orderBy(asc(productImages.sort))
@@ -32,7 +40,14 @@ export async function listProducts(accountId: string) {
     categories: cats,
     products: prods.map((p) => ({
       ...p,
-      images: imgs.filter((i) => i.productId === p.id).map((i) => ({ id: i.id, url: `/api/products/image/${i.id}`, label: i.label })),
+      images: imgs.filter((i) => i.productId === p.id).map((i) => ({
+          id: i.id,
+          url: `/api/products/image/${i.id}`,
+          label: i.label,
+          active: i.active,
+          availability: i.availability,
+          leadTimeDays: i.leadTimeDays,
+        })),
     })),
   };
 }
@@ -48,6 +63,19 @@ export interface ImageInput {
   /** Foto nova (data URL) */
   dataUrl?: string;
   label?: string | null;
+  active?: boolean;
+  availability?: string | null;
+  leadTimeDays?: number | string | null;
+}
+
+function imageExtras(item: ImageInput) {
+  const availability = item.availability === "READY" || item.availability === "ORDER" ? item.availability : null;
+  const d = item.leadTimeDays === "" || item.leadTimeDays == null ? null : Math.round(Number(item.leadTimeDays));
+  return {
+    active: item.active !== false,
+    availability,
+    leadTimeDays: availability === "ORDER" && d != null && Number.isFinite(d) && d >= 0 && d <= 365 ? d : null,
+  };
 }
 
 /** Salva as fotos na ordem enviada: mantém as com id, cria as novas, apaga as que sumiram */
@@ -64,10 +92,10 @@ export async function saveImages(productId: string, items: ImageInput[]) {
     if (item.id && currentIds.has(item.id)) {
       await db
         .update(productImages)
-        .set({ sort: sort++, label })
+        .set({ sort: sort++, label, ...imageExtras(item) })
         .where(and(eq(productImages.id, item.id), eq(productImages.productId, productId)));
     } else if (item.dataUrl && /^data:image\/(jpeg|png|webp);base64,/.test(item.dataUrl) && item.dataUrl.length <= 1_500_000) {
-      await db.insert(productImages).values({ productId, dataUrl: item.dataUrl, label, sort: sort++ });
+      await db.insert(productImages).values({ productId, dataUrl: item.dataUrl, label, sort: sort++, ...imageExtras(item) });
     }
   }
 }

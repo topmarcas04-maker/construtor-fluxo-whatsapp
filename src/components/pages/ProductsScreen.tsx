@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Search, Package, ImagePlus, X, Pencil, Trash2, Bot, Tag, Check } from "lucide-react";
+import { Plus, Search, Package, ImagePlus, X, Pencil, Trash2, Bot, Tag, Check, Eye, EyeOff, Truck, Clock, CreditCard } from "lucide-react";
+import {
+  installmentRows,
+  installmentText,
+  effectiveAvailability,
+  availabilityText,
+  type Installment,
+} from "@/lib/products/format";
 import { Page, PageHeader, Card, Button, Field, Input, Select, Textarea, Toggle, Badge, Modal, EmptyState, ErrorNote } from "@/components/ui";
 
 export interface Category {
@@ -19,7 +26,32 @@ export interface Product {
   promoPrice: number | null;
   code: string | null;
   active: boolean;
-  images: { id: string; url: string; label?: string | null }[];
+  availability?: string;
+  leadTimeDays?: number | null;
+  installments?: Installment[];
+  images: {
+    id: string;
+    url: string;
+    label?: string | null;
+    active?: boolean;
+    availability?: string | null;
+    leadTimeDays?: number | null;
+  }[];
+}
+
+/** Selo "Pronta entrega" / "Reserva · 15 dias" */
+export function DeliveryBadge({ a, small }: { a: { availability: string; days: number | null }; small?: boolean }) {
+  const ready = a.availability === "READY";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full font-semibold ${small ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-0.5 text-xs"} ${
+        ready ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+      }`}
+    >
+      {ready ? <Truck size={small ? 11 : 12} /> : <Clock size={small ? 11 : 12} />}
+      {ready ? "Pronta entrega" : a.days ? `Reserva · ${a.days} dias` : "Reserva"}
+    </span>
+  );
 }
 
 const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -70,9 +102,35 @@ type Form = {
   code: string;
   description: string;
   active: boolean;
+  availability: "READY" | "ORDER";
+  leadTimeDays: string;
+  /** 3 opções de parcelamento: parcelas e total a prazo */
+  installments: { n: string; total: string }[];
   /** Fotos na ordem: as que já existem têm id; as novas têm dataUrl. label = cor/nome da foto */
-  photos: { id?: string; url: string; dataUrl?: string; label: string }[];
+  photos: {
+    id?: string;
+    url: string;
+    dataUrl?: string;
+    label: string;
+    active: boolean;
+    /** "" = igual ao produto */
+    availability: "" | "READY" | "ORDER";
+    leadTimeDays: string;
+  }[];
 };
+
+const EMPTY_INSTALLMENTS = [
+  { n: "", total: "" },
+  { n: "", total: "" },
+  { n: "", total: "" },
+];
+
+/** "1.234,56" → 1234.56 */
+function parseMoney(v: string) {
+  if (!v.trim()) return null;
+  const n = Number(v.replace(/\./g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : NaN;
+}
 
 const toInput = (v: number | null) => (v == null ? "" : String(v).replace(".", ","));
 
@@ -121,6 +179,9 @@ export function ProductsScreen() {
       code: "",
       description: "",
       active: true,
+      availability: "READY",
+      leadTimeDays: "",
+      installments: EMPTY_INSTALLMENTS.map((x) => ({ ...x })),
       photos: [],
     });
     setError(null);
@@ -136,10 +197,34 @@ export function ProductsScreen() {
       code: p.code || "",
       description: p.description || "",
       active: p.active,
-      photos: p.images.map((i) => ({ id: i.id, url: i.url, label: i.label || "" })),
+      availability: p.availability === "ORDER" ? "ORDER" : "READY",
+      leadTimeDays: p.leadTimeDays != null ? String(p.leadTimeDays) : "",
+      installments: [0, 1, 2].map((k) => {
+        const it = p.installments?.[k];
+        return it ? { n: String(it.n), total: toInput(it.total) } : { n: "", total: "" };
+      }),
+      photos: p.images.map((i) => ({
+        id: i.id,
+        url: i.url,
+        label: i.label || "",
+        active: i.active !== false,
+        availability: i.availability === "READY" || i.availability === "ORDER" ? i.availability : "",
+        leadTimeDays: i.leadTimeDays != null ? String(i.leadTimeDays) : "",
+      })),
     });
     setError(null);
     setEditing(p);
+  };
+
+  /** Liga/desliga o produto direto no card */
+  const toggleActive = async (p: Product) => {
+    setData((d) => d && { ...d, products: d.products.map((x) => (x.id === p.id ? { ...x, active: !p.active } : x)) });
+    const r = await fetch(`/api/products/${p.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active: !p.active }),
+    });
+    if (!r.ok) load();
   };
 
   const save = async () => {
@@ -159,7 +244,20 @@ export function ProductsScreen() {
           code: form.code,
           description: form.description,
           active: form.active,
-          images: form.photos.map((ph) => (ph.id ? { id: ph.id, label: ph.label } : { dataUrl: ph.dataUrl, label: ph.label })),
+          availability: form.availability,
+          leadTimeDays: form.availability === "ORDER" ? form.leadTimeDays : null,
+          installments: form.installments
+            .filter((it) => it.n.trim())
+            .map((it) => ({ n: Number(it.n), total: it.total.trim() ? it.total : null })),
+          images: form.photos.map((ph) => {
+            const extra = {
+              label: ph.label,
+              active: ph.active,
+              availability: ph.availability || null,
+              leadTimeDays: ph.availability === "ORDER" ? ph.leadTimeDays : null,
+            };
+            return ph.id ? { id: ph.id, ...extra } : { dataUrl: ph.dataUrl, ...extra };
+          }),
         }),
       });
       const out = await res.json();
@@ -225,7 +323,13 @@ export function ProductsScreen() {
     const room = 5 - form.photos.length;
     const picked = Array.from(files).filter((f) => f.type.startsWith("image/")).slice(0, Math.max(0, room));
     const urls = await Promise.all(picked.map(compress));
-    setForm({ ...form, photos: [...form.photos, ...urls.map((u) => ({ url: u, dataUrl: u, label: "" }))] });
+    setForm({
+      ...form,
+      photos: [
+        ...form.photos,
+        ...urls.map((u) => ({ url: u, dataUrl: u, label: "", active: true, availability: "" as const, leadTimeDays: "" })),
+      ],
+    });
   };
 
   const selectedCat = data?.categories.find((c) => c.id === cat);
@@ -351,10 +455,13 @@ export function ProductsScreen() {
       ) : (
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
           {list.map((p) => (
-            <button
+            <div
               key={p.id}
+              role="button"
+              tabIndex={0}
               onClick={() => setViewing(p)}
-              className={`group flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${p.active ? "" : "opacity-60"}`}
+              onKeyDown={(e) => e.key === "Enter" && setViewing(p)}
+              className={`group flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${p.active ? "" : "opacity-60"}`}
             >
               <div className="relative aspect-[4/3] w-full bg-slate-100">
                 {p.images[0] ? (
@@ -368,7 +475,21 @@ export function ProductsScreen() {
                 {p.promoPrice != null && (
                   <span className="absolute left-3 top-3 rounded-full bg-emerald-600 px-2.5 py-0.5 text-xs font-bold text-white">Promoção</span>
                 )}
-                {!p.active && <span className="absolute right-3 top-3 rounded-full bg-slate-800/80 px-2.5 py-0.5 text-xs font-semibold text-white">Inativo</span>}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleActive(p);
+                  }}
+                  title={p.active ? "Desligar (a IA deixa de oferecer)" : "Ligar (a IA volta a oferecer)"}
+                  className={`absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold shadow ${
+                    p.active ? "bg-white/95 text-emerald-700" : "bg-slate-800/85 text-white"
+                  }`}
+                >
+                  <span className={`relative h-4 w-7 rounded-full transition ${p.active ? "bg-emerald-500" : "bg-slate-400"}`}>
+                    <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${p.active ? "left-[14px]" : "left-0.5"}`} />
+                  </span>
+                  {p.active ? "Ativo" : "Desligado"}
+                </button>
                 {p.images.length > 1 && (
                   <span className="absolute bottom-3 right-3 rounded-full bg-black/60 px-2 py-0.5 text-[11px] font-semibold text-white">{p.images.length} fotos</span>
                 )}
@@ -383,16 +504,36 @@ export function ProductsScreen() {
                   <div className="flex flex-wrap gap-1">
                     {p.images
                       .filter((im) => im.label)
-                      .map((im) => (
-                        <span key={im.id} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                          {im.label}
-                        </span>
-                      ))}
+                      .map((im) => {
+                        const a = effectiveAvailability(p, im);
+                        return (
+                          <span
+                            key={im.id}
+                            title={im.active === false ? "Cor desligada" : availabilityText(a)}
+                            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                              im.active === false
+                                ? "bg-slate-50 text-slate-400 line-through"
+                                : a.availability === "ORDER"
+                                ? "bg-amber-50 text-amber-700"
+                                : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            {im.label}
+                            {im.active !== false && a.availability === "ORDER" && a.days ? ` · ${a.days}d` : ""}
+                          </span>
+                        );
+                      })}
                   </div>
                 )}
+                <DeliveryBadge a={effectiveAvailability(p)} small />
                 <PriceTag p={p} />
+                {installmentRows(p).length > 0 && (
+                  <p className="text-xs text-slate-500">
+                    ou {installmentText(installmentRows(p)[installmentRows(p).length - 1])}
+                  </p>
+                )}
               </div>
-            </button>
+            </div>
           ))}
         </div>
       )}
@@ -437,14 +578,24 @@ export function ProductsScreen() {
             <div>
               <p className="text-sm font-semibold text-slate-800">Fotos (até 5 — a primeira é a principal)</p>
               <p className="mb-2 text-xs text-slate-500">
-                Escreva a cor embaixo de cada foto: quando o cliente pedir &quot;me mostra a azul&quot;, a IA manda a foto certa.
+                Escreva a cor embaixo de cada foto: quando o cliente pedir &quot;me mostra a azul&quot;, a IA manda a foto certa. Use o
+                olho para desligar uma cor (a IA deixa de oferecer) e a entrega para uma cor com prazo diferente.
               </p>
               <div className="flex flex-wrap gap-3">
                 {form.photos.map((ph, i) => (
-                  <div key={ph.id || `new-${i}`} className="w-28">
-                    <div className="relative h-24 w-28 overflow-hidden rounded-xl border border-slate-200">
+                  <div key={ph.id || `new-${i}`} className="w-36">
+                    <div className={`relative h-24 w-36 overflow-hidden rounded-xl border border-slate-200 ${ph.active ? "" : "opacity-40"}`}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={ph.url} alt="" className="h-full w-full object-cover" />
+                      <button
+                        onClick={() =>
+                          setForm({ ...form, photos: form.photos.map((x, j) => (j === i ? { ...x, active: !x.active } : x)) })
+                        }
+                        className="absolute left-1 top-1 rounded-full bg-black/60 p-1 text-white"
+                        title={ph.active ? "Desligar esta cor" : "Ligar esta cor"}
+                      >
+                        {ph.active ? <Eye size={13} /> : <EyeOff size={13} />}
+                      </button>
                       {i === 0 && <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 text-[10px] font-semibold text-white">Principal</span>}
                       <button
                         onClick={() => setForm({ ...form, photos: form.photos.filter((_, j) => j !== i) })}
@@ -463,6 +614,38 @@ export function ProductsScreen() {
                       placeholder="Cor (ex.: Azul)"
                       className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1 text-xs outline-none focus:border-[var(--accent)]"
                     />
+                    <select
+                      value={ph.availability}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          photos: form.photos.map((x, j) =>
+                            j === i ? { ...x, availability: e.target.value as "" | "READY" | "ORDER" } : x
+                          ),
+                        })
+                      }
+                      className="mt-1 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1 text-[11px] text-slate-600"
+                      title="Entrega desta cor"
+                    >
+                      <option value="">Entrega: igual ao produto</option>
+                      <option value="READY">Pronta entrega</option>
+                      <option value="ORDER">Pedido/reserva</option>
+                    </select>
+                    {ph.availability === "ORDER" && (
+                      <input
+                        inputMode="numeric"
+                        value={ph.leadTimeDays}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            photos: form.photos.map((x, j) => (j === i ? { ...x, leadTimeDays: e.target.value.replace(/\D/g, "") } : x)),
+                          })
+                        }
+                        placeholder="Prazo (dias)"
+                        className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1 text-xs outline-none focus:border-[var(--accent)]"
+                      />
+                    )}
+                    {!ph.active && <p className="mt-0.5 text-[10px] font-medium text-slate-500">Cor desligada</p>}
                   </div>
                 ))}
                 {form.photos.length < 5 && (
@@ -498,6 +681,102 @@ export function ProductsScreen() {
                 <Input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
               </Field>
             </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 p-4">
+                <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
+                  <Truck size={16} /> Entrega
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      { v: "READY", label: "Pronta entrega" },
+                      { v: "ORDER", label: "Pedido / reserva" },
+                    ] as const
+                  ).map((o) => (
+                    <button
+                      key={o.v}
+                      onClick={() => setForm({ ...form, availability: o.v })}
+                      className={`rounded-lg border px-3 py-2 text-sm font-medium ${
+                        form.availability === o.v
+                          ? "border-[var(--accent)] bg-[var(--accent)]/5 text-[var(--accent)]"
+                          : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+                {form.availability === "ORDER" && (
+                  <div className="mt-3 flex items-center gap-2 text-sm text-slate-600">
+                    Entrega em até
+                    <input
+                      inputMode="numeric"
+                      className="w-20 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                      value={form.leadTimeDays}
+                      onChange={(e) => setForm({ ...form, leadTimeDays: e.target.value.replace(/\D/g, "") })}
+                      placeholder="15"
+                    />
+                    dias
+                  </div>
+                )}
+                <p className="mt-2 text-xs text-slate-500">
+                  {form.availability === "ORDER"
+                    ? "A IA sempre avisa o prazo quando falar deste produto."
+                    : "A IA pode destacar que é pronta entrega."}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 p-4">
+                <p className="mb-1 flex items-center gap-2 text-sm font-semibold text-slate-800">
+                  <CreditCard size={16} /> Preço a prazo (cartão)
+                </p>
+                <p className="mb-3 text-xs text-slate-500">
+                  Parcelas e o total a prazo. Deixe o total vazio para parcelar sem juros (pelo preço à vista).
+                </p>
+                <div className="space-y-2">
+                  {form.installments.map((it, k) => {
+                    const n = Number(it.n);
+                    const cash = parseMoney(form.promoPrice) ?? parseMoney(form.price);
+                    const total = it.total.trim() ? parseMoney(it.total) : cash;
+                    const each = n >= 2 && total != null && !Number.isNaN(total) ? total / n : null;
+                    return (
+                      <div key={k} className="flex flex-wrap items-center gap-2">
+                        <input
+                          inputMode="numeric"
+                          className="w-14 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                          placeholder={["12", "18", "21"][k]}
+                          value={it.n}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              installments: form.installments.map((x, j) => (j === k ? { ...x, n: e.target.value.replace(/\D/g, "").slice(0, 2) } : x)),
+                            })
+                          }
+                        />
+                        <span className="text-sm text-slate-500">x</span>
+                        <span className="text-xs text-slate-400">total R$</span>
+                        <input
+                          inputMode="decimal"
+                          className="w-28 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                          placeholder="sem juros"
+                          value={it.total}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              installments: form.installments.map((x, j) => (j === k ? { ...x, total: e.target.value } : x)),
+                            })
+                          }
+                        />
+                        <span className="min-w-[120px] text-sm font-semibold text-slate-800">
+                          {each != null ? `= ${n}x de ${brl(Math.round(each * 100) / 100)}` : ""}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
             <Field label="Descrição" hint="Tudo que a IA pode contar ao cliente: características, medidas, autonomia, garantia, condições de pagamento...">
               <Textarea rows={6} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
             </Field>
@@ -543,6 +822,15 @@ export function ProductDetail({ p, category }: { p: Product; category?: string |
           {!p.active && <Badge tone="red">Inativo</Badge>}
         </div>
         <PriceTag p={p} big />
+        {installmentRows(p).length > 0 && (
+          <div className="space-y-0.5 text-sm text-slate-600">
+            {installmentRows(p).map((r) => (
+              <p key={r.n}>ou {installmentText(r)}</p>
+            ))}
+          </div>
+        )}
+        <DeliveryBadge a={effectiveAvailability(p, img)} />
+        {img?.label && img.active === false && <Badge tone="red">Cor desligada</Badge>}
         <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{p.description || "Sem descrição."}</p>
       </div>
     </div>

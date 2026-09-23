@@ -56,6 +56,12 @@ export interface AgentInput {
     hasPhoto: boolean;
     /** Nomes das fotos (ex.: cores) */
     photoLabels?: string[];
+    /** "Pronta entrega" ou "Pedido/reserva: entrega em até 15 dias" */
+    delivery?: string;
+    /** "12x de R$ 1.249,17 (total R$ 14.990,00)" */
+    installments?: string[];
+    /** Cores ativas com a entrega de cada uma */
+    colors?: { name: string; delivery: string }[];
   }[];
 }
 
@@ -240,6 +246,14 @@ function catalogBlock(input: AgentInput) {
     if (p.category) parts.push(`categoria: ${p.category}`);
     parts.push(`preço: ${p.price}`);
     if (p.description) parts.push(`detalhes: ${p.description}`);
+    if (p.installments?.length) parts.push(`cartão: ${p.installments.join("; ")}`);
+    if (p.delivery) parts.push(`entrega: ${p.delivery}`);
+    if (p.colors?.length) {
+      const sameDelivery = p.colors.every((c) => c.delivery === p.delivery);
+      parts.push(
+        `cores disponíveis: ${p.colors.map((c) => (sameDelivery ? c.name : `${c.name} (${c.delivery})`)).join(", ")}`
+      );
+    }
     if (!p.hasPhoto) parts.push("(sem foto)");
     else if (p.photoLabels?.length) parts.push(`fotos: ${p.photoLabels.join(", ")}`);
     return `- ${parts.join(" | ")}`;
@@ -249,7 +263,10 @@ function catalogBlock(input: AgentInput) {
 CATÁLOGO DE PRODUTOS (use SOMENTE estes dados para preço e informações)
 ${lines.join("\n")}
 - Quando o cliente perguntar por um produto, preço ou detalhes, responda com base no catálogo acima. Os preços do catálogo PODEM ser informados ao cliente.
-- Se o produto tiver "de X por Y", informe a promoção.
+- Se o produto tiver "de X por Y", informe a promoção. O preço do catálogo é o valor à vista.
+- Parcelamento: informe as opções de "cartão" exatamente como estão (quantidade de parcelas e valor de cada uma). Não calcule outras opções.
+- Entrega: se o produto ou a cor for "Pedido/reserva", SEMPRE avise o prazo de entrega ao falar dele (ex.: "essa é sob reserva, entrega em até 15 dias"). Se for "Pronta entrega", pode destacar isso.
+- Só ofereça as cores listadas em "cores disponíveis". Se o cliente pedir outra cor, diga que no momento não tem e mostre as disponíveis.
 - Para mostrar fotos, coloque o código (ex.: P3) em "enviar_fotos" — as fotos vão logo depois da sua resposta; não escreva links.
 - Se o cliente pedir uma cor ou versão que tem foto com nome (ex.: "fotos: Preta, Azul"), use código/nome (ex.: P3/Azul) para mandar a foto certa. Se a cor pedida não existir, diga quais cores tem.
 - Se o cliente pedir algo que não está no catálogo, diga que vai verificar com um consultor. Nunca invente produto ou preço.

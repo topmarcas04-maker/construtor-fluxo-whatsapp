@@ -61,7 +61,13 @@ import {
   type MetaChannel,
 } from "../src/lib/meta/graph";
 import { decryptSecret } from "../src/lib/tenancy/secret";
-import { priceLabel } from "../src/lib/products/format";
+import {
+  priceLabel,
+  installmentRows,
+  installmentText,
+  effectiveAvailability,
+  availabilityText,
+} from "../src/lib/products/format";
 import { ensureColumns } from "../src/lib/funnel/shared";
 import { normalizeStage } from "../src/lib/funnel/common";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
@@ -1265,6 +1271,9 @@ async function loadCatalog(accountId: string) {
       description: products.description,
       price: products.price,
       promoPrice: products.promoPrice,
+      availability: products.availability,
+      leadTimeDays: products.leadTimeDays,
+      installments: products.installments,
       category: productCategories.name,
     })
     .from(products)
@@ -1274,11 +1283,19 @@ async function loadCatalog(accountId: string) {
     .limit(CATALOG_LIMIT);
   if (!rows.length) return [];
   const photos = await db
-    .select({ productId: productImages.productId, label: productImages.label })
+    .select({
+      productId: productImages.productId,
+      label: productImages.label,
+      active: productImages.active,
+      availability: productImages.availability,
+      leadTimeDays: productImages.leadTimeDays,
+    })
     .from(productImages)
     .where(inArray(productImages.productId, rows.map((r) => r.id)))
     .orderBy(productImages.sort);
-  const withPhoto = new Set(photos.map((r) => r.productId));
+  // Cores desligadas não entram para a IA
+  const activePhotos = photos.filter((ph) => ph.active !== false);
+  const withPhoto = new Set(activePhotos.map((r) => r.productId));
   return rows.map((r, i) => ({
     id: r.id,
     ai: {
@@ -1288,7 +1305,12 @@ async function loadCatalog(accountId: string) {
       price: priceLabel(r),
       description: r.description ? r.description.replace(/\s+/g, " ").slice(0, 400) : null,
       hasPhoto: withPhoto.has(r.id),
-      photoLabels: photos.filter((ph) => ph.productId === r.id && ph.label?.trim()).map((ph) => ph.label!.trim()),
+      photoLabels: activePhotos.filter((ph) => ph.productId === r.id && ph.label?.trim()).map((ph) => ph.label!.trim()),
+      delivery: availabilityText(effectiveAvailability(r)),
+      installments: installmentRows(r).map(installmentText),
+      colors: activePhotos
+        .filter((ph) => ph.productId === r.id && ph.label?.trim())
+        .map((ph) => ({ name: ph.label!.trim(), delivery: availabilityText(effectiveAvailability(r, ph)) })),
     },
   }));
 }
@@ -1307,10 +1329,12 @@ async function sendProductPhoto(
     where: and(eq(products.id, productId), eq(products.accountId, accountId)),
   });
   if (!product) return { error: "Produto não encontrado" };
-  const imgs = await db.query.productImages.findMany({
+  const allImgs = await db.query.productImages.findMany({
     where: eq(productImages.productId, productId),
     orderBy: (t, { asc }) => asc(t.sort),
   });
+  // Foto escolhida no painel pode ser de cor desligada; a IA só usa as ligadas
+  const imgs = pick.imageId ? allImgs : allImgs.filter((i) => i.active !== false);
   // Foto escolhida: pelo id (painel) ou pelo nome/cor (IA); senão a principal
   const norm = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
   const wanted = pick.label ? norm(pick.label) : "";
@@ -1320,7 +1344,10 @@ async function sendProductPhoto(
       (imgs.find((i) => i.label && norm(i.label) === wanted) ||
         imgs.find((i) => i.label && (norm(i.label).includes(wanted) || wanted.includes(norm(i.label)))))) ||
     imgs[0];
-  const lines = [`*${product.name}*${img?.label ? ` — ${img.label}` : ""}`, priceLabel(product)];
+  const lines = [`*${product.name}*${img?.label ? ` — ${img.label}` : ""}`, product.price != null || product.promoPrice != null ? `${priceLabel(product)} à vista` : priceLabel(product)];
+  const inst = installmentRows(product);
+  if (inst.length) lines.push(`ou ${inst.map(installmentText).join(" | ")}`);
+  lines.push(availabilityText(effectiveAvailability(product, img)));
   if (withDescription && product.description?.trim()) lines.push("", product.description.trim().slice(0, 700));
   const caption = lines.join("\n");
   if (!img) return sendText(accountId, phoneJid, caption, sender, authorName);

@@ -417,6 +417,12 @@ CREATE TABLE IF NOT EXISTS product_images (
 CREATE INDEX IF NOT EXISTS product_images_product_idx ON product_images (product_id);
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS catalog_enabled boolean NOT NULL DEFAULT true;
 ALTER TABLE product_images ADD COLUMN IF NOT EXISTS label varchar(60);
+ALTER TABLE product_images ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true;
+ALTER TABLE product_images ADD COLUMN IF NOT EXISTS availability varchar(10);
+ALTER TABLE product_images ADD COLUMN IF NOT EXISTS lead_time_days integer;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS availability varchar(10) NOT NULL DEFAULT 'READY';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS lead_time_days integer;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS installments jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 -- Funil com colunas personalizadas
 CREATE TABLE IF NOT EXISTS funnel_columns (
