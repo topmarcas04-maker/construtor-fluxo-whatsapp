@@ -52,6 +52,8 @@ export interface AgentInput {
     price: string;
     description: string | null;
     hasPhoto: boolean;
+    /** Nomes das fotos (ex.: cores) */
+    photoLabels?: string[];
   }[];
 }
 
@@ -69,8 +71,8 @@ export interface AgentDecision {
   handoffReason: string | null;
   /** Horário combinado com o cliente (horário de Brasília) */
   appointment: { date: string; time: string; subject: string } | null;
-  /** Códigos do catálogo (P1, P2...) cujas fotos devem ser enviadas */
-  productCodes: string[];
+  /** Fotos a enviar: código do catálogo (P1, P2...) e, se houver, o nome da foto (ex.: a cor) */
+  productCodes: { code: string; label: string | null }[];
   /** Nome da coluna do funil (com regra) para onde mover o lead */
   columnName: string | null;
 }
@@ -149,7 +151,7 @@ const TOOL = {
         items: { type: "string" },
         maxItems: 3,
         description:
-          "Códigos do CATÁLOGO (ex.: P3) cujas fotos devem ser enviadas junto com a resposta, quando o cliente pedir para ver ou quando ajudar a vender. Máximo 3. Omita se não houver catálogo ou não for o caso.",
+          "Fotos do CATÁLOGO para enviar junto com a resposta, quando o cliente pedir para ver ou quando ajudar a vender. Use o código (ex.: P3) ou código/foto para uma foto específica, como uma cor (ex.: P3/Azul). Máximo 3. Omita se não houver catálogo ou não for o caso.",
       },
     },
     required: ["resposta", "tipo_compra", "estagio", "pontuacao", "resumo", "transferir"],
@@ -221,6 +223,7 @@ function catalogBlock(input: AgentInput) {
     parts.push(`preço: ${p.price}`);
     if (p.description) parts.push(`detalhes: ${p.description}`);
     if (!p.hasPhoto) parts.push("(sem foto)");
+    else if (p.photoLabels?.length) parts.push(`fotos: ${p.photoLabels.join(", ")}`);
     return `- ${parts.join(" | ")}`;
   });
   return `
@@ -230,6 +233,7 @@ ${lines.join("\n")}
 - Quando o cliente perguntar por um produto, preço ou detalhes, responda com base no catálogo acima. Os preços do catálogo PODEM ser informados ao cliente.
 - Se o produto tiver "de X por Y", informe a promoção.
 - Para mostrar fotos, coloque o código (ex.: P3) em "enviar_fotos" — as fotos vão logo depois da sua resposta; não escreva links.
+- Se o cliente pedir uma cor ou versão que tem foto com nome (ex.: "fotos: Preta, Azul"), use código/nome (ex.: P3/Azul) para mandar a foto certa. Se a cor pedida não existir, diga quais cores tem.
 - Se o cliente pedir algo que não está no catálogo, diga que vai verificar com um consultor. Nunca invente produto ou preço.
 - Não mostre os códigos (P1, P2...) ao cliente.`;
 }
@@ -289,10 +293,22 @@ export function parseDecision(raw: Record<string, unknown>, allowedTags: string[
     handoffReason: clean(raw.motivo_transferencia, 500),
     appointment: parseAppointment(raw.agendamento),
     columnName: clean(raw.mover_para_coluna, 80),
-    productCodes: Array.isArray(raw.enviar_fotos)
-      ? [...new Set(raw.enviar_fotos.map((c) => String(c).trim().toUpperCase()).filter((c) => /^P\d{1,4}$/.test(c)))].slice(0, 3)
-      : [],
+    productCodes: parsePhotoRefs(raw.enviar_fotos),
   };
+}
+
+/** "P3" ou "P3/Azul" → { code: "P3", label: "Azul" } (sem repetir, máx. 3) */
+function parsePhotoRefs(v: unknown): AgentDecision["productCodes"] {
+  if (!Array.isArray(v)) return [];
+  const out: AgentDecision["productCodes"] = [];
+  for (const item of v) {
+    const m = /^\s*(p\d{1,4})\s*(?:[\/:\-–]\s*(.+?))?\s*$/i.exec(String(item));
+    if (!m) continue;
+    const ref = { code: m[1].toUpperCase(), label: m[2]?.trim().slice(0, 60) || null };
+    if (!out.some((o) => o.code === ref.code && (o.label || "").toLowerCase() === (ref.label || "").toLowerCase())) out.push(ref);
+    if (out.length >= 3) break;
+  }
+  return out;
 }
 
 function parseAppointment(v: unknown): AgentDecision["appointment"] {

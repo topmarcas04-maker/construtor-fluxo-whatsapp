@@ -416,6 +416,7 @@ CREATE TABLE IF NOT EXISTS product_images (
 );
 CREATE INDEX IF NOT EXISTS product_images_product_idx ON product_images (product_id);
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS catalog_enabled boolean NOT NULL DEFAULT true;
+ALTER TABLE product_images ADD COLUMN IF NOT EXISTS label varchar(60);
 
 -- Funil com colunas personalizadas
 CREATE TABLE IF NOT EXISTS funnel_columns (

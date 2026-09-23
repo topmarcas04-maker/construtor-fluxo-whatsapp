@@ -553,6 +553,8 @@ export const productImages = pgTable(
       .notNull()
       .references(() => products.id, { onDelete: "cascade" }),
     dataUrl: text("data_url").notNull(),
+    /** Nome da foto (ex.: a cor "Azul") — a IA usa para mandar a foto certa */
+    label: varchar("label", { length: 60 }),
     sort: integer("sort").notNull().default(0),
   },
   (table) => [index("product_images_product_idx").on(table.productId)]

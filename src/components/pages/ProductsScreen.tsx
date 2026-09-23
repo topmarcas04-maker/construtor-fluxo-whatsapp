@@ -19,7 +19,7 @@ export interface Product {
   promoPrice: number | null;
   code: string | null;
   active: boolean;
-  images: { id: string; url: string }[];
+  images: { id: string; url: string; label?: string | null }[];
 }
 
 const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -70,8 +70,8 @@ type Form = {
   code: string;
   description: string;
   active: boolean;
-  keep: { id: string; url: string }[];
-  added: string[];
+  /** Fotos na ordem: as que já existem têm id; as novas têm dataUrl. label = cor/nome da foto */
+  photos: { id?: string; url: string; dataUrl?: string; label: string }[];
 };
 
 const toInput = (v: number | null) => (v == null ? "" : String(v).replace(".", ","));
@@ -121,8 +121,7 @@ export function ProductsScreen() {
       code: "",
       description: "",
       active: true,
-      keep: [],
-      added: [],
+      photos: [],
     });
     setError(null);
     setEditing("new");
@@ -137,8 +136,7 @@ export function ProductsScreen() {
       code: p.code || "",
       description: p.description || "",
       active: p.active,
-      keep: p.images,
-      added: [],
+      photos: p.images.map((i) => ({ id: i.id, url: i.url, label: i.label || "" })),
     });
     setError(null);
     setEditing(p);
@@ -161,8 +159,7 @@ export function ProductsScreen() {
           code: form.code,
           description: form.description,
           active: form.active,
-          keepImageIds: form.keep.map((k) => k.id),
-          newImages: form.added,
+          images: form.photos.map((ph) => (ph.id ? { id: ph.id, label: ph.label } : { dataUrl: ph.dataUrl, label: ph.label })),
         }),
       });
       const out = await res.json();
@@ -225,10 +222,10 @@ export function ProductsScreen() {
 
   const onFiles = async (files: FileList | null) => {
     if (!files || !form) return;
-    const room = 5 - form.keep.length - form.added.length;
+    const room = 5 - form.photos.length;
     const picked = Array.from(files).filter((f) => f.type.startsWith("image/")).slice(0, Math.max(0, room));
     const urls = await Promise.all(picked.map(compress));
-    setForm({ ...form, added: [...form.added, ...urls] });
+    setForm({ ...form, photos: [...form.photos, ...urls.map((u) => ({ url: u, dataUrl: u, label: "" }))] });
   };
 
   const selectedCat = data?.categories.find((c) => c.id === cat);
@@ -382,6 +379,17 @@ export function ProductsScreen() {
                   <p className="line-clamp-1 font-semibold text-slate-900">{p.name}</p>
                 </div>
                 {p.description && <p className="line-clamp-2 text-sm text-slate-500">{p.description}</p>}
+                {p.images.some((im) => im.label) && (
+                  <div className="flex flex-wrap gap-1">
+                    {p.images
+                      .filter((im) => im.label)
+                      .map((im) => (
+                        <span key={im.id} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                          {im.label}
+                        </span>
+                      ))}
+                  </div>
+                )}
                 <PriceTag p={p} />
               </div>
             </button>
@@ -427,27 +435,37 @@ export function ProductsScreen() {
         {form && (
           <div className="space-y-5">
             <div>
-              <p className="mb-2 text-sm font-semibold text-slate-800">Fotos (até 5 — a primeira é a principal)</p>
+              <p className="text-sm font-semibold text-slate-800">Fotos (até 5 — a primeira é a principal)</p>
+              <p className="mb-2 text-xs text-slate-500">
+                Escreva a cor embaixo de cada foto: quando o cliente pedir &quot;me mostra a azul&quot;, a IA manda a foto certa.
+              </p>
               <div className="flex flex-wrap gap-3">
-                {form.keep.map((img) => (
-                  <div key={img.id} className="relative h-24 w-24 overflow-hidden rounded-xl border border-slate-200">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={img.url} alt="" className="h-full w-full object-cover" />
-                    <button onClick={() => setForm({ ...form, keep: form.keep.filter((k) => k.id !== img.id) })} className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white">
-                      <X size={13} />
-                    </button>
+                {form.photos.map((ph, i) => (
+                  <div key={ph.id || `new-${i}`} className="w-28">
+                    <div className="relative h-24 w-28 overflow-hidden rounded-xl border border-slate-200">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={ph.url} alt="" className="h-full w-full object-cover" />
+                      {i === 0 && <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 text-[10px] font-semibold text-white">Principal</span>}
+                      <button
+                        onClick={() => setForm({ ...form, photos: form.photos.filter((_, j) => j !== i) })}
+                        className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white"
+                        aria-label="Remover foto"
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                    <input
+                      value={ph.label}
+                      maxLength={60}
+                      onChange={(e) =>
+                        setForm({ ...form, photos: form.photos.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })
+                      }
+                      placeholder="Cor (ex.: Azul)"
+                      className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1 text-xs outline-none focus:border-[var(--accent)]"
+                    />
                   </div>
                 ))}
-                {form.added.map((url, i) => (
-                  <div key={i} className="relative h-24 w-24 overflow-hidden rounded-xl border border-slate-200">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={url} alt="" className="h-full w-full object-cover" />
-                    <button onClick={() => setForm({ ...form, added: form.added.filter((_, j) => j !== i) })} className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white">
-                      <X size={13} />
-                    </button>
-                  </div>
-                ))}
-                {form.keep.length + form.added.length < 5 && (
+                {form.photos.length < 5 && (
                   <button onClick={() => fileRef.current?.click()} className="flex h-24 w-24 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-slate-300 text-xs text-slate-500 hover:border-[var(--accent)] hover:text-[var(--accent)]">
                     <ImagePlus size={22} /> Adicionar
                   </button>
@@ -501,15 +519,16 @@ export function ProductDetail({ p, category }: { p: Product; category?: string |
         <div className="aspect-[4/3] overflow-hidden rounded-xl bg-slate-100">
           {img ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={img.url} alt={p.name} className="h-full w-full object-contain" />
+            <img src={img.url} alt={img.label || p.name} className="h-full w-full object-contain" />
           ) : (
             <div className="flex h-full items-center justify-center text-slate-300"><Package size={48} /></div>
           )}
         </div>
+        {img?.label && <p className="mt-1.5 text-center text-sm font-medium text-slate-600">{img.label}</p>}
         {p.images.length > 1 && (
           <div className="mt-2 flex gap-2">
             {p.images.map((im, i) => (
-              <button key={im.id} onClick={() => setIdx(i)} className={`h-14 w-14 overflow-hidden rounded-lg border-2 ${i === idx ? "border-[var(--accent)]" : "border-transparent"}`}>
+              <button key={im.id} onClick={() => setIdx(i)} title={im.label || undefined} className={`h-14 w-14 overflow-hidden rounded-lg border-2 ${i === idx ? "border-[var(--accent)]" : "border-transparent"}`}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={im.url} alt="" className="h-full w-full object-cover" />
               </button>

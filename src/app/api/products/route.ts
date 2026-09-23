@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { productCategories, products } from "@/db/schema";
 import { requireUser } from "@/lib/auth/server";
-import { listProducts, replaceImages } from "@/lib/products/server";
+import { listProducts, replaceImages, saveImages } from "@/lib/products/server";
 import { productValues } from "@/lib/products/validate";
 
 /** Catálogo da conta. Quem atende (Leads) também pode ver, para enviar ao cliente. */
@@ -30,6 +30,7 @@ export async function POST(req: NextRequest) {
     .insert(products)
     .values({ ...(parsed.values as typeof products.$inferInsert), accountId: auth.accountId })
     .returning();
-  await replaceImages(created.id, [], Array.isArray(body.newImages) ? body.newImages : []);
+  if (Array.isArray(body.images)) await saveImages(created.id, body.images);
+  else await replaceImages(created.id, [], Array.isArray(body.newImages) ? body.newImages : []);
   return NextResponse.json(created, { status: 201 });
 }

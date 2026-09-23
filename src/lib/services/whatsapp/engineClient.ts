@@ -89,10 +89,16 @@ export function sendWhatsappMedia(accountId: string, phoneJid: string, media: Ou
 }
 
 /** Envia o card do produto (foto + nome + preço + descrição) pelo WhatsApp da conta */
-export function sendWhatsappProduct(accountId: string, phoneJid: string, productId: string, authorName: string | null) {
+export function sendWhatsappProduct(
+  accountId: string,
+  phoneJid: string,
+  productId: string,
+  authorName: string | null,
+  imageId?: string | null
+) {
   return call<{ success: boolean }>(
     `/send-product`,
-    { method: "POST", body: JSON.stringify({ accountId, phoneJid, productId, authorName }) },
+    { method: "POST", body: JSON.stringify({ accountId, phoneJid, productId, authorName, imageId: imageId || null }) },
     60000
   );
 }

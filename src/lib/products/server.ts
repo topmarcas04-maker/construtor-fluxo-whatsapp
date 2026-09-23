@@ -23,7 +23,7 @@ export async function listProducts(accountId: string) {
   const ids = prods.map((p) => p.id);
   const imgs = ids.length
     ? await db
-        .select({ id: productImages.id, productId: productImages.productId, sort: productImages.sort })
+        .select({ id: productImages.id, productId: productImages.productId, sort: productImages.sort, label: productImages.label })
         .from(productImages)
         .where(inArray(productImages.productId, ids))
         .orderBy(asc(productImages.sort))
@@ -32,7 +32,7 @@ export async function listProducts(accountId: string) {
     categories: cats,
     products: prods.map((p) => ({
       ...p,
-      images: imgs.filter((i) => i.productId === p.id).map((i) => ({ id: i.id, url: `/api/products/image/${i.id}` })),
+      images: imgs.filter((i) => i.productId === p.id).map((i) => ({ id: i.id, url: `/api/products/image/${i.id}`, label: i.label })),
     })),
   };
 }
@@ -42,6 +42,36 @@ export async function getOwnProduct(accountId: string, id: string) {
 }
 
 /** Valida e grava as fotos do produto (data URLs de imagem) */
+export interface ImageInput {
+  /** Foto que já existe (manter) */
+  id?: string;
+  /** Foto nova (data URL) */
+  dataUrl?: string;
+  label?: string | null;
+}
+
+/** Salva as fotos na ordem enviada: mantém as com id, cria as novas, apaga as que sumiram */
+export async function saveImages(productId: string, items: ImageInput[]) {
+  const current = await db.select({ id: productImages.id }).from(productImages).where(eq(productImages.productId, productId));
+  const currentIds = new Set(current.map((c) => c.id));
+  const keepIds = items.map((i) => i.id).filter((id): id is string => Boolean(id && currentIds.has(id)));
+  const remove = current.map((c) => c.id).filter((id) => !keepIds.includes(id));
+  if (remove.length) await db.delete(productImages).where(inArray(productImages.id, remove));
+  let sort = 0;
+  for (const item of items) {
+    if (sort >= MAX_PRODUCT_IMAGES) break;
+    const label = String(item.label || "").trim().slice(0, 60) || null;
+    if (item.id && currentIds.has(item.id)) {
+      await db
+        .update(productImages)
+        .set({ sort: sort++, label })
+        .where(and(eq(productImages.id, item.id), eq(productImages.productId, productId)));
+    } else if (item.dataUrl && /^data:image\/(jpeg|png|webp);base64,/.test(item.dataUrl) && item.dataUrl.length <= 1_500_000) {
+      await db.insert(productImages).values({ productId, dataUrl: item.dataUrl, label, sort: sort++ });
+    }
+  }
+}
+
 export async function replaceImages(productId: string, keepIds: string[], newDataUrls: string[]) {
   const current = await db.select({ id: productImages.id }).from(productImages).where(eq(productImages.productId, productId));
   const remove = current.map((c) => c.id).filter((id) => !keepIds.includes(id));

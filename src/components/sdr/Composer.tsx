@@ -7,7 +7,7 @@ import type { QuickReply } from "@/lib/types/sdr";
 export type OutgoingPayload =
   | { text: string }
   | { media: { kind: "image" | "audio"; dataUrl: string; fileName?: string }; caption?: string }
-  | { productId: string };
+  | { productId: string; imageId?: string };
 
 interface PickerProduct {
   id: string;
@@ -15,7 +15,7 @@ interface PickerProduct {
   price: number | null;
   promoPrice: number | null;
   active: boolean;
-  images: { id: string; url: string }[];
+  images: { id: string; url: string; label?: string | null }[];
 }
 
 const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -90,9 +90,9 @@ export function Composer({
     }
   };
 
-  const sendProduct = async (p: PickerProduct) => {
+  const sendProduct = async (p: PickerProduct, imageId?: string) => {
     setPickerOpen(false);
-    await send({ productId: p.id });
+    await send(imageId ? { productId: p.id, imageId } : { productId: p.id });
   };
 
   const shownCatalog = (catalog || []).filter((p) =>
@@ -217,8 +217,8 @@ export function Composer({
               </p>
             ) : (
               shownCatalog.map((p) => (
+                <div key={p.id} className="border-b border-slate-50 last:border-0">
                 <button
-                  key={p.id}
                   onClick={() => sendProduct(p)}
                   className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-slate-50"
                   title="Enviar foto, preço e descrição para o cliente"
@@ -238,6 +238,23 @@ export function Composer({
                     </span>
                   </span>
                 </button>
+                {p.images.some((im) => im.label) && (
+                  <div className="flex flex-wrap gap-1.5 px-3 pb-2 pl-[68px]">
+                    {p.images
+                      .filter((im) => im.label)
+                      .map((im) => (
+                        <button
+                          key={im.id}
+                          onClick={() => sendProduct(p, im.id)}
+                          className="rounded-full border border-slate-200 px-2.5 py-0.5 text-xs text-slate-600 hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                          title={`Enviar a foto ${im.label}`}
+                        >
+                          {im.label}
+                        </button>
+                      ))}
+                  </div>
+                )}
+                </div>
               ))
             )}
           </div>

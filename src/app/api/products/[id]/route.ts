@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { productCategories, products } from "@/db/schema";
 import { requireUser } from "@/lib/auth/server";
-import { getOwnProduct, replaceImages } from "@/lib/products/server";
+import { getOwnProduct, replaceImages, saveImages } from "@/lib/products/server";
 import { productValues } from "@/lib/products/validate";
 
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -26,7 +26,9 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     .set({ ...parsed.values, updatedAt: new Date() })
     .where(eq(products.id, id))
     .returning();
-  if (Array.isArray(body.keepImageIds) || Array.isArray(body.newImages)) {
+  if (Array.isArray(body.images)) {
+    await saveImages(id, body.images);
+  } else if (Array.isArray(body.keepImageIds) || Array.isArray(body.newImages)) {
     await replaceImages(id, Array.isArray(body.keepImageIds) ? body.keepImageIds : [], Array.isArray(body.newImages) ? body.newImages : []);
   }
   return NextResponse.json(updated);

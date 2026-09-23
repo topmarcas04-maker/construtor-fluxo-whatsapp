@@ -49,7 +49,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 /**
  * POST — mensagem enviada pelo painel (vendedor/admin). Quando uma pessoa responde,
  * a IA para de responder esse lead (pode ser religada no painel).
- * Body: { text } ou { media: { kind: "image"|"audio"|"document", dataUrl, fileName? }, caption? } ou { productId }
+ * Body: { text } ou { media: { kind: "image"|"audio"|"document", dataUrl, fileName? }, caption? } ou { productId, imageId? }
  */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const auth = await requireUser("leads");
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       });
       if (!product) return NextResponse.json({ error: "Produto não encontrado" }, { status: 404 });
       await db.update(leads).set({ aiPaused: true, updatedAt: new Date() }).where(eq(leads.conversationId, id));
-      result = await sendWhatsappProduct(auth.accountId, conversation.phoneJid, product.id, author);
+      result = await sendWhatsappProduct(auth.accountId, conversation.phoneJid, product.id, author, body.imageId ? String(body.imageId) : null);
     } else if (body.media) {
       const { kind, dataUrl, fileName } = body.media as { kind: string; dataUrl: string; fileName?: string };
       const match = /^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/.exec(String(dataUrl || ""));

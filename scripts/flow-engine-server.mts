@@ -923,12 +923,12 @@ async function runAi(accountId: string, conversationId: string) {
   }
 
   // Fotos dos produtos que a IA escolheu mostrar
-  for (const code of decision.productCodes) {
-    const item = catalog.find((c) => c.ai.code === code);
+  for (const ref of decision.productCodes) {
+    const item = catalog.find((c) => c.ai.code === ref.code);
     if (!item) continue;
     await pause(900);
-    const r = await sendProductPhoto(accountId, conversation.phoneJid, item.id, "AI", null);
-    if ("error" in r) console.warn(`[IA ${accountId.slice(0, 8)}] foto do produto ${code}: ${r.error}`);
+    const r = await sendProductPhoto(accountId, conversation.phoneJid, item.id, "AI", null, false, { label: ref.label });
+    if ("error" in r) console.warn(`[IA ${accountId.slice(0, 8)}] foto do produto ${ref.code}: ${r.error}`);
   }
 
   if (decision.handoff) {
@@ -979,14 +979,12 @@ async function loadCatalog(accountId: string) {
     .orderBy(products.sort, products.name)
     .limit(CATALOG_LIMIT);
   if (!rows.length) return [];
-  const withPhoto = new Set(
-    (
-      await db
-        .select({ productId: productImages.productId })
-        .from(productImages)
-        .where(inArray(productImages.productId, rows.map((r) => r.id)))
-    ).map((r) => r.productId)
-  );
+  const photos = await db
+    .select({ productId: productImages.productId, label: productImages.label })
+    .from(productImages)
+    .where(inArray(productImages.productId, rows.map((r) => r.id)))
+    .orderBy(productImages.sort);
+  const withPhoto = new Set(photos.map((r) => r.productId));
   return rows.map((r, i) => ({
     id: r.id,
     ai: {
@@ -996,6 +994,7 @@ async function loadCatalog(accountId: string) {
       price: priceLabel(r),
       description: r.description ? r.description.replace(/\s+/g, " ").slice(0, 400) : null,
       hasPhoto: withPhoto.has(r.id),
+      photoLabels: photos.filter((ph) => ph.productId === r.id && ph.label?.trim()).map((ph) => ph.label!.trim()),
     },
   }));
 }
@@ -1007,17 +1006,27 @@ async function sendProductPhoto(
   productId: string,
   sender: Sender,
   authorName: string | null,
-  withDescription = false
+  withDescription = false,
+  pick: { imageId?: string | null; label?: string | null } = {}
 ) {
   const product = await db.query.products.findFirst({
     where: and(eq(products.id, productId), eq(products.accountId, accountId)),
   });
   if (!product) return { error: "Produto não encontrado" };
-  const img = await db.query.productImages.findFirst({
+  const imgs = await db.query.productImages.findMany({
     where: eq(productImages.productId, productId),
     orderBy: (t, { asc }) => asc(t.sort),
   });
-  const lines = [`*${product.name}*`, priceLabel(product)];
+  // Foto escolhida: pelo id (painel) ou pelo nome/cor (IA); senão a principal
+  const norm = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  const wanted = pick.label ? norm(pick.label) : "";
+  const img =
+    (pick.imageId && imgs.find((i) => i.id === pick.imageId)) ||
+    (wanted &&
+      (imgs.find((i) => i.label && norm(i.label) === wanted) ||
+        imgs.find((i) => i.label && (norm(i.label).includes(wanted) || wanted.includes(norm(i.label)))))) ||
+    imgs[0];
+  const lines = [`*${product.name}*${img?.label ? ` — ${img.label}` : ""}`, priceLabel(product)];
   if (withDescription && product.description?.trim()) lines.push("", product.description.trim().slice(0, 700));
   const caption = lines.join("\n");
   if (!img) return sendText(accountId, phoneJid, caption, sender, authorName);
@@ -1349,7 +1358,9 @@ function startApiServer() {
         }
         if (url.pathname === "/send-product") {
           if (!body.phoneJid || !body.productId) return json(res, 400, { error: "Produto inválido" });
-          const r = await sendProductPhoto(acc.id, body.phoneJid, String(body.productId), "HUMAN", body.authorName || null, true);
+          const r = await sendProductPhoto(acc.id, body.phoneJid, String(body.productId), "HUMAN", body.authorName || null, true, {
+            imageId: body.imageId ? String(body.imageId) : null,
+          });
           return json(res, "error" in r ? 502 : 200, r);
         }
         return json(res, 404, { error: "not found" });
