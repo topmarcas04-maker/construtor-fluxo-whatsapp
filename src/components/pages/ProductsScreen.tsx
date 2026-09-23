@@ -127,6 +127,9 @@ export function DeliveryBadge({ a, small }: { a: { availability: string; days: n
   );
 }
 
+/** Igual a MAX_PRODUCT_IMAGES em lib/products/server.ts */
+const MAX_PHOTOS = 8;
+
 const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 export function PriceTag({
@@ -462,7 +465,7 @@ export function ProductsScreen() {
 
   const onFiles = async (files: FileList | null) => {
     if (!files || !form) return;
-    const room = 5 - form.photos.length;
+    const room = MAX_PHOTOS - form.photos.length;
     const picked = Array.from(files).filter((f) => f.type.startsWith("image/")).slice(0, Math.max(0, room));
     const urls = await Promise.all(picked.map(compress));
     setForm({
@@ -770,7 +773,7 @@ export function ProductsScreen() {
         {form && (
           <div className="space-y-5">
             <div>
-              <p className="text-sm font-semibold text-slate-800">Fotos (até 5 — a primeira é a principal)</p>
+              <p className="text-sm font-semibold text-slate-800">Fotos (até {MAX_PHOTOS} — a primeira é a principal)</p>
               <p className="mb-2 text-xs text-slate-500">
                 Escreva a cor embaixo de cada foto: quando o cliente pedir &quot;me mostra a azul&quot;, a IA manda a foto certa. Use o
                 olho para desligar uma cor (a IA deixa de oferecer) e a entrega para uma cor com prazo diferente.
@@ -844,7 +847,7 @@ export function ProductsScreen() {
                     {!ph.active && <p className="mt-0.5 text-[10px] font-medium text-slate-500">Cor desligada</p>}
                   </div>
                 ))}
-                {form.photos.length < 5 && (
+                {form.photos.length < MAX_PHOTOS && (
                   <button onClick={() => fileRef.current?.click()} className="flex h-24 w-24 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-slate-300 text-xs text-slate-500 hover:border-[var(--accent)] hover:text-[var(--accent)]">
                     <ImagePlus size={22} /> Adicionar
                   </button>

@@ -4,7 +4,7 @@ import { productCategories, productImages, products } from "@/db/schema";
 
 export { priceLabel } from "./format";
 
-export const MAX_PRODUCT_IMAGES = 5;
+export const MAX_PRODUCT_IMAGES = 8;
 
 /** Produtos da conta com categoria e os ids das fotos (sem o arquivo, que é carregado à parte) */
 export async function listProducts(accountId: string) {
