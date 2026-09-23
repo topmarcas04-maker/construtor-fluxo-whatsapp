@@ -42,6 +42,9 @@ import {
   productCategories,
   productImages,
   metaConnections,
+  funnelColumns,
+  funnels,
+  chatbots,
 } from "../src/db/schema";
 import { eq, and, desc, gte, lt, isNull, sql, inArray } from "drizzle-orm";
 import { runSdrAgent, pickSeller, type AgentDecision } from "../src/lib/ai/sdrAgent";
@@ -74,6 +77,16 @@ import {
 import { ensureColumns, ensureFunnels } from "../src/lib/funnel/shared";
 import { ensureActions, type AiAction } from "../src/lib/actions/shared";
 import { normalizeStage } from "../src/lib/funnel/common";
+import { listChatbots, accountHasModule } from "../src/lib/chatbot/shared";
+import {
+  matchOption,
+  matchKeyword,
+  renderStep,
+  fillBotText,
+  DEFAULT_FALLBACK,
+  type Chatbot,
+  type BotOption,
+} from "../src/lib/chatbot/common";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
 import { spawn } from "node:child_process";
@@ -94,7 +107,10 @@ const db = drizzle(pool, { schema });
 const AI_DEBOUNCE_MS = Number(process.env.AI_DEBOUNCE_MS || 6000);
 const SELFTEST = process.env.FLOW_ENGINE_SELFTEST === "1";
 
-type Sender = "AI" | "HUMAN" | "AUTO";
+type Sender = "AI" | "HUMAN" | "AUTO" | "BOT";
+
+/** Espera um pouco antes do chatbot responder, para juntar mensagens seguidas */
+const BOT_DEBOUNCE_MS = Number(process.env.BOT_DEBOUNCE_MS || 1500);
 
 /** Mídia maior que isso não é guardada no banco (só o aviso "[vídeo]" etc.) */
 const MAX_STORED_MEDIA = 12 * 1024 * 1024;
@@ -526,6 +542,8 @@ async function handleIncomingMessage(accountId: string, msg: any) {
     let conversation = await db.query.conversations.findFirst({
       where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
     });
+    const isNewConversation = !conversation;
+    const prevAt = conversation?.lastMessageAt || null;
     if (!conversation) {
       const [created] = await db
         .insert(conversations)
@@ -576,8 +594,10 @@ async function handleIncomingMessage(accountId: string, msg: any) {
     if (extracted.type === "audio" && saved && media && "dataUrl" in media && media.dataUrl && settings?.transcribeAudio !== false) {
       await transcribeIncoming(accountId, saved.id, media.dataUrl);
     }
-    // Mensagem muito antiga (recuperada depois de uma queda longa): a IA não responde
-    if (settings?.enabled && Date.now() - sentAt.getTime() < AI_RECOVERY_WINDOW_MS) scheduleAi(accountId, conversation.id);
+    // Mensagem muito antiga (recuperada depois de uma queda longa): nem o chatbot nem a IA respondem
+    if (Date.now() - sentAt.getTime() < AI_RECOVERY_WINDOW_MS) {
+      await routeIncoming(accountId, conversation.id, { isNew: isNewConversation, prevAt, channel: "WHATSAPP" }, Boolean(settings?.enabled));
+    }
   } catch (error) {
     console.error("[Error] handleIncomingMessage:", error);
   }
@@ -634,7 +654,10 @@ async function handleOwnPhoneMessage(accountId: string, msg: any) {
       mediaFileName: media && "fileName" in media ? media.fileName : null,
     });
     await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
-    await db.update(leads).set({ aiPaused: true, updatedAt: new Date() }).where(eq(leads.conversationId, conversation.id));
+    await db
+      .update(leads)
+      .set({ aiPaused: true, botId: null, botStep: null, botTries: 0, updatedAt: new Date() })
+      .where(eq(leads.conversationId, conversation.id));
   } catch (error) {
     console.error("[Error] handleOwnPhoneMessage:", error);
   }
@@ -998,6 +1021,8 @@ async function handleMetaMessage(conn: typeof metaConnections.$inferSelect, chan
   let conversation = await db.query.conversations.findFirst({
     where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
   });
+  const isNewConversation = !conversation;
+  const prevAt = conversation?.lastMessageAt || null;
   if (!conversation) {
     if (echo) return; // resposta da página para alguém que ainda não está no sistema
     const profile = token ? await metaProfile(token, userId, channel) : { name: null, handle: null };
@@ -1048,7 +1073,10 @@ async function handleMetaMessage(conn: typeof metaConnections.$inferSelect, chan
 
   if (echo) {
     // Alguém respondeu pelo app do Instagram/Facebook: a pessoa assumiu a conversa
-    await db.update(leads).set({ aiPaused: true, updatedAt: new Date() }).where(eq(leads.conversationId, conversation.id));
+    await db
+      .update(leads)
+      .set({ aiPaused: true, botId: null, botStep: null, botTries: 0, updatedAt: new Date() })
+      .where(eq(leads.conversationId, conversation.id));
     return;
   }
   await db.update(leads).set({ updatedAt: new Date() }).where(eq(leads.conversationId, conversation.id));
@@ -1058,7 +1086,9 @@ async function handleMetaMessage(conn: typeof metaConnections.$inferSelect, chan
   if (messageType === "audio" && saved && media && settings?.transcribeAudio !== false) {
     await transcribeIncoming(accountId, saved.id, media.dataUrl);
   }
-  if (settings?.enabled && Date.now() - sentAt.getTime() < AI_RECOVERY_WINDOW_MS) scheduleAi(accountId, conversation.id);
+  if (Date.now() - sentAt.getTime() < AI_RECOVERY_WINDOW_MS) {
+    await routeIncoming(accountId, conversation.id, { isNew: isNewConversation, prevAt, channel }, Boolean(settings?.enabled));
+  }
 }
 
 // ============================================================================
@@ -1069,7 +1099,7 @@ const aiTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const aiRunning = new Set<string>();
 const warned = new Set<string>();
 
-function scheduleAi(accountId: string, conversationId: string) {
+function scheduleAi(accountId: string, conversationId: string, force = false) {
   const current = aiTimers.get(conversationId);
   if (current) clearTimeout(current);
   aiTimers.set(
@@ -1077,11 +1107,11 @@ function scheduleAi(accountId: string, conversationId: string) {
     setTimeout(() => {
       aiTimers.delete(conversationId);
       if (aiRunning.has(conversationId)) {
-        scheduleAi(accountId, conversationId);
+        scheduleAi(accountId, conversationId, force);
         return;
       }
       aiRunning.add(conversationId);
-      runAi(accountId, conversationId)
+      runAi(accountId, conversationId, force)
         .catch((err) => console.error("[IA] Erro:", err?.message || err))
         .finally(() => aiRunning.delete(conversationId));
     }, AI_DEBOUNCE_MS)
@@ -1098,7 +1128,7 @@ async function loadAccount(id: string) {
   return db.query.accounts.findFirst({ where: eq(accounts.id, id) });
 }
 
-async function runAi(accountId: string, conversationId: string) {
+async function runAi(accountId: string, conversationId: string, force = false) {
   const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
   if (!settings?.enabled) return;
 
@@ -1120,7 +1150,8 @@ async function runAi(accountId: string, conversationId: string) {
     limit: 30,
   });
   const history = recent.reverse();
-  if (!history.length || history[history.length - 1].direction !== "IN") return;
+  // Só responde se a última mensagem é do cliente (ou quando o chatbot passou a conversa para a IA)
+  if (!history.length || (!force && history[history.length - 1].direction !== "IN")) return;
 
   const allTags = await db.select().from(tags).where(eq(tags.accountId, accountId));
   const rules = await db.query.distributionRules.findMany({
@@ -1625,6 +1656,260 @@ async function handoffToSeller(
       if ("error" in r) console.warn("[IA] Não consegui avisar o vendedor:", r.error);
     }
   }
+}
+
+// ============================================================================
+// CHATBOT (MENUS SEM IA)
+// ============================================================================
+
+type IncomingCtx = { isNew: boolean; prevAt: Date | null; channel: string };
+const botTimers = new Map<string, { timer: ReturnType<typeof setTimeout>; ctx: IncomingCtx }>();
+const botRunning = new Set<string>();
+
+/** Conta com chatbot ligado? (menu liberado + pelo menos um chatbot ativo) */
+async function hasActiveBots(accountId: string) {
+  const one = await db
+    .select({ id: chatbots.id })
+    .from(chatbots)
+    .where(and(eq(chatbots.accountId, accountId), eq(chatbots.active, true)))
+    .limit(1);
+  if (!one.length) return false;
+  return accountHasModule(accountId, "chatbot", loadAccount);
+}
+
+/** Mensagem do cliente: primeiro o chatbot; se ele não atender, a IA (se ligada) */
+async function routeIncoming(accountId: string, conversationId: string, ctx: IncomingCtx, aiEnabled: boolean) {
+  const pending = botTimers.get(conversationId);
+  if (!pending && !(await hasActiveBots(accountId))) {
+    if (aiEnabled) scheduleAi(accountId, conversationId);
+    return;
+  }
+  // Junta mensagens seguidas ("oi" + "tudo bem?") antes de responder
+  if (pending) clearTimeout(pending.timer);
+  const merged: IncomingCtx = pending ? { ...ctx, isNew: pending.ctx.isNew || ctx.isNew, prevAt: pending.ctx.prevAt } : ctx;
+  const timer = setTimeout(async () => {
+    botTimers.delete(conversationId);
+    if (botRunning.has(conversationId)) return routeIncoming(accountId, conversationId, merged, aiEnabled);
+    botRunning.add(conversationId);
+    try {
+      const handled = await runChatbot(accountId, conversationId, merged);
+      if (!handled) {
+        const st = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId), columns: { enabled: true } });
+        if (st?.enabled) scheduleAi(accountId, conversationId);
+      }
+    } catch (err) {
+      console.error("[Chatbot] Erro:", (err as Error)?.message || err);
+    } finally {
+      botRunning.delete(conversationId);
+    }
+  }, BOT_DEBOUNCE_MS);
+  botTimers.set(conversationId, { timer, ctx: merged });
+}
+
+/** Tira o lead do chatbot. next: HUMAN (equipe assume), AI (IA continua) ou END */
+async function endBot(accountId: string, leadId: string, conversationId: string, next: "HUMAN" | "AI" | "END", botId: string) {
+  const set: Record<string, unknown> = {
+    botId: null,
+    botStep: null,
+    botTries: 0,
+    botEndedAt: new Date(),
+    botLastId: botId,
+    updatedAt: new Date(),
+  };
+  if (next === "HUMAN") set.aiPaused = true;
+  if (next === "AI") set.aiPaused = false;
+  await db.update(leads).set(set).where(eq(leads.id, leadId));
+  if (next === "AI") {
+    const st = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId), columns: { enabled: true } });
+    if (st?.enabled) scheduleAi(accountId, conversationId, true);
+  }
+}
+
+/** Mostra um passo; passo sem opções manda a mensagem e encerra */
+async function enterStep(
+  accountId: string,
+  bot: Chatbot,
+  stepId: string | null,
+  lead: typeof leads.$inferSelect,
+  conv: typeof conversations.$inferSelect
+) {
+  const step = bot.steps.find((x) => x.id === stepId) || null;
+  if (!step) return endBot(accountId, lead.id, conv.id, "HUMAN", bot.id);
+  const nome = lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conv.leadName;
+  const text = renderStep(step, { nome });
+  if (text) {
+    await pause(700);
+    await sendText(accountId, conv.phoneJid, text, "BOT");
+  }
+  if (!step.options.length) return endBot(accountId, lead.id, conv.id, step.next, bot.id);
+  await db
+    .update(leads)
+    .set({ botId: bot.id, botStep: step.id, botTries: 0, botAt: new Date(), updatedAt: new Date() })
+    .where(eq(leads.id, lead.id));
+}
+
+/** Move o card para a coluna (coluna fixa muda o estágio; personalizada guarda a coluna) */
+async function moveLeadToColumn(accountId: string, leadId: string, columnId: string) {
+  const col = await db.query.funnelColumns.findFirst({ where: and(eq(funnelColumns.id, columnId), eq(funnelColumns.accountId, accountId)) });
+  if (!col) return;
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  if (col.funnelId) {
+    const f = await db.query.funnels.findFirst({ where: eq(funnels.id, col.funnelId) });
+    set.funnelId = f && !f.isDefault ? f.id : null;
+  }
+  if (col.kind === "CUSTOM") set.columnId = col.id;
+  else {
+    set.columnId = null;
+    set.stage = col.kind;
+    set.closed = col.kind === "SALE";
+    set.closedAt = col.kind === "SALE" ? new Date() : null;
+  }
+  await db.update(leads).set(set).where(eq(leads.id, leadId));
+}
+
+/** Executa o que foi configurado na opção escolhida */
+async function applyBotOption(
+  accountId: string,
+  bot: Chatbot,
+  option: BotOption,
+  lead: typeof leads.$inferSelect,
+  conv: typeof conversations.$inferSelect
+) {
+  const nome = lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conv.leadName;
+  if (option.reply.trim()) {
+    await pause(600);
+    await sendText(accountId, conv.phoneJid, fillBotText(option.reply, { nome }), "BOT");
+  }
+  for (const t of option.addTagIds) await db.insert(leadTags).values({ leadId: lead.id, tagId: t }).onConflictDoNothing();
+  if (option.removeTagIds.length) {
+    await db.delete(leadTags).where(and(eq(leadTags.leadId, lead.id), inArray(leadTags.tagId, option.removeTagIds)));
+  }
+  if (option.columnId) await moveLeadToColumn(accountId, lead.id, option.columnId);
+  await db.update(leads).set({ lastAction: option.label.slice(0, 120), lastActionAt: new Date() }).where(eq(leads.id, lead.id));
+
+  // Vendedor escolhido (ou pelas regras de distribuição)
+  if (option.sellerId) {
+    let sellerId: string | null = option.sellerId;
+    if (sellerId === "AUTO") {
+      const rules = await db.query.distributionRules.findMany({
+        where: eq(schema.distributionRules.accountId, accountId),
+        with: { seller: true },
+      });
+      sellerId = pickSeller(
+        rules.map((r) => ({ ...r, sellerActive: r.seller?.active !== false })),
+        lead.city,
+        lead.saleType
+      );
+    }
+    const seller = sellerId ? await db.query.sellers.findFirst({ where: and(eq(sellers.id, sellerId), eq(sellers.accountId, accountId)) }) : null;
+    if (seller) {
+      await db.update(leads).set({ sellerId: seller.id, aiPaused: true }).where(eq(leads.id, lead.id));
+      const st = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId), columns: { notifySeller: true } });
+      const jid = sellerJid(seller.phone);
+      if (jid && st?.notifySeller !== false) {
+        const leadPhone = lead.phone || (conv.phoneJid.endsWith("@s.whatsapp.net") ? conv.phoneJid.split("@")[0] : null);
+        const lines = [
+          `🔔 *Novo lead para você* (chatbot)`,
+          `*Cliente:* ${nome || "sem nome"}`,
+          `*Escolheu:* ${option.label}`,
+          leadPhone ? `\nFalar com o cliente: https://wa.me/${leadPhone}` : `\nAbra o painel em Leads para continuar.`,
+        ];
+        const r = await sendText(accountId, jid, lines.join("\n"), "AUTO");
+        if ("error" in r) console.warn("[Chatbot] Não consegui avisar o vendedor:", r.error);
+      }
+    }
+  }
+
+  const fresh = (await db.query.leads.findFirst({ where: eq(leads.id, lead.id) })) || lead;
+  if (option.next === "STEP") return enterStep(accountId, bot, option.stepId, fresh, conv);
+  // Com vendedor definido, a conversa fica com a equipe
+  const next = fresh.sellerId && option.next !== "END" ? "HUMAN" : option.next;
+  return endBot(accountId, lead.id, conv.id, next, bot.id);
+}
+
+/** Decide se o chatbot atende esta mensagem. Devolve true se atendeu. */
+async function runChatbot(accountId: string, conversationId: string, ctx: IncomingCtx): Promise<boolean> {
+  if (!(await accountHasModule(accountId, "chatbot", loadAccount))) return false;
+  const conv = await db.query.conversations.findFirst({ where: eq(conversations.id, conversationId) });
+  const lead = await db.query.leads.findFirst({ where: eq(leads.conversationId, conversationId) });
+  if (!conv || !lead) return false;
+  const bots = (await listChatbots(db, accountId)).filter((b) => b.active && b.steps.length && b.channels.includes(ctx.channel));
+
+  // Com vendedor ou venda fechada, quem atende é a equipe
+  if (lead.sellerId || lead.stage === "SALE") {
+    if (lead.botId) await db.update(leads).set({ botId: null, botStep: null, botTries: 0 }).where(eq(leads.id, lead.id));
+    return false;
+  }
+
+  // Mensagens do cliente desde a última resposta
+  const recent = await db.query.messages.findMany({
+    where: eq(messages.conversationId, conversationId),
+    orderBy: [desc(messages.sentAt)],
+    limit: 10,
+  });
+  if (!recent.length || recent[0].direction !== "IN") return Boolean(lead.botId);
+  const burst: string[] = [];
+  for (const m of recent) {
+    if (m.direction !== "IN") break;
+    burst.push(m.transcript || m.body);
+  }
+  const last = burst[0] || "";
+  const now = Date.now();
+
+  // 1) Já está no meio de um menu
+  if (lead.botId) {
+    const bot = bots.find((b) => b.id === lead.botId);
+    const expired = !lead.botAt || now - new Date(lead.botAt).getTime() > (bot?.restartHours || 24) * 3600e3;
+    if (bot && !expired) {
+      const step = bot.steps.find((x) => x.id === lead.botStep) || bot.steps[0];
+      const option = matchOption(step.options, last);
+      if (option) {
+        console.log(`[Chatbot ${accountId.slice(0, 8)}] ${conv.phoneJid}: opção "${option.key} - ${option.label}"`);
+        await applyBotOption(accountId, bot, option, lead, conv);
+        return true;
+      }
+      const tries = lead.botTries + 1;
+      if (tries > bot.maxTries) {
+        if (bot.afterFail === "HUMAN") {
+          await pause(600);
+          await sendText(accountId, conv.phoneJid, "Tudo bem! Vou chamar alguém da equipe para te ajudar. 🙂", "BOT");
+        }
+        await endBot(accountId, lead.id, conv.id, bot.afterFail, bot.id);
+        return true;
+      }
+      await pause(600);
+      const list = step.options.map((o) => `*${o.key}* - ${o.label}`).join("\n");
+      await sendText(accountId, conv.phoneJid, `${bot.fallbackMessage || DEFAULT_FALLBACK}\n\n${list}`, "BOT");
+      await db.update(leads).set({ botTries: tries, botAt: new Date() }).where(eq(leads.id, lead.id));
+      return true;
+    }
+    await db.update(leads).set({ botId: null, botStep: null, botTries: 0 }).where(eq(leads.id, lead.id));
+  }
+
+  if (!bots.length) return false;
+
+  // 2) Algum chatbot deve começar?
+  const leadTagIds = (await db.select({ tagId: leadTags.tagId }).from(leadTags).where(eq(leadTags.leadId, lead.id))).map((r) => r.tagId);
+  const skip = (b: Chatbot) => b.skipTagIds.some((t) => leadTagIds.includes(t));
+  // O mesmo chatbot não recomeça logo depois de terminar
+  const endedRecently = (b: Chatbot) =>
+    lead.botLastId === b.id && lead.botEndedAt && now - new Date(lead.botEndedAt).getTime() < b.restartHours * 3600e3;
+  const quietFor = (b: Chatbot) => ctx.isNew || !ctx.prevAt || now - new Date(ctx.prevAt).getTime() >= b.restartHours * 3600e3;
+  const text = burst.join(" ");
+
+  const pick =
+    // Palavra-chave: vale mesmo com a equipe atendendo (o cliente pediu o menu)
+    bots.find((b) => b.trigger === "KEYWORD" && !skip(b) && matchKeyword(b.keywords, text)) ||
+    // Etiqueta: uma vez por período, e não se a equipe já assumiu
+    (!lead.aiPaused ? bots.find((b) => b.trigger === "TAG" && !skip(b) && !endedRecently(b) && b.tagIds.some((t) => leadTagIds.includes(t))) : undefined) ||
+    // Início de conversa: lead novo ou que voltou depois do tempo configurado
+    bots.find((b) => b.trigger === "START" && !skip(b) && quietFor(b) && (!endedRecently(b) || ctx.isNew));
+
+  if (!pick) return false;
+  console.log(`[Chatbot ${accountId.slice(0, 8)}] ${conv.phoneJid}: começou "${pick.name}"`);
+  await db.update(leads).set({ aiPaused: false }).where(eq(leads.id, lead.id));
+  await enterStep(accountId, pick, pick.steps[0].id, lead, conv);
+  return true;
 }
 
 // ============================================================================

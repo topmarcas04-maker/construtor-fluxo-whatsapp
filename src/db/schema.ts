@@ -325,6 +325,15 @@ export const leads = pgTable(
     /** Produto de interesse (a IA identifica pela conversa; a equipe pode trocar) */
     productId: uuid("product_id").references(() => products.id, { onDelete: "set null" }),
     saleType: saleTypeEnum("sale_type").notNull().default("ANY"),
+    /** Chatbot (sem IA) em andamento com este lead, passo atual e tentativas sem entender */
+    botId: uuid("bot_id").references(() => chatbots.id, { onDelete: "set null" }),
+    botStep: varchar("bot_step", { length: 40 }),
+    botTries: integer("bot_tries").notNull().default(0),
+    botAt: timestamp("bot_at", { withTimezone: true }),
+    /** Quando o último chatbot terminou (evita recomeçar logo em seguida) */
+    botEndedAt: timestamp("bot_ended_at", { withTimezone: true }),
+    /** Último chatbot que atendeu (para não repetir o mesmo logo em seguida) */
+    botLastId: uuid("bot_last_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -568,6 +577,44 @@ export const aiActions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("ai_actions_account_idx").on(table.accountId)]
+);
+
+// ============================================================================
+// CHATBOT (MENUS AUTOMÁTICOS SEM IA)
+// ============================================================================
+
+/**
+ * Chatbot de menu: o cliente responde com o número da opção.
+ * trigger: START (início de conversa) | KEYWORD (palavra-chave) | TAG (lead com etiqueta)
+ * steps: passos com mensagem e opções (ver lib/chatbot/common.ts)
+ */
+export const chatbots = pgTable(
+  "chatbots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 120 }).notNull(),
+    active: boolean("active").notNull().default(true),
+    trigger: varchar("trigger", { length: 20 }).notNull().default("START"),
+    keywords: jsonb("keywords").$type<string[]>().notNull().default([]),
+    tagIds: jsonb("tag_ids").$type<string[]>().notNull().default([]),
+    /** Não começa se o lead tiver alguma destas etiquetas */
+    skipTagIds: jsonb("skip_tag_ids").$type<string[]>().notNull().default([]),
+    channels: jsonb("channels").$type<string[]>().notNull().default(["WHATSAPP", "INSTAGRAM", "MESSENGER"]),
+    /** Recomeça se o lead voltar depois de X horas sem conversa */
+    restartHours: integer("restart_hours").notNull().default(24),
+    steps: jsonb("steps").$type<unknown[]>().notNull().default([]),
+    fallbackMessage: text("fallback_message"),
+    maxTries: integer("max_tries").notNull().default(2),
+    /** Depois de errar as tentativas: HUMAN | AI | END */
+    afterFail: varchar("after_fail", { length: 10 }).notNull().default("HUMAN"),
+    sort: integer("sort").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("chatbots_account_idx").on(table.accountId)]
 );
 
 // ============================================================================

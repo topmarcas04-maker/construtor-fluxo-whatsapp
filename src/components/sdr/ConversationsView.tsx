@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X } from "lucide-react";
+import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X, Workflow } from "lucide-react";
 import type { Lead, Message, QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import {
   TAG_DOT_CLASSES,
@@ -61,6 +61,13 @@ function StatusChip({ lead }: { lead: Lead }) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700">
         <UserRound size={11} /> {lead.seller.name}
+      </span>
+    );
+  }
+  if (lead.inBot) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2 py-0.5 text-[11px] font-medium text-teal-700">
+        <Workflow size={11} /> No chatbot
       </span>
     );
   }
@@ -296,7 +303,7 @@ export function ConversationsView({
                       )}
                       <StatusChip lead={lead} />
                       {lead.lastAction && (
-                        <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700" title="Última ação feita pela IA">
+                        <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700" title="Última ação (IA ou chatbot)">
                           ⚡ {lead.lastAction}
                         </span>
                       )}
@@ -424,6 +431,8 @@ export function ConversationsView({
                             ? "rounded-br-md bg-violet-600 text-white"
                           : msg.sender === "AUTO"
                           ? "rounded-br-md bg-slate-600 text-white"
+                          : msg.sender === "BOT"
+                          ? "rounded-br-md bg-teal-600 text-white"
                             : "rounded-br-md bg-[var(--accent)] text-white"
                           : "rounded-bl-md bg-white text-slate-800"
                       }`}
@@ -437,6 +446,10 @@ export function ConversationsView({
                           ) : msg.sender === "AUTO" ? (
                             <>
                               <Bell size={11} /> Lembrete automático
+                            </>
+                          ) : msg.sender === "BOT" ? (
+                            <>
+                              <Workflow size={11} /> Chatbot
                             </>
                           ) : (
                             <>

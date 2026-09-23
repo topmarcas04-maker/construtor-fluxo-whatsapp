@@ -521,6 +521,34 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS primary_action_id uuid;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_action varchar(120);
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_action_at timestamptz;
 
+-- Chatbot (menus sem IA)
+CREATE TABLE IF NOT EXISTS chatbots (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name varchar(120) NOT NULL,
+  active boolean NOT NULL DEFAULT true,
+  trigger varchar(20) NOT NULL DEFAULT 'START',
+  keywords jsonb NOT NULL DEFAULT '[]'::jsonb,
+  tag_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  skip_tag_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  channels jsonb NOT NULL DEFAULT '["WHATSAPP","INSTAGRAM","MESSENGER"]'::jsonb,
+  restart_hours integer NOT NULL DEFAULT 24,
+  steps jsonb NOT NULL DEFAULT '[]'::jsonb,
+  fallback_message text,
+  max_tries integer NOT NULL DEFAULT 2,
+  after_fail varchar(10) NOT NULL DEFAULT 'HUMAN',
+  sort integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS chatbots_account_idx ON chatbots (account_id);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_id uuid REFERENCES chatbots(id) ON DELETE SET NULL;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_step varchar(40);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_tries integer NOT NULL DEFAULT 0;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_at timestamptz;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_ended_at timestamptz;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_last_id uuid;
+
 -- Migrações que rodam uma única vez
 CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());
 DO $$ BEGIN

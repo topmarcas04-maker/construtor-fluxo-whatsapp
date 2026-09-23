@@ -30,6 +30,8 @@ export interface Lead {
   funnelId?: string | null;
   /** Última ação feita pela IA (ex.: "Reservar") */
   lastAction?: string | null;
+  /** Está no meio de um chatbot (menu sem IA) */
+  inBot?: boolean;
   lastActionAt?: string | null;
   /** Produto de interesse */
   product?: { id: string; name: string; kind: string } | null;
@@ -70,7 +72,7 @@ export interface Message {
   mediaUrl: string | null;
   mediaMimeType: string | null;
   mediaFileName: string | null;
-  sender: "LEAD" | "AI" | "HUMAN" | "FLOW" | "AUTO" | null;
+  sender: "LEAD" | "AI" | "HUMAN" | "FLOW" | "AUTO" | "BOT" | null;
   /** Nome de quem enviou pelo painel */
   authorName: string | null;
   /** Texto do áudio (transcrição) */

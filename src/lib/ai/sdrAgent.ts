@@ -328,7 +328,12 @@ export function buildMessages(history: AgentHistoryMessage[]) {
   for (const m of history) {
     const role = m.direction === "IN" ? "user" : "assistant";
     const text = (m.body || "").trim() || "[mensagem sem texto]";
-    const labeled = role === "assistant" && m.sender === "HUMAN" ? `[vendedor da equipe] ${text}` : text;
+    const labeled =
+      role === "assistant" && m.sender === "HUMAN"
+        ? `[vendedor da equipe] ${text}`
+        : role === "assistant" && m.sender === "BOT"
+        ? `[menu automático] ${text}`
+        : text;
     const last = out[out.length - 1];
     if (last && last.role === role) last.content += `\n${labeled}`;
     else out.push({ role, content: labeled });

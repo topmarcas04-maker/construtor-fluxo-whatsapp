@@ -58,6 +58,7 @@ export async function GET() {
         seller: lead.seller,
         tags: lead.leadTags.map((lt) => lt.tag),
         aiPaused: lead.aiPaused,
+        inBot: Boolean(lead.botId),
         aiSummary: lead.aiSummary,
         score: lead.score,
         interest: lead.interest,

@@ -15,6 +15,7 @@ export const MODULES = [
   { key: "leads", label: "Leads", href: "/leads" },
   { key: "agenda", label: "Agenda", href: "/agenda" },
   { key: "produtos", label: "Produtos", href: "/produtos" },
+  { key: "chatbot", label: "Chatbot", href: "/chatbot" },
   { key: "configuracoes", label: "Configurações", href: "/configuracoes" },
   { key: "parceiros", label: "Parceiros", href: "/parceiros" },
   { key: "permissoes", label: "Permissões", href: "/permissoes" },
