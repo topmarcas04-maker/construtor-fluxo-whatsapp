@@ -10,6 +10,9 @@ import { productValues } from "@/lib/products/validate";
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const auth = await requireUser("produtos");
   if (auth.error) return auth.error;
+  if (!auth.user.canEditProducts) {
+    return NextResponse.json({ error: "Você pode ver os produtos, mas não tem permissão para editar." }, { status: 403 });
+  }
   const { id } = await ctx.params;
   if (!(await getOwnProduct(auth.accountId, id))) return NextResponse.json({ error: "Produto não encontrado" }, { status: 404 });
   const body = await req.json();
@@ -37,6 +40,9 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const auth = await requireUser("produtos");
   if (auth.error) return auth.error;
+  if (!auth.user.canEditProducts) {
+    return NextResponse.json({ error: "Você pode ver os produtos, mas não tem permissão para editar." }, { status: 403 });
+  }
   const { id } = await ctx.params;
   await db.delete(products).where(and(eq(products.id, id), eq(products.accountId, auth.accountId)));
   return NextResponse.json({ ok: true });

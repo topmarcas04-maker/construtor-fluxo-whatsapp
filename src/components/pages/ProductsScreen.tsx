@@ -146,6 +146,8 @@ export function ProductsScreen() {
   const [newCat, setNewCat] = useState<string | null>(null);
   const [editCat, setEditCat] = useState<{ id: string; name: string } | null>(null);
   const [catalogAi, setCatalogAi] = useState<boolean | null>(null);
+  /** Pode cadastrar/editar (senão, só visualiza) */
+  const [canEdit, setCanEdit] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -157,6 +159,9 @@ export function ProductsScreen() {
     fetch("/api/products/settings")
       .then((r) => (r.ok ? r.json() : null))
       .then((s) => s && setCatalogAi(s.catalogEnabled));
+    fetch("/api/auth/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((u) => setCanEdit(Boolean(u?.canEditProducts)));
   }, [load]);
 
   const list = useMemo(() => {
@@ -340,9 +345,13 @@ export function ProductsScreen() {
         title="Produtos"
         description="Monte o catálogo com fotos, preço e descrição. A IA consulta estes produtos para responder e pode enviar as fotos no WhatsApp."
         actions={
-          <Button onClick={openNew}>
-            <Plus size={16} /> Novo produto
-          </Button>
+          canEdit ? (
+            <Button onClick={openNew}>
+              <Plus size={16} /> Novo produto
+            </Button>
+          ) : (
+            <Badge>Somente visualização</Badge>
+          )
         }
       />
 
@@ -359,7 +368,11 @@ export function ProductsScreen() {
               </p>
             </div>
           </div>
-          <Toggle checked={catalogAi} onChange={toggleCatalogAi} label={catalogAi ? "Ligado" : "Desligado"} />
+          {canEdit ? (
+            <Toggle checked={catalogAi} onChange={toggleCatalogAi} label={catalogAi ? "Ligado" : "Desligado"} />
+          ) : (
+            <Badge tone={catalogAi ? "green" : "gray"}>{catalogAi ? "Ligado" : "Desligado"}</Badge>
+          )}
         </Card>
       )}
 
@@ -384,7 +397,7 @@ export function ProductsScreen() {
             );
           }
         )}
-        {newCat === null ? (
+        {!canEdit ? null : newCat === null ? (
           <button onClick={() => setNewCat("")} className="inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 px-4 py-1.5 text-sm font-medium text-slate-500 hover:border-[var(--accent)] hover:text-[var(--accent)]">
             <Plus size={14} /> Categoria
           </button>
@@ -434,8 +447,12 @@ export function ProductsScreen() {
           ) : (
             <>
               <span>Categoria: <b className="text-slate-700">{selectedCat.name}</b></span>
-              <button onClick={() => setEditCat({ id: selectedCat.id, name: selectedCat.name })} className="font-medium text-[var(--accent)] hover:underline">Renomear</button>
-              <button onClick={() => deleteCategory(selectedCat)} className="font-medium text-red-500 hover:underline">Excluir</button>
+              {canEdit && (
+                <>
+                  <button onClick={() => setEditCat({ id: selectedCat.id, name: selectedCat.name })} className="font-medium text-[var(--accent)] hover:underline">Renomear</button>
+                  <button onClick={() => deleteCategory(selectedCat)} className="font-medium text-red-500 hover:underline">Excluir</button>
+                </>
+              )}
             </>
           )}
         </div>
@@ -476,11 +493,12 @@ export function ProductsScreen() {
                   <span className="absolute left-3 top-3 rounded-full bg-emerald-600 px-2.5 py-0.5 text-xs font-bold text-white">Promoção</span>
                 )}
                 <button
+                  disabled={!canEdit}
                   onClick={(e) => {
                     e.stopPropagation();
-                    toggleActive(p);
+                    if (canEdit) toggleActive(p);
                   }}
-                  title={p.active ? "Desligar (a IA deixa de oferecer)" : "Ligar (a IA volta a oferecer)"}
+                  title={!canEdit ? undefined : p.active ? "Desligar (a IA deixa de oferecer)" : "Ligar (a IA volta a oferecer)"}
                   className={`absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold shadow ${
                     p.active ? "bg-white/95 text-emerald-700" : "bg-slate-800/85 text-white"
                   }`}
@@ -545,7 +563,8 @@ export function ProductsScreen() {
         onClose={() => setViewing(null)}
         title={viewing?.name || ""}
         footer={
-          viewing && (
+          viewing &&
+          canEdit && (
             <>
               <Button variant="danger" className="mr-auto" onClick={() => remove(viewing)}>
                 <Trash2 size={15} /> Excluir

@@ -16,6 +16,9 @@ export async function GET() {
 export async function PUT(req: NextRequest) {
   const auth = await requireUser("produtos");
   if (auth.error) return auth.error;
+  if (!auth.user.canEditProducts) {
+    return NextResponse.json({ error: "Você pode ver os produtos, mas não tem permissão para editar." }, { status: 403 });
+  }
   const { catalogEnabled } = await req.json();
   await db
     .insert(aiSettings)

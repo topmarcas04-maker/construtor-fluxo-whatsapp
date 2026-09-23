@@ -17,6 +17,9 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const auth = await requireUser("produtos");
   if (auth.error) return auth.error;
+  if (!auth.user.canEditProducts) {
+    return NextResponse.json({ error: "Você pode ver os produtos, mas não tem permissão para editar." }, { status: 403 });
+  }
   const body = await req.json();
   const parsed = productValues(body, false);
   if ("error" in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 });

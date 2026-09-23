@@ -8,6 +8,9 @@ import { requireUser } from "@/lib/auth/server";
 export async function POST(req: NextRequest) {
   const auth = await requireUser("produtos");
   if (auth.error) return auth.error;
+  if (!auth.user.canEditProducts) {
+    return NextResponse.json({ error: "Você pode ver os produtos, mas não tem permissão para editar." }, { status: 403 });
+  }
   const { name } = await req.json();
   const n = String(name || "").trim();
   if (!n) return NextResponse.json({ error: "Informe o nome da categoria" }, { status: 400 });

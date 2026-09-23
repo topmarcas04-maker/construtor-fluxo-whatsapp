@@ -338,6 +338,18 @@ export function PermissionsScreen() {
                   <span className="text-slate-500">Sem isso, o vendedor só conversa e vê.</span>
                 </span>
               </label>
+              <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  className="accent-[var(--accent)]"
+                  checked={form.permissions.includes("editar-produtos")}
+                  onChange={() => togglePerm("editar-produtos")}
+                />
+                <span>
+                  <b>Pode editar os produtos</b> (cadastrar, alterar, ligar/desligar e excluir).{" "}
+                  <span className="text-slate-500">Sem isso, só vê o catálogo (precisa do menu Produtos marcado).</span>
+                </span>
+              </label>
             </div>
           )}
 

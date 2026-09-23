@@ -44,5 +44,6 @@ export function accountValues(
   }
   if (body.active !== undefined) values.active = Boolean(body.active);
   if (body.leadEdit !== undefined) values.leadEdit = Boolean(body.leadEdit);
+  if (body.productEdit !== undefined) values.productEdit = Boolean(body.productEdit);
   return { values } as const;
 }

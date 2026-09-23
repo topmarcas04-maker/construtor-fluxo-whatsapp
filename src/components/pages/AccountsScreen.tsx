@@ -34,6 +34,7 @@ interface Account {
   aiSource: "OWN" | "PARENT" | "NONE";
   hasOwnKey: boolean;
   leadEdit: boolean;
+  productEdit?: boolean;
   waState: string | null;
   active: boolean;
   createdAt: string;
@@ -53,6 +54,7 @@ type Form = {
   modules: string[];
   aiSource: "OWN" | "PARENT" | "NONE";
   leadEdit: boolean;
+  productEdit: boolean;
   adminName: string;
   adminEmail: string;
   adminPassword: string;
@@ -135,6 +137,7 @@ export function AccountsScreen() {
       modules: grantable.map((m) => m.key),
       aiSource: "PARENT",
       leadEdit: false,
+      productEdit: true,
       adminName: "",
       adminEmail: "",
       adminPassword: "",
@@ -156,6 +159,7 @@ export function AccountsScreen() {
       modules: a.modules,
       aiSource: a.aiSource,
       leadEdit: a.leadEdit,
+      productEdit: a.productEdit !== false,
       adminName: "",
       adminEmail: "",
       adminPassword: "",
@@ -183,6 +187,7 @@ export function AccountsScreen() {
         modules: form.modules,
         aiSource: form.aiSource,
         leadEdit: form.leadEdit,
+        productEdit: form.productEdit,
       };
       if (isNew) body.admin = { name: form.adminName || form.responsible, email: form.adminEmail, password: form.adminPassword };
       const res = await fetch(isNew ? "/api/accounts" : `/api/accounts/${(editing as Account).id}`, {
@@ -519,6 +524,21 @@ export function AccountsScreen() {
                   checked={form.leadEdit}
                   onChange={(v) => setForm({ ...form, leadEdit: v })}
                   label={form.leadEdit ? "Cliente pode editar os cards" : "Só você edita os cards"}
+                />
+              </section>
+            )}
+
+            {!isPartners && (
+              <section className="rounded-xl border border-slate-200 p-4">
+                <p className="mb-1 font-semibold text-slate-800">Editar produtos</p>
+                <p className="mb-3 text-sm text-slate-500">
+                  Se desligado, o cliente vê o catálogo completo (fotos, preços, parcelas, entrega), mas não cadastra, altera,
+                  liga/desliga nem exclui produtos. Você (ou quem acessar pelo botão Acessar) continua podendo editar.
+                </p>
+                <Toggle
+                  checked={form.productEdit}
+                  onChange={(v) => setForm({ ...form, productEdit: v })}
+                  label={form.productEdit ? "Cliente pode editar os produtos" : "Só você edita os produtos"}
                 />
               </section>
             )}

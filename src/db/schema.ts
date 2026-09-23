@@ -129,6 +129,8 @@ export const accounts = pgTable(
     waLastSeenAt: timestamp("wa_last_seen_at", { withTimezone: true }),
     /** Cliente pode editar os cards dos leads (definido por quem cadastrou) */
     leadEdit: boolean("lead_edit").notNull().default(false),
+    /** Cliente pode editar os próprios produtos (definido por quem cadastrou) */
+    productEdit: boolean("product_edit").notNull().default(true),
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

@@ -47,10 +47,13 @@ export interface CurrentUser {
   canManage: boolean;
   /** Pode editar os cards dos leads (estágio, vendedor, valor, etiquetas, dados) */
   canEditLeads: boolean;
+  /** Pode cadastrar/editar produtos e categorias */
+  canEditProducts: boolean;
 }
 
 /** Permissão extra (não é menu) que o administrador dá a um vendedor */
 export const EDIT_LEADS_PERMISSION = "editar-leads";
+export const EDIT_PRODUCTS_PERMISSION = "editar-produtos";
 
 function toAccount(a: NonNullable<Awaited<ReturnType<typeof getAccount>>>): CurrentAccount {
   return {
@@ -105,6 +108,10 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       modules,
       canManage: isAdmin,
       canEditLeads: accountAllows && userAllows,
+      // Produtos: mesma lógica — Cliente só se liberado por quem cadastrou; vendedor só com "editar-produtos"
+      canEditProducts:
+        (acting.type !== "CLIENT" || acting.productEdit !== false || actingAs) &&
+        (isAdmin || actingAs || perms.includes(EDIT_PRODUCTS_PERMISSION)),
     };
   } catch (err) {
     console.error("[auth] getCurrentUser:", err);
