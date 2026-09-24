@@ -5,6 +5,8 @@ import { Bot, Trash2, Plus, Check, Pencil, KeyRound, CalendarDays, AudioLines, P
 import { ActionsTab } from "@/components/settings/ActionsTab";
 import { FollowupTab } from "@/components/settings/FollowupTab";
 import { StyleCard, AiTester } from "@/components/settings/AiStyle";
+import { SellerHoursCard } from "@/components/settings/SellerHours";
+import type { SellerHours } from "@/lib/ai/hours";
 import { REMINDER_OPTIONS } from "@/components/agenda/types";
 import type { QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import { TAG_COLOR_CLASSES, TAG_DOT_CLASSES, SALE_TYPE_LABEL } from "@/lib/types/sdr";
@@ -66,6 +68,8 @@ interface AiSettings {
   emojiLevel: string;
   replySpeed: string;
   offerVideo: boolean;
+  sellerHours: SellerHours;
+  afterHoursMessage: string;
   voice: {
     openai: VoiceKeyInfo;
     eleven: VoiceKeyInfo;
@@ -540,13 +544,15 @@ function AiTab() {
       </Field>
 
       <AiTester
-        draft={{ systemPrompt: s.systemPrompt, style: s.style, styleCustom: s.styleCustom, replyLength: s.replyLength, emojiLevel: s.emojiLevel, offerVideo: s.offerVideo, replySpeed: s.replySpeed, model: s.model }}
+        draft={{ systemPrompt: s.systemPrompt, style: s.style, styleCustom: s.styleCustom, replyLength: s.replyLength, emojiLevel: s.emojiLevel, offerVideo: s.offerVideo, replySpeed: s.replySpeed, model: s.model, handoffMessage: s.handoffMessage, sellerHours: s.sellerHours, afterHoursMessage: s.afterHoursMessage }}
         disabled={noAi ? "Esta conta está sem IA" : !s.integration.ready ? "Configure a chave da IA para testar" : null}
       />
 
       <Field label="Mensagem ao transferir para o vendedor" hint="Use {vendedor} para o nome do vendedor. Deixe vazio para não enviar nada.">
         <Textarea rows={2} value={s.handoffMessage} onChange={(e) => setS({ ...s, handoffMessage: e.target.value })} />
       </Field>
+
+      <SellerHoursCard hours={s.sellerHours} message={s.afterHoursMessage} onChange={(patch) => setS({ ...s, ...patch })} />
 
       <div className="rounded-xl border border-slate-200 p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

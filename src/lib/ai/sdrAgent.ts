@@ -53,6 +53,10 @@ export interface AgentInput {
   /** Colunas do funil com regra: a IA coloca o lead nelas quando a regra se aplica */
   columns?: { name: string; rule: string }[];
   /** Catálogo de produtos que a IA pode consultar (código curto P1, P2...) */
+  /** Horário dos consultores: se estão atendendo agora e quando voltam */
+  sellerHours?: { open: boolean; hoursText: string | null; nextOpen: string | null };
+  /** Uma mensagem automática de transferência é enviada depois da resposta da IA */
+  handoffAuto?: boolean;
   /** A IA oferece o vídeo do produto ("quer ver um vídeo?") */
   offerVideo?: boolean;
   catalog?: {
@@ -235,7 +239,28 @@ REGRAS DE FORMATO
 - Não repita perguntas que o cliente já respondeu. Faça no máximo uma pergunta por vez.
 - Nunca invente preço, estoque, prazo ou condição que não esteja nas instruções ou no catálogo.
 - Se o cliente mandar áudio ou imagem que você não consegue ver, peça gentilmente para escrever.
-- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${styleBlock(input.style || {})}${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
+- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${styleBlock(input.style || {})}${handoffBlock(input)}${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
+}
+
+function handoffBlock(input: AgentInput) {
+  const h = input.sellerHours;
+  const lines: string[] = [];
+  if (h?.hoursText) {
+    lines.push(`- Os consultores (vendedores) atendem ${h.hoursText}.`);
+    if (h.open) lines.push("- Agora os consultores estão atendendo.");
+    else
+      lines.push(
+        `- AGORA ESTÁ FORA DO HORÁRIO DOS CONSULTORES. Você continua atendendo normalmente e pode tirar dúvidas. Se transferir, NUNCA diga que o consultor vai chamar "agora", "já" ou "em instantes": diga que ele vai falar com o cliente ${h.nextOpen}.`
+      );
+  }
+  if (input.handoffAuto)
+    lines.push(
+      `- Quando transferir, uma mensagem automática avisando o cliente da transferência é enviada logo depois da sua resposta. Não anuncie a transferência você mesmo: responda só ao que o cliente disse, em uma frase, ou deixe "resposta" vazia.`
+    );
+  return lines.length ? `
+
+TRANSFERÊNCIA PARA O CONSULTOR
+${lines.join("\n")}` : "";
 }
 
 function channelName(channel?: string) {

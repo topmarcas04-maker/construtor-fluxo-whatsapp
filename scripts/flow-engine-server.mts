@@ -94,6 +94,7 @@ import { followupCandidates, ensureDisqualifiedColumn, type FollowupCandidate } 
 import { withDefaults, fillName, type FollowupSettings } from "../src/lib/followup/common";
 import { generateFollowup } from "../src/lib/ai/followup";
 import { replyDelayMs, typingMs } from "../src/lib/ai/style";
+import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "../src/lib/ai/hours";
 import { loadCatalogFor } from "../src/lib/ai/catalog";
 import { storageReady, getObject, signedUrl } from "../src/lib/storage/s3";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
@@ -1210,6 +1211,8 @@ async function runAi(accountId: string, conversationId: string, force = false) {
       systemPrompt: settings.systemPrompt || "Você é a atendente virtual da empresa.",
       style: { style: settings.style, styleCustom: settings.styleCustom, replyLength: settings.replyLength, emojiLevel: settings.emojiLevel },
       offerVideo: settings.offerVideo,
+      sellerHours: sellerAvailability(normalizeSellerHours(settings.sellerHours)),
+      handoffAuto: Boolean((settings.handoffMessage ?? "").trim()),
       lead: {
         name: lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conversation.leadName,
         city: lead.city,
@@ -1605,7 +1608,7 @@ async function handoffToSeller(
   leadJid: string,
   leadName: string | null,
   d: AgentDecision,
-  settings: { handoffMessage: string | null; notifySeller: boolean },
+  settings: { handoffMessage: string | null; notifySeller: boolean; sellerHours?: unknown; afterHoursMessage?: string | null },
   rules: {
     region: string | null;
     saleType: "ANY" | "WHOLESALE" | "RETAIL";
@@ -1636,14 +1639,19 @@ async function handoffToSeller(
       .where(and(eq(appointments.leadId, leadId), isNull(appointments.sellerId)));
   }
 
-  const template = settings.handoffMessage ?? "";
+  // Fora do horário dos consultores: avisa quando ele vai atender
+  const avail = sellerAvailability(normalizeSellerHours(settings.sellerHours));
+  const baseTemplate = settings.handoffMessage ?? "";
+  const template = baseTemplate.trim() && !avail.open ? settings.afterHoursMessage?.trim() || DEFAULT_AFTER_HOURS : baseTemplate;
   if (template.trim()) {
     await pause(1200);
+    const vars = { horario: avail.hoursText || "", retorno: avail.nextOpen || "" };
     // Sem vendedor definido: "passar para {vendedor}, nosso consultor," vira "passar para um de nossos consultores,"
     const msg = seller?.name
-      ? fillTemplate(template, { vendedor: seller.name })
+      ? fillTemplate(template, { vendedor: seller.name, ...vars })
       : fillTemplate(template.replace(/\{vendedor\}\s*,?\s*nosso consultor\s*,?/i, "{vendedor},"), {
           vendedor: "um de nossos consultores",
+          ...vars,
         });
     await sendText(accountId, leadJid, msg, "AI");
   }
@@ -1660,6 +1668,7 @@ async function handoffToSeller(
         d.appointment ? `*Agendado:* ${d.appointment.subject} em ${d.appointment.date.split("-").reverse().join("/")} às ${d.appointment.time}` : null,
         `*Nota:* ${d.score}/100`,
         d.summary ? `\n${d.summary}` : null,
+        !avail.open ? `\n⏰ Chegou fora do horário. O cliente foi avisado que você atende ${avail.nextOpen}.` : null,
         leadPhone ? `\nFalar com o cliente: https://wa.me/${leadPhone}` : `\nAbra o painel em Leads para continuar.`,
       ].filter(Boolean);
       const r = await sendText(accountId, jid, lines.join("\n"), "AI");

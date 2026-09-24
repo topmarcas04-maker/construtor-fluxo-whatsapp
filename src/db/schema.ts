@@ -456,6 +456,9 @@ export const aiSettings = pgTable("ai_settings", {
   replySpeed: varchar("reply_speed", { length: 10 }).notNull().default("NATURAL"),
   /** IA pergunta se o cliente quer ver o vídeo do produto */
   offerVideo: boolean("offer_video").notNull().default(true),
+  /** Horário dos consultores (ver lib/ai/hours.ts) e mensagem de transferência fora do horário */
+  sellerHours: jsonb("seller_hours").$type<import("../lib/ai/hours").SellerHours>(),
+  afterHoursMessage: text("after_hours_message"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

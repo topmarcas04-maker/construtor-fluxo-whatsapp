@@ -12,6 +12,7 @@ import { loadCatalogFor } from "@/lib/ai/catalog";
 import { ensureActions } from "@/lib/actions/shared";
 import { ensureFunnels, ensureColumns } from "@/lib/funnel/shared";
 import { storageReady } from "@/lib/storage/s3";
+import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "@/lib/ai/hours";
 
 /**
  * POST — conversa de teste com a IA (nada é salvo nem enviado).
@@ -60,6 +61,19 @@ export async function POST(req: NextRequest) {
     .limit(40);
   const model = (typeof draft.model === "string" && draft.model.trim()) || settings.model || "claude-sonnet-4-5";
 
+  // Mensagem automática que iria depois da resposta (no horário ou fora dele)
+  const handoffPreview = () => {
+    const base = String(draft.handoffMessage ?? settings.handoffMessage ?? "");
+    if (!base.trim()) return null;
+    const avail = sellerAvailability(normalizeSellerHours(body.draft?.sellerHours ?? settings.sellerHours));
+    const t = avail.open ? base : String(draft.afterHoursMessage ?? settings.afterHoursMessage ?? "").trim() || DEFAULT_AFTER_HOURS;
+    return t
+      .replace(/\{vendedor\}\s*,?\s*nosso consultor\s*,?/i, "um de nossos consultores,")
+      .replace(/\{vendedor\}/g, "um de nossos consultores")
+      .replace(/\{horario\}/g, avail.hoursText || "")
+      .replace(/\{retorno\}/g, avail.nextOpen || "");
+  };
+
   try {
     const d = await runSdrAgent(
       {
@@ -78,6 +92,8 @@ export async function POST(req: NextRequest) {
         scheduling: { enabled: settings.schedulingEnabled, businessHours: settings.businessHours, busy: busyRows.map((b) => `${formatSpDate(b.startsAt).slice(0, 5)} às ${formatSpTime(b.startsAt)}`), current: null },
         catalog: catalog.map((c) => c.ai),
         offerVideo,
+        sellerHours: sellerAvailability(normalizeSellerHours(body.draft?.sellerHours ?? settings.sellerHours)),
+        handoffAuto: Boolean(String(draft.handoffMessage ?? settings.handoffMessage ?? "").trim()),
         actions: actions.map((a) => ({ name: a.name, kind: a.kind, instructions: a.instructions })),
         columns: ruleColumns.map((c) => ({ name: c.name, rule: c.aiRule!.trim() })),
       },
@@ -118,6 +134,7 @@ export async function POST(req: NextRequest) {
       speed: typeof draft.replySpeed === "string" ? draft.replySpeed : settings.replySpeed,
       action: d.actionName || null,
       handoff: d.handoff,
+      handoffMessage: d.handoff ? handoffPreview() : null,
       appointment: d.appointment ? `${d.appointment.subject} — ${d.appointment.date.split("-").reverse().join("/")} ${d.appointment.time}` : null,
       score: d.score,
       summary: d.summary,

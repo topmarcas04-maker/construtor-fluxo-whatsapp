@@ -182,6 +182,15 @@ export function AiTester({ draft, disabled }: { draft: Record<string, unknown>; 
         if (my !== session.current) return;
         setLines((l) => [...l, { from: "media", kind: m.kind, url: m.url, text: m.caption, at: hhmm() }]);
       }
+      if (d.handoffMessage) {
+        if (realTime) {
+          setTyping(true);
+          await wait(1200);
+          setTyping(false);
+        }
+        if (my !== session.current) return;
+        setLines((l) => [...l, { from: "ai", text: d.handoffMessage as string, at: hhmm() }]);
+      }
       const info: Line[] = [];
       const at = hhmm();
       if (d.action) info.push({ from: "info", text: `⚡ Ação: ${d.action}`, at });

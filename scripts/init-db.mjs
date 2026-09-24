@@ -563,6 +563,10 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS video_seconds integer;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_key varchar(300);
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS offer_video boolean NOT NULL DEFAULT true;
 
+-- Horário dos consultores (transferência fora do horário)
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS seller_hours jsonb;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS after_hours_message text;
+
 -- Recontato automático
 CREATE TABLE IF NOT EXISTS followup_settings (
   id varchar(64) PRIMARY KEY,

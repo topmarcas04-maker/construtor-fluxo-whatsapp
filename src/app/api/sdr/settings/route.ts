@@ -19,6 +19,7 @@ Como atender:
 - Quando a pessoa estiver pronta para comprar, pedir orçamento/preço, pedir para falar com alguém, ou for atacado, transfira para um vendedor.`;
 }
 
+import { normalizeSellerHours, DEFAULT_AFTER_HOURS } from "@/lib/ai/hours";
 const DEFAULT_HANDOFF =
   "Perfeito! Vou te passar agora para {vendedor}, nosso consultor, que vai continuar seu atendimento por aqui. 😊";
 const DEFAULT_REMINDER =
@@ -67,6 +68,8 @@ async function payload(accountId: string) {
   return {
     ...s,
     handoffMessage: s.handoffMessage ?? DEFAULT_HANDOFF,
+    sellerHours: normalizeSellerHours(s.sellerHours),
+    afterHoursMessage: s.afterHoursMessage ?? DEFAULT_AFTER_HOURS,
     reminderMessage: s.reminderMessage ?? DEFAULT_REMINDER,
     integration: {
       /** OWN | PARENT | NONE — definido por quem cadastrou a conta */
@@ -161,6 +164,8 @@ export async function PUT(req: NextRequest) {
   if (EMOJI_OPTIONS.some((o) => o.key === body.emojiLevel)) set.emojiLevel = body.emojiLevel;
   if (SPEED_OPTIONS.some((o) => o.key === body.replySpeed)) set.replySpeed = body.replySpeed;
   if (typeof body.offerVideo === "boolean") set.offerVideo = body.offerVideo;
+  if (body.sellerHours && typeof body.sellerHours === "object") set.sellerHours = normalizeSellerHours(body.sellerHours);
+  if (typeof body.afterHoursMessage === "string") set.afterHoursMessage = body.afterHoursMessage.slice(0, 1000);
   if (body.alertPhone !== undefined) set.alertPhone = String(body.alertPhone || "").replace(/\D/g, "").slice(0, 20) || null;
   if (body.reminderMinutesBefore !== undefined) {
     set.reminderMinutesBefore = Math.max(0, Math.min(1440, Number(body.reminderMinutesBefore) || 0));
