@@ -105,10 +105,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** *negrito* do WhatsApp */
 function WaText({ text }: { text: string }) {
-  const parts = text.split(/(\*[^*\n]+\*)/g);
+  const parts = text.split(/(\*[^*\n]+\*|~[^~\n]+~)/g);
   return (
     <>
-      {parts.map((p, i) => (/^\*[^*\n]+\*$/.test(p) ? <strong key={i}>{p.slice(1, -1)}</strong> : <span key={i}>{p}</span>))}
+      {parts.map((p, i) =>
+        /^\*[^*\n]+\*$/.test(p) ? (
+          <strong key={i}>{p.slice(1, -1)}</strong>
+        ) : /^~[^~\n]+~$/.test(p) ? (
+          <s key={i}>{p.slice(1, -1)}</s>
+        ) : (
+          <span key={i}>{p}</span>
+        )
+      )}
     </>
   );
 }

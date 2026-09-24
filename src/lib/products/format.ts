@@ -140,16 +140,23 @@ export function productCaption(product: CaptionProduct, img: CaptionImage | null
   if (hidePrice) return `*${product.name}*${img?.label ? ` — ${img.label}` : ""}`;
   const physical = (product.kind || "PHYSICAL") === "PHYSICAL";
   const hasPrice = product.price != null || product.promoPrice != null;
-  const lines = [
-    `*${product.name}*${img?.label ? ` — ${img.label}` : ""}`,
-    physical && hasPrice ? `${priceLabel(product)} à vista` : kindPriceLabel(product),
-  ];
+  // Uma informação por linha, fácil de ler no celular
+  const lines = [`*${product.name}*${img?.label ? ` — ${img.label}` : ""}`, ""];
+  if (physical && hasPrice) {
+    const cash = cashPrice(product)!;
+    if (product.promoPrice != null && product.price != null && product.price > product.promoPrice) lines.push(`De ~${brl(product.price)}~ por`);
+    lines.push(`💰 *${brl(cash)} à vista*`);
+  } else {
+    lines.push(`💰 *${kindPriceLabel(product)}*`);
+  }
   if (physical) {
     const inst = installmentRows(product);
-    if (inst.length) lines.push(`ou ${inst.map(installmentText).join(" | ")}`);
-    lines.push(availabilityText(effectiveAvailability(product, img)));
+    if (inst.length) lines.push("", "💳 *No cartão:*", ...inst.map((r) => `• ${installmentText(r)}`));
+    const a = effectiveAvailability(product, img);
+    lines.push("", `${a.availability === "READY" ? "✅" : "🕒"} ${availabilityText(a)}`);
   } else {
-    lines.push(...kindDetails(product as Parameters<typeof kindDetails>[0]));
+    const details = kindDetails(product as Parameters<typeof kindDetails>[0]);
+    if (details.length) lines.push("", ...details.map((d) => `• ${d}`));
   }
   if (withDescription && product.description?.trim()) lines.push("", product.description.trim().slice(0, 700));
   return lines.join("\n");

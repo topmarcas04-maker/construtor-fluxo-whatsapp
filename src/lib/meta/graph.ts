@@ -166,7 +166,7 @@ export async function unsubscribePage(pageId: string, pageToken: string) {
 
 /** Negrito do WhatsApp (*texto*) não existe no Instagram/Messenger: tira os asteriscos */
 export function plainForMeta(text: string) {
-  return text.replace(/\*([^*\n]+)\*/g, "$1").replace(/_([^_\n]+)_/g, "$1");
+  return text.replace(/\*([^*\n]+)\*/g, "$1").replace(/_([^_\n]+)_/g, "$1").replace(/~([^~\n]+)~/g, "$1");
 }
 
 /** Divide textos longos (Instagram aceita até 1000 caracteres por mensagem) */
