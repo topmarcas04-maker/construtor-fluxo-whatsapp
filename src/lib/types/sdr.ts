@@ -17,6 +17,7 @@ export interface LastMessage {
   direction: "IN" | "OUT";
   sentAt: string;
   messageType: string | null;
+  sender?: string | null;
 }
 
 export interface Lead {
@@ -59,6 +60,8 @@ export interface Lead {
     lastMessageAt: string | null;
   };
   lastMessage: LastMessage | null;
+  /** Mensagens do cliente ainda não lidas pela equipe */
+  unread?: number;
 }
 
 export interface Message {

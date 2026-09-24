@@ -400,7 +400,18 @@ export function FunnelView({
                         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--accent)]/10 text-sm font-bold text-[var(--accent)]">
                           {name.charAt(0).toUpperCase()}
                         </span>
-                        <span className="truncate font-semibold text-slate-800">{name}</span>
+                        <span className={`truncate text-slate-800 ${(lead.unread || 0) > 0 ? "font-bold" : "font-semibold"}`}>{name}</span>
+                        {(lead.unread || 0) > 0 && (
+                          <span
+                            className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-emerald-500 px-1.5 text-[11px] font-bold text-white"
+                            title={`${lead.unread} mensagem(ns) não lida(s)`}
+                          >
+                            {(lead.unread || 0) > 99 ? "99+" : lead.unread}
+                          </span>
+                        )}
+                        {!(lead.unread || 0) && lead.lastMessage?.direction === "IN" && (
+                          <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" title="Sem resposta: a última mensagem é do cliente" />
+                        )}
                       </div>
                       {lead.score !== null && (
                         <span

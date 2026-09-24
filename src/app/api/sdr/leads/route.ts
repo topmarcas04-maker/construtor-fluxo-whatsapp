@@ -1,8 +1,8 @@
 export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { leads } from "@/db/schema";
+import { conversations, leads, messages } from "@/db/schema";
 import { requireUser, sellerScope } from "@/lib/auth/server";
 
 /**
@@ -38,6 +38,18 @@ export async function GET() {
       orderBy: (l, { desc }) => [desc(l.updatedAt)],
     });
 
+    // Mensagens do cliente que a equipe ainda não leu, por conversa
+    const unreadRows = await db
+      .select({
+        conversationId: messages.conversationId,
+        n: sql<number>`(count(*) - max(${conversations.readInCount}))::int`,
+      })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(and(eq(conversations.accountId, auth.accountId), eq(messages.direction, "IN")))
+      .groupBy(messages.conversationId);
+    const unread = new Map(unreadRows.map((r) => [r.conversationId, Math.max(0, Number(r.n))]));
+
     const shaped = all
       .map((lead) => ({
         id: lead.id,
@@ -72,6 +84,7 @@ export async function GET() {
           lastMessageAt: lead.conversation.lastMessageAt,
         },
         lastMessage: lead.conversation.messages[0] || null,
+        unread: unread.get(lead.conversationId) || 0,
       }))
       // Conversa com mensagem mais recente primeiro
       .sort((a, b) => {

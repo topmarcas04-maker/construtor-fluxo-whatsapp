@@ -569,6 +569,11 @@ ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS after_hours_message text;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS qualify jsonb;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualified_at timestamptz;
 
+-- Conversas não lidas
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_read_at timestamptz;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS read_in_count integer NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS messages_conv_dir_idx ON messages (conversation_id, direction);
+
 -- Recontato automático
 CREATE TABLE IF NOT EXISTS followup_settings (
   id varchar(64) PRIMARY KEY,
@@ -586,6 +591,12 @@ DO $$ BEGIN
     UPDATE accounts SET modules = modules || '["produtos"]'::jsonb
       WHERE type <> 'MASTER' AND modules ? 'leads' AND NOT modules ? 'produtos';
     INSERT INTO app_migrations (key) VALUES ('grant-produtos-v1');
+  END IF;
+  -- Conversas que já existiam começam como lidas
+  IF NOT EXISTS (SELECT 1 FROM app_migrations WHERE key = 'read-count-v1') THEN
+    UPDATE conversations c SET last_read_at = now(),
+      read_in_count = (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'IN');
+    INSERT INTO app_migrations (key) VALUES ('read-count-v1');
   END IF;
 END $$;
 `;

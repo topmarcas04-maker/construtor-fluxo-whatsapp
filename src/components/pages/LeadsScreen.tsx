@@ -81,6 +81,7 @@ export function LeadsScreen() {
       total: leads.length,
       ai: leads.filter((l) => !l.aiPaused && !l.seller).length,
       hot: leads.filter((l) => l.stage === "HOT_LEAD").length,
+      unread: leads.filter((l) => (l.unread || 0) > 0).length,
     }),
     [leads]
   );
@@ -121,6 +122,11 @@ export function LeadsScreen() {
           <span>
             <b className="text-orange-600">{counts.hot}</b> quentes
           </span>
+          {counts.unread > 0 && (
+            <span>
+              <b className="text-emerald-600">{counts.unread}</b> não lidas
+            </span>
+          )}
         </div>
 
         <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">

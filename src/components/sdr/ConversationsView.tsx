@@ -41,7 +41,24 @@ interface Props {
   onMobileChat?: (open: boolean) => void;
 }
 
-type Filter = "todos" | "ia" | "vendedor" | "quentes";
+type Filter = "todos" | "naolidas" | "aguardando" | "ia" | "vendedor" | "quentes";
+
+/** Quem mandou a última mensagem (prévia da lista) */
+function previewPrefix(m: { direction: string; sender?: string | null }) {
+  if (m.direction === "IN") return "";
+  switch (m.sender) {
+    case "AI":
+      return "IA: ";
+    case "BOT":
+      return "Chatbot: ";
+    case "FOLLOWUP":
+      return "Recontato: ";
+    case "AUTO":
+      return "Lembrete: ";
+    default:
+      return "Você: ";
+  }
+}
 
 function Avatar({ name }: { name: string }) {
   return (
@@ -118,6 +135,10 @@ export function ConversationsView({
     const byChannel =
       channelFilter === "todos" ? byFunnel : byFunnel.filter((l) => (l.conversation.channel || "WHATSAPP") === channelFilter);
     switch (filter) {
+      case "naolidas":
+        return byChannel.filter((l) => (l.unread || 0) > 0);
+      case "aguardando":
+        return byChannel.filter((l) => l.lastMessage?.direction === "IN");
       case "ia":
         return byChannel.filter((l) => !l.aiPaused && !l.seller);
       case "vendedor":
@@ -139,6 +160,23 @@ export function ConversationsView({
       if (localStorage.getItem("sdr_ficha_docked") === "0") setFichaDocked(false);
     } catch {}
   }, []);
+  const openedByUser = useRef<string | null>(null);
+  // Abriu a conversa (na tela): marca como lida
+  const selectedUnread = leads.find((l) => l.id === selectedLeadId)?.unread || 0;
+  const selectedConv = leads.find((l) => l.id === selectedLeadId)?.conversationId;
+  useEffect(() => {
+    // Só quando a pessoa abriu a conversa (a primeira da lista abre sozinha e não conta como lida)
+    if (!selectedConv || selectedUnread === 0 || openedByUser.current !== selectedConv) return;
+    const visibleNow =
+      typeof document !== "undefined" &&
+      document.visibilityState === "visible" &&
+      (window.innerWidth >= 768 || mobilePane === "chat");
+    if (!visibleNow) return;
+    fetch(`/api/sdr/conversations/${selectedConv}/read`, { method: "POST" })
+      .then(() => onLeadUpdated())
+      .catch(() => {});
+  }, [selectedConv, selectedUnread, mobilePane, onLeadUpdated]);
+
   const toggleDocked = () =>
     setFichaDocked((v) => {
       try {
@@ -249,8 +287,12 @@ export function ConversationsView({
                 );
   };
 
+  const unreadCount = leads.filter((l) => (l.unread || 0) > 0).length;
+  const waitingCount = leads.filter((l) => l.lastMessage?.direction === "IN").length;
   const FILTERS: { key: Filter; label: string }[] = [
     { key: "todos", label: "Todos" },
+    { key: "naolidas", label: unreadCount ? `Não lidas (${unreadCount})` : "Não lidas" },
+    { key: "aguardando", label: waitingCount ? `Sem resposta (${waitingCount})` : "Sem resposta" },
     { key: "ia", label: "IA" },
     { key: "vendedor", label: "Com vendedor" },
     { key: "quentes", label: "Quentes" },
@@ -269,7 +311,7 @@ export function ConversationsView({
             <button
               key={f.key}
               onClick={() => setFilter(f.key)}
-              className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+              className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold transition ${
                 filter === f.key
                   ? "bg-[var(--accent)] text-white"
                   : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -325,10 +367,12 @@ export function ConversationsView({
               const name = leadDisplayName(lead);
               const active = selectedLeadId === lead.id;
               const unanswered = lead.lastMessage?.direction === "IN";
+              const unread = active && openedByUser.current === lead.conversationId ? 0 : lead.unread || 0;
               return (
                 <button
                   key={lead.id}
                   onClick={() => {
+                    openedByUser.current = lead.conversationId;
                     onSelectLead(lead.id);
                     setMobilePane("chat");
                   }}
@@ -339,22 +383,35 @@ export function ConversationsView({
                   <Avatar name={name} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
-                      <span className={`truncate text-[15px] ${unanswered ? "font-bold" : "font-medium"} text-slate-900`}>
+                      <span className={`truncate text-[15px] ${unread ? "font-bold" : "font-medium"} text-slate-900`}>
                         {name}
                       </span>
-                      <span className={`shrink-0 text-[11px] ${unanswered ? "font-semibold text-emerald-600" : "text-slate-400"}`}>
+                      <span className={`shrink-0 text-[11px] ${unread ? "font-bold text-emerald-600" : "text-slate-400"}`}>
                         {timeLabel(lead.conversation.lastMessageAt)}
                       </span>
                     </div>
-                    <p className="mt-0.5 truncate text-sm text-slate-500">
-                      {lead.lastMessage
-                        ? `${lead.lastMessage.direction === "OUT" ? "Você: " : ""}${lead.lastMessage.body}`
-                        : "Sem mensagens"}
-                    </p>
+                    <div className="mt-0.5 flex items-center gap-2">
+                      <p className={`min-w-0 flex-1 truncate text-sm ${unread ? "font-semibold text-slate-800" : "text-slate-500"}`}>
+                        {lead.lastMessage ? `${previewPrefix(lead.lastMessage)}${lead.lastMessage.body}` : "Sem mensagens"}
+                      </p>
+                      {unread > 0 && (
+                        <span
+                          className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-emerald-500 px-1.5 text-[11px] font-bold text-white"
+                          title={`${unread} mensagem(ns) não lida(s)`}
+                        >
+                          {unread > 99 ? "99+" : unread}
+                        </span>
+                      )}
+                    </div>
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                       {lead.conversation.channel && lead.conversation.channel !== "WHATSAPP" && (
                         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${CHANNEL_BADGE[lead.conversation.channel] || ""}`}>
                           {CHANNEL_LABEL[lead.conversation.channel] || lead.conversation.channel}
+                        </span>
+                      )}
+                      {unanswered && !unread && (
+                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700" title="A última mensagem é do cliente e ninguém respondeu ainda">
+                          Sem resposta
                         </span>
                       )}
                       <StatusChip lead={lead} />
@@ -435,7 +492,7 @@ export function ConversationsView({
                   fichaDocked ? "border-slate-200 bg-white text-slate-700 hover:bg-slate-50" : "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
                 }`}
               >
-                {fichaDocked ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />} {fichaDocked ? "Recolher ficha" : "Ficha"}
+                {fichaDocked ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />} Ficha
               </button>
               {columnSelect("max-w-[200px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm")}
               {selectedLead.aiPaused ? (

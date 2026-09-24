@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { conversations, leads, messages, products } from "@/db/schema";
+import { markConversationRead } from "@/lib/sdr/read";
 import { and, eq, sql } from "drizzle-orm";
 import { sendWhatsappMedia, sendWhatsappMessage, sendWhatsappProduct } from "@/lib/services/whatsapp/engineClient";
 import { requireUser } from "@/lib/auth/server";
@@ -65,6 +66,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const author = auth.user.name;
+    // Quem responde leu a conversa
+    await markConversationRead(id);
     let result;
     if (body.productId) {
       const product = await db.query.products.findFirst({

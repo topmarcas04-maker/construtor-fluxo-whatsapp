@@ -248,6 +248,10 @@ export const conversations = pgTable(
     leadName: varchar("lead_name", { length: 200 }),
     profilePicUrl: text("profile_pic_url"),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+    /** Até quando a equipe já leu a conversa (mensagens do cliente depois disso = não lidas) */
+    lastReadAt: timestamp("last_read_at", { withTimezone: true }),
+    /** Quantas mensagens do cliente já tinham chegado quando a equipe leu (o resto = não lidas) */
+    readInCount: integer("read_in_count").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [uniqueIndex("conversations_account_phone_idx").on(table.accountId, table.phoneJid)]
