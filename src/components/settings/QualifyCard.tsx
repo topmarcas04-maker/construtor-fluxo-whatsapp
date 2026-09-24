@@ -72,8 +72,8 @@ export function QualifyCard({ q, onChange }: { q: QualifySettings; onChange: (q:
           </div>
           {q.mode === "BEFORE_PRICE" && (
             <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-              Exemplo: o cliente manda &quot;quanto custa a X12?&quot; → a IA responde &quot;Te passo sim! 😊 Pra te passar a melhor condição, qual seu
-              nome e de qual cidade você fala?&quot;. Se o cliente insistir no preço sem responder, a IA passa o valor para não perder a venda.
+              Exemplo: o cliente chega do anúncio com &quot;quero mais informações da FX2&quot; → a IA responde &quot;Oi! Que bom que gostou da FX2 😊 Já te passo tudo! Qual seu
+              nome e de qual cidade você fala?&quot;. Se o cliente insistir sem responder, a IA passa as informações para não perder a venda.
             </p>
           )}
         </>
