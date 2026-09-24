@@ -10,6 +10,7 @@
  * Não use imports com "@/": este arquivo é importado pelo motor via caminho relativo.
  */
 
+import { qualifyBlock, type QualifySettings } from "./qualify";
 import { styleBlock, type StyleSettings } from "./style";
 
 export interface AgentHistoryMessage {
@@ -53,6 +54,8 @@ export interface AgentInput {
   /** Colunas do funil com regra: a IA coloca o lead nelas quando a regra se aplica */
   columns?: { name: string; rule: string }[];
   /** Catálogo de produtos que a IA pode consultar (código curto P1, P2...) */
+  /** Dados que a IA pede para esquentar o lead (e se pede antes do preço) */
+  qualify?: QualifySettings;
   /** Horário dos consultores: se estão atendendo agora e quando voltam */
   sellerHours?: { open: boolean; hoursText: string | null; nextOpen: string | null };
   /** Uma mensagem automática de transferência é enviada depois da resposta da IA */
@@ -239,7 +242,7 @@ REGRAS DE FORMATO
 - Não repita perguntas que o cliente já respondeu. Faça no máximo uma pergunta por vez.
 - Nunca invente preço, estoque, prazo ou condição que não esteja nas instruções ou no catálogo.
 - Se o cliente mandar áudio ou imagem que você não consegue ver, peça gentilmente para escrever.
-- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${styleBlock(input.style || {})}${handoffBlock(input)}${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
+- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${styleBlock(input.style || {})}${qualifyBlock(input.qualify, { name: l.name, city: l.city })}${handoffBlock(input)}${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
 }
 
 function handoffBlock(input: AgentInput) {
@@ -349,7 +352,7 @@ function catalogBlock(input: AgentInput) {
 
 CATÁLOGO DE PRODUTOS (use SOMENTE estes dados para preço e informações)
 ${lines.join("\n")}
-- Quando o cliente perguntar por um produto, preço ou detalhes, responda com base no catálogo acima. Os preços do catálogo PODEM ser informados ao cliente.
+- Quando o cliente perguntar por um produto, preço ou detalhes, responda com base no catálogo acima. Os preços do catálogo PODEM ser informados ao cliente (respeitando a QUALIFICAÇÃO DO LEAD, se houver).
 - Se o produto tiver "de X por Y", informe a promoção. O preço do catálogo é o valor à vista.
 - Planos/mensalidades: o preço é por mês (ou por ano, se indicado). Informe adesão, fidelidade e teste grátis quando fizer sentido. Nunca fale "à vista" para planos.
 - Serviços: "Sob orçamento" significa que um consultor passa o valor; informe a duração se o cliente perguntar.

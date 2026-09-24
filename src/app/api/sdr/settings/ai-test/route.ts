@@ -13,6 +13,7 @@ import { ensureActions } from "@/lib/actions/shared";
 import { ensureFunnels, ensureColumns } from "@/lib/funnel/shared";
 import { storageReady } from "@/lib/storage/s3";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "@/lib/ai/hours";
+import { normalizeQualify } from "@/lib/ai/qualify";
 
 /**
  * POST — conversa de teste com a IA (nada é salvo nem enviado).
@@ -93,6 +94,7 @@ export async function POST(req: NextRequest) {
         catalog: catalog.map((c) => c.ai),
         offerVideo,
         sellerHours: sellerAvailability(normalizeSellerHours(body.draft?.sellerHours ?? settings.sellerHours)),
+        qualify: normalizeQualify(body.draft?.qualify ?? settings.qualify),
         handoffAuto: Boolean(String(draft.handoffMessage ?? settings.handoffMessage ?? "").trim()),
         actions: actions.map((a) => ({ name: a.name, kind: a.kind, instructions: a.instructions })),
         columns: ruleColumns.map((c) => ({ name: c.name, rule: c.aiRule!.trim() })),

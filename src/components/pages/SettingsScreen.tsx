@@ -6,6 +6,8 @@ import { ActionsTab } from "@/components/settings/ActionsTab";
 import { FollowupTab } from "@/components/settings/FollowupTab";
 import { StyleCard, AiTester } from "@/components/settings/AiStyle";
 import { SellerHoursCard } from "@/components/settings/SellerHours";
+import { QualifyCard } from "@/components/settings/QualifyCard";
+import type { QualifySettings } from "@/lib/ai/qualify";
 import type { SellerHours } from "@/lib/ai/hours";
 import { REMINDER_OPTIONS } from "@/components/agenda/types";
 import type { QuickReply, Seller, Tag } from "@/lib/types/sdr";
@@ -70,6 +72,7 @@ interface AiSettings {
   offerVideo: boolean;
   sellerHours: SellerHours;
   afterHoursMessage: string;
+  qualify: QualifySettings;
   voice: {
     openai: VoiceKeyInfo;
     eleven: VoiceKeyInfo;
@@ -536,6 +539,8 @@ function AiTab() {
         onChange={(patch) => setS({ ...s, ...patch })}
       />
 
+      <QualifyCard q={s.qualify} onChange={(qualify) => setS({ ...s, qualify })} />
+
       <Field
         label="Como a IA deve atender (instruções)"
         hint="Explique como a empresa funciona, o jeito de falar, o que perguntar e quando passar para um vendedor. Preços e condições que a IA pode informar também entram aqui."
@@ -544,7 +549,7 @@ function AiTab() {
       </Field>
 
       <AiTester
-        draft={{ systemPrompt: s.systemPrompt, style: s.style, styleCustom: s.styleCustom, replyLength: s.replyLength, emojiLevel: s.emojiLevel, offerVideo: s.offerVideo, replySpeed: s.replySpeed, model: s.model, handoffMessage: s.handoffMessage, sellerHours: s.sellerHours, afterHoursMessage: s.afterHoursMessage }}
+        draft={{ systemPrompt: s.systemPrompt, style: s.style, styleCustom: s.styleCustom, replyLength: s.replyLength, emojiLevel: s.emojiLevel, offerVideo: s.offerVideo, replySpeed: s.replySpeed, model: s.model, handoffMessage: s.handoffMessage, sellerHours: s.sellerHours, afterHoursMessage: s.afterHoursMessage, qualify: s.qualify }}
         disabled={noAi ? "Esta conta está sem IA" : !s.integration.ready ? "Configure a chave da IA para testar" : null}
       />
 

@@ -95,6 +95,7 @@ import { withDefaults, fillName, type FollowupSettings } from "../src/lib/follow
 import { generateFollowup } from "../src/lib/ai/followup";
 import { replyDelayMs, typingMs } from "../src/lib/ai/style";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "../src/lib/ai/hours";
+import { normalizeQualify } from "../src/lib/ai/qualify";
 import { loadCatalogFor } from "../src/lib/ai/catalog";
 import { storageReady, getObject, signedUrl } from "../src/lib/storage/s3";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
@@ -1212,6 +1213,7 @@ async function runAi(accountId: string, conversationId: string, force = false) {
       style: { style: settings.style, styleCustom: settings.styleCustom, replyLength: settings.replyLength, emojiLevel: settings.emojiLevel },
       offerVideo: settings.offerVideo,
       sellerHours: sellerAvailability(normalizeSellerHours(settings.sellerHours)),
+      qualify: normalizeQualify(settings.qualify),
       handoffAuto: Boolean((settings.handoffMessage ?? "").trim()),
       lead: {
         name: lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conversation.leadName,

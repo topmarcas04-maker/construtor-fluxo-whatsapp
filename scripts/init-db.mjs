@@ -566,6 +566,7 @@ ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS offer_video boolean NOT NULL DE
 -- Horário dos consultores (transferência fora do horário)
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS seller_hours jsonb;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS after_hours_message text;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS qualify jsonb;
 
 -- Recontato automático
 CREATE TABLE IF NOT EXISTS followup_settings (

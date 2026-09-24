@@ -459,6 +459,8 @@ export const aiSettings = pgTable("ai_settings", {
   /** Horário dos consultores (ver lib/ai/hours.ts) e mensagem de transferência fora do horário */
   sellerHours: jsonb("seller_hours").$type<import("../lib/ai/hours").SellerHours>(),
   afterHoursMessage: text("after_hours_message"),
+  /** Qualificação do lead (ver lib/ai/qualify.ts) */
+  qualify: jsonb("qualify").$type<import("../lib/ai/qualify").QualifySettings>(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

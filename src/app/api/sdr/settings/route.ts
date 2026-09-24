@@ -20,6 +20,7 @@ Como atender:
 }
 
 import { normalizeSellerHours, DEFAULT_AFTER_HOURS } from "@/lib/ai/hours";
+import { normalizeQualify } from "@/lib/ai/qualify";
 const DEFAULT_HANDOFF =
   "Perfeito! Vou te passar agora para {vendedor}, nosso consultor, que vai continuar seu atendimento por aqui. 😊";
 const DEFAULT_REMINDER =
@@ -70,6 +71,7 @@ async function payload(accountId: string) {
     handoffMessage: s.handoffMessage ?? DEFAULT_HANDOFF,
     sellerHours: normalizeSellerHours(s.sellerHours),
     afterHoursMessage: s.afterHoursMessage ?? DEFAULT_AFTER_HOURS,
+    qualify: normalizeQualify(s.qualify),
     reminderMessage: s.reminderMessage ?? DEFAULT_REMINDER,
     integration: {
       /** OWN | PARENT | NONE — definido por quem cadastrou a conta */
@@ -165,6 +167,7 @@ export async function PUT(req: NextRequest) {
   if (SPEED_OPTIONS.some((o) => o.key === body.replySpeed)) set.replySpeed = body.replySpeed;
   if (typeof body.offerVideo === "boolean") set.offerVideo = body.offerVideo;
   if (body.sellerHours && typeof body.sellerHours === "object") set.sellerHours = normalizeSellerHours(body.sellerHours);
+  if (body.qualify && typeof body.qualify === "object") set.qualify = normalizeQualify(body.qualify);
   if (typeof body.afterHoursMessage === "string") set.afterHoursMessage = body.afterHoursMessage.slice(0, 1000);
   if (body.alertPhone !== undefined) set.alertPhone = String(body.alertPhone || "").replace(/\D/g, "").slice(0, 20) || null;
   if (body.reminderMinutesBefore !== undefined) {
