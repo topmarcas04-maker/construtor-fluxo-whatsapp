@@ -567,6 +567,7 @@ ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS offer_video boolean NOT NULL DE
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS seller_hours jsonb;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS after_hours_message text;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS qualify jsonb;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualified_at timestamptz;
 
 -- Recontato automático
 CREATE TABLE IF NOT EXISTS followup_settings (

@@ -56,6 +56,8 @@ export interface AgentInput {
   /** Catálogo de produtos que a IA pode consultar (código curto P1, P2...) */
   /** Dados que a IA pede para esquentar o lead (e se pede antes do preço) */
   qualify?: QualifySettings;
+  /** Preço e detalhes ainda ocultos até o cliente informar os dados */
+  qualifyPending?: boolean;
   /** Horário dos consultores: se estão atendendo agora e quando voltam */
   sellerHours?: { open: boolean; hoursText: string | null; nextOpen: string | null };
   /** Uma mensagem automática de transferência é enviada depois da resposta da IA */
@@ -242,7 +244,7 @@ REGRAS DE FORMATO
 - Não repita perguntas que o cliente já respondeu. Faça no máximo uma pergunta por vez.
 - Nunca invente preço, estoque, prazo ou condição que não esteja nas instruções ou no catálogo.
 - Se o cliente mandar áudio ou imagem que você não consegue ver, peça gentilmente para escrever.
-- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${styleBlock(input.style || {})}${qualifyBlock(input.qualify, { name: l.name, city: l.city })}${handoffBlock(input)}${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
+- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${styleBlock(input.style || {})}${qualifyBlock(input.qualify, { name: l.name, city: l.city }, input.qualifyPending)}${handoffBlock(input)}${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
 }
 
 function handoffBlock(input: AgentInput) {

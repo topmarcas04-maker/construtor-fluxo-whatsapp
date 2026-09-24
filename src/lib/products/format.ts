@@ -136,7 +136,8 @@ export function pickProductImage<T extends CaptionImage>(all: T[], pick: { image
 }
 
 /** Legenda do card do produto enviado ao cliente (nome, preço, parcelas, entrega) */
-export function productCaption(product: CaptionProduct, img: CaptionImage | null, withDescription = false) {
+export function productCaption(product: CaptionProduct, img: CaptionImage | null, withDescription = false, hidePrice = false) {
+  if (hidePrice) return `*${product.name}*${img?.label ? ` — ${img.label}` : ""}`;
   const physical = (product.kind || "PHYSICAL") === "PHYSICAL";
   const hasPrice = product.price != null || product.promoPrice != null;
   const lines = [

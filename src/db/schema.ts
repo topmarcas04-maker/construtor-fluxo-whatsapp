@@ -339,6 +339,8 @@ export const leads = pgTable(
     /** Recontato automático: quantas tentativas já foram e quando foi a última */
     fuCount: integer("fu_count").notNull().default(0),
     fuLastAt: timestamp("fu_last_at", { withTimezone: true }),
+    /** Quando o cliente informou os dados da qualificação (libera preço e detalhes para a IA) */
+    qualifiedAt: timestamp("qualified_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

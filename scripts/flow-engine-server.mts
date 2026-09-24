@@ -95,7 +95,7 @@ import { withDefaults, fillName, type FollowupSettings } from "../src/lib/follow
 import { generateFollowup } from "../src/lib/ai/followup";
 import { replyDelayMs, typingMs } from "../src/lib/ai/style";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "../src/lib/ai/hours";
-import { normalizeQualify } from "../src/lib/ai/qualify";
+import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem } from "../src/lib/ai/qualify";
 import { loadCatalogFor } from "../src/lib/ai/catalog";
 import { storageReady, getObject, signedUrl } from "../src/lib/storage/s3";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
@@ -1199,6 +1199,10 @@ async function runAi(accountId: string, conversationId: string, force = false) {
   const catalog = settings.catalogEnabled ? await loadCatalog(accountId, actions) : [];
   // Sem bucket configurado a IA não oferece vídeo
   if (!storageReady()) for (const c of catalog) c.ai.hasVideo = false;
+  // Qualificação "Antes de informar": até o cliente dizer nome/cidade, preço e detalhes nem chegam à IA
+  const qualify = normalizeQualify(settings.qualify);
+  const leadTexts = history.filter((m) => m.direction === "IN").map((m) => m.transcript || m.body || "");
+  const pending = qualifyPending(qualify, { qualifiedAt: lead.qualifiedAt, leadMessages: leadTexts.length });
   // Colunas com regra para a IA (ex.: "Ligação") de todos os funis; a do funil do lead tem preferência
   const funnelList = await ensureFunnels(db, accountId);
   const allColumns = (await Promise.all(funnelList.map((f) => ensureColumns(db, accountId, f.id)))).flat();
@@ -1207,13 +1211,13 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     .filter((c) => c.kind === "CUSTOM" && c.aiRule?.trim())
     .filter((c, _i, arr) => c.funnelId === leadFunnelId || !arr.some((o) => o.funnelId === leadFunnelId && o.name.trim().toLowerCase() === c.name.trim().toLowerCase()));
 
-  const decision = await runSdrAgent(
-    {
+  const agentInput = (locked: boolean): Parameters<typeof runSdrAgent>[0] => ({
       systemPrompt: settings.systemPrompt || "Você é a atendente virtual da empresa.",
       style: { style: settings.style, styleCustom: settings.styleCustom, replyLength: settings.replyLength, emojiLevel: settings.emojiLevel },
       offerVideo: settings.offerVideo,
       sellerHours: sellerAvailability(normalizeSellerHours(settings.sellerHours)),
-      qualify: normalizeQualify(settings.qualify),
+      qualify,
+      qualifyPending: locked,
       handoffAuto: Boolean((settings.handoffMessage ?? "").trim()),
       lead: {
         name: lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conversation.leadName,
@@ -1240,13 +1244,23 @@ async function runAi(accountId: string, conversationId: string, force = false) {
           ? `${currentAppt.title} em ${formatSpDate(currentAppt.startsAt)} às ${formatSpTime(currentAppt.startsAt)}`
           : null,
       },
-      catalog: catalog.map((c) => c.ai),
+      catalog: catalog.map((c) => (locked ? maskCatalogItem(c.ai) : c.ai)),
       actions: actions.map((a) => ({ name: a.name, kind: a.kind, instructions: a.instructions })),
       columns: ruleColumns.map((c) => ({ name: c.name, rule: c.aiRule!.trim() })),
-    },
-    { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL }
-  );
+  });
+  const aiOpts = { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL };
+  let decision = await runSdrAgent(agentInput(pending), aiOpts);
   if (!decision) return;
+  // Cliente acabou de informar os dados: responde já com preço e detalhes liberados
+  let unlocked = !pending;
+  if (!lead.qualifiedAt && qualify.mode !== "OFF" && isQualified(qualify, decision, leadTexts, lead.city)) {
+    await db.update(leads).set({ qualifiedAt: new Date() }).where(eq(leads.id, lead.id));
+    if (pending) {
+      const again = await runSdrAgent(agentInput(false), aiOpts).catch(() => null);
+      if (again) decision = again;
+      unlocked = true;
+    }
+  }
 
   // Uma pessoa assumiu enquanto a IA pensava? Não responde por cima.
   const fresh = await db.query.leads.findFirst({ where: eq(leads.id, lead.id) });
@@ -1329,13 +1343,13 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     const item = catalog.find((c) => c.ai.code === ref.code);
     if (!item) continue;
     await pause(900);
-    const r = await sendProductPhoto(accountId, conversation.phoneJid, item.id, "AI", null, false, { label: ref.label });
+    const r = await sendProductPhoto(accountId, conversation.phoneJid, item.id, "AI", null, false, { label: ref.label, hidePrice: !unlocked });
     if ("error" in r) console.warn(`[IA ${accountId.slice(0, 8)}] foto do produto ${ref.code}: ${r.error}`);
   }
 
   // Vídeo do produto (quando o cliente pediu ou aceitou ver)
   if (decision.videoCode) {
-    const item = catalog.find((c) => c.ai.code === decision.videoCode && c.ai.hasVideo);
+    const item = unlocked ? catalog.find((c) => c.ai.code === decision.videoCode && c.ai.hasVideo) : null;
     if (item) {
       await typingFor(accountId, conversation.phoneJid, 1500, "composing");
       const r = await sendProductVideo(accountId, conversation.phoneJid, item.id, "AI", null);
@@ -1420,7 +1434,7 @@ async function sendProductPhoto(
   sender: Sender,
   authorName: string | null,
   withDescription = false,
-  pick: { imageId?: string | null; label?: string | null } = {}
+  pick: { imageId?: string | null; label?: string | null; hidePrice?: boolean } = {}
 ) {
   const product = await db.query.products.findFirst({
     where: and(eq(products.id, productId), eq(products.accountId, accountId)),
@@ -1432,7 +1446,7 @@ async function sendProductPhoto(
   });
   // Foto escolhida no painel pode ser de cor desligada; a IA só usa as ligadas
   const img = pickProductImage(allImgs, pick);
-  const caption = productCaption(product, img, withDescription);
+  const caption = productCaption(product, img, withDescription, pick.hidePrice);
   if (!img) return sendText(accountId, phoneJid, caption, sender, authorName);
   const m = /^data:([^;]+);base64,(.*)$/s.exec(img.dataUrl);
   if (!m) return { error: "Foto inválida" };

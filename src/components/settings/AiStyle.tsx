@@ -122,6 +122,8 @@ export function AiTester({ draft, disabled }: { draft: Record<string, unknown>; 
   const [realTime, setRealTime] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const skip = useRef(false);
+  /** O "cliente" do teste já informou nome/cidade (libera preço e detalhes) */
+  const qualified = useRef(false);
   const session = useRef(0);
   const scroll = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -156,11 +158,12 @@ export function AiTester({ draft, disabled }: { draft: Record<string, unknown>; 
       const res = await fetch("/api/sdr/settings/ai-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history, draft }),
+        body: JSON.stringify({ messages: history, draft, qualified: qualified.current }),
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "A IA não respondeu");
       if (my !== session.current) return;
+      if (d.qualified) qualified.current = true;
       const speed = (d.speed as string) || (draft.replySpeed as string);
       const parts = d.parts as string[];
       // Mesmo ritmo do WhatsApp: espera, "digitando...", uma mensagem de cada vez
@@ -210,6 +213,7 @@ export function AiTester({ draft, disabled }: { draft: Record<string, unknown>; 
 
   const reset = () => {
     session.current++;
+    qualified.current = false;
     setLines([]);
     setError(null);
     setTyping(false);
