@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X, Workflow, CalendarClock } from "lucide-react";
+import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X, Workflow, CalendarClock, KanbanSquare } from "lucide-react";
 import type { Lead, Message, QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import {
   TAG_DOT_CLASSES,
@@ -37,6 +37,8 @@ interface Props {
   /** Pode editar o card (estágio, vendedor, dados) */
   canEdit: boolean;
   funnels: FunnelWithColumns[];
+  /** Celular: conversa aberta (a tela de Leads esconde o cabeçalho para sobrar espaço) */
+  onMobileChat?: (open: boolean) => void;
 }
 
 type Filter = "todos" | "ia" | "vendedor" | "quentes";
@@ -96,6 +98,7 @@ export function ConversationsView({
   onSelectLead,
   canEdit,
   funnels,
+  onMobileChat,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
@@ -129,6 +132,9 @@ export function ConversationsView({
   // Celular/tablet: uma tela por vez (lista → conversa) e a ficha abre por cima
   const [mobilePane, setMobilePane] = useState<"list" | "chat">("list");
   const [showFicha, setShowFicha] = useState(false);
+  useEffect(() => {
+    onMobileChat?.(mobilePane === "chat");
+  }, [mobilePane, onMobileChat]);
 
   const selectedLead = useMemo(
     () => leads.find((l) => l.id === selectedLeadId) || null,
@@ -195,6 +201,38 @@ export function ConversationsView({
       body: JSON.stringify(fields),
     });
     onLeadUpdated();
+  };
+
+  /** Coluna do funil do card (cabeçalho no computador, menu "+" no celular) */
+  const columnSelect = (className: string) => {
+    if (!selectedLead) return null;
+                const lf = funnelOfLead(selectedLead, funnels);
+                const current = lf ? columnOfLead(selectedLead, lf.columns) : undefined;
+                return (
+                  <select
+                    value={current?.id || ""}
+                    disabled={!canEdit || !lf}
+                    title={canEdit ? "Funil e coluna do card" : "Sem permissão para editar o card"}
+                    onChange={(e) => patchLead({ columnId: e.target.value })}
+                    className={className}
+                  >
+                    {funnels.length > 1
+                      ? funnels.map((f) => (
+                          <optgroup key={f.id} label={f.name}>
+                            {f.columns.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {f.id === lf?.id ? c.name : `${f.name} → ${c.name}`}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))
+                      : (lf?.columns || []).map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                  </select>
+                );
   };
 
   const FILTERS: { key: Filter; label: string }[] = [
@@ -340,7 +378,7 @@ export function ConversationsView({
         </div>
       ) : (
         <div className={`min-h-0 flex-col bg-slate-50 ${mobilePane === "chat" ? "flex" : "hidden md:flex"}`}>
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 py-2.5 md:gap-3 md:px-6 md:py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-2 py-1.5 md:gap-3 md:px-6 md:py-3">
             <div className="flex min-w-0 items-center gap-2 md:gap-3">
               <button
                 onClick={() => setMobilePane("list")}
@@ -350,49 +388,29 @@ export function ConversationsView({
                 <ArrowLeft size={20} />
               </button>
               <Avatar name={leadDisplayName(selectedLead)} />
-              <div>
-                <h3 className="font-semibold text-slate-900">{leadDisplayName(selectedLead)}</h3>
+              <div className="min-w-0">
+                <h3 className="truncate font-semibold text-slate-900">{leadDisplayName(selectedLead)}</h3>
                 <p className="text-xs text-slate-500">
                   {contactLine(selectedLead)}
                 </p>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            {/* Celular: só o status da IA; as opções ficam no botão "+" ao lado da mensagem */}
+            <span
+              className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold md:hidden ${
+                selectedLead.aiPaused ? "bg-slate-100 text-slate-500" : "bg-violet-50 text-violet-700"
+              }`}
+            >
+              {selectedLead.aiPaused ? "IA pausada" : "IA ativa"}
+            </span>
+            <div className="hidden flex-wrap items-center gap-2 md:flex">
               <button
                 onClick={() => setShowFicha(true)}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 xl:hidden"
               >
                 <IdCard size={16} /> Ficha
               </button>
-              {(() => {
-                const lf = funnelOfLead(selectedLead, funnels);
-                const current = lf ? columnOfLead(selectedLead, lf.columns) : undefined;
-                return (
-                  <select
-                    value={current?.id || ""}
-                    disabled={!canEdit || !lf}
-                    title={canEdit ? "Funil e coluna do card" : "Sem permissão para editar o card"}
-                    onChange={(e) => patchLead({ columnId: e.target.value })}
-                    className="max-w-[200px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
-                  >
-                    {funnels.length > 1
-                      ? funnels.map((f) => (
-                          <optgroup key={f.id} label={f.name}>
-                            {f.columns.map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {f.id === lf?.id ? c.name : `${f.name} → ${c.name}`}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ))
-                      : (lf?.columns || []).map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                  </select>
-                );
-              })()}
+              {columnSelect("max-w-[200px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm")}
               {selectedLead.aiPaused ? (
                 <button
                   onClick={() => patchLead({ aiPaused: false })}
@@ -495,9 +513,41 @@ export function ConversationsView({
           <div className="border-t border-slate-200 bg-white px-3 py-2.5 md:px-6 md:py-3">
             {sendError && <p className="mb-2 text-sm text-red-600">{sendError}</p>}
             {!selectedLead.aiPaused && !selectedLead.seller && (
-              <p className="mb-2 text-xs text-slate-400">Se você enviar uma mensagem, a IA pausa e você assume a conversa.</p>
+              <p className="mb-2 hidden text-xs text-slate-400 md:block">Se você enviar uma mensagem, a IA pausa e você assume a conversa.</p>
             )}
-            <Composer quickReplies={quickReplies} onSend={handleSend} />
+            <Composer
+              quickReplies={quickReplies}
+              onSend={handleSend}
+              mobileActions={(close) => (
+                <>
+                  <button
+                    onClick={() => {
+                      close();
+                      setShowFicha(true);
+                    }}
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-slate-700 active:bg-slate-100"
+                  >
+                    <span className="grid h-9 w-9 place-items-center rounded-full bg-slate-100 text-slate-600"><IdCard size={18} /></span> Ficha do lead
+                  </button>
+                  <label className="flex w-full items-center gap-3 px-4 py-2 text-[15px] text-slate-700">
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-orange-50 text-orange-600"><KanbanSquare size={18} /></span>
+                    {columnSelect("min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm")}
+                  </label>
+                  <button
+                    onClick={() => {
+                      close();
+                      patchLead({ aiPaused: !selectedLead.aiPaused });
+                    }}
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-slate-700 active:bg-slate-100"
+                  >
+                    <span className="grid h-9 w-9 place-items-center rounded-full bg-violet-50 text-violet-600">
+                      {selectedLead.aiPaused ? <PlayCircle size={18} /> : <PauseCircle size={18} />}
+                    </span>
+                    {selectedLead.aiPaused ? "Ativar IA" : "Pausar IA"}
+                  </button>
+                </>
+              )}
+            />
           </div>
         </div>
       )}

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { ImagePlus, Mic, Send, Trash2, Loader2, X, Package, Search, Film } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ImagePlus, Mic, Send, Trash2, Loader2, X, Package, Search, Film, Plus } from "lucide-react";
 import type { QuickReply } from "@/lib/types/sdr";
 
 export type OutgoingPayload =
@@ -62,11 +62,15 @@ export function Composer({
   quickReplies,
   onSend,
   disabled,
+  mobileActions,
 }: {
   quickReplies: QuickReply[];
   onSend: (payload: OutgoingPayload) => Promise<boolean>;
   disabled?: boolean;
+  /** Celular: itens extras do menu "+" (ficha, coluna do funil, IA) — recebe a função que fecha o menu */
+  mobileActions?: (close: () => void) => ReactNode;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [image, setImage] = useState<string | null>(null);
@@ -285,6 +289,34 @@ export function Composer({
         </div>
       )}
 
+      {menuOpen && (
+        <>
+          <button className="fixed inset-0 z-10 cursor-default md:hidden" aria-label="Fechar menu" onClick={() => setMenuOpen(false)} />
+          <div className="absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-2xl border border-slate-200 bg-white py-1.5 shadow-xl md:hidden">
+            <button
+              onClick={() => {
+                setMenuOpen(false);
+                fileRef.current?.click();
+              }}
+              className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-slate-700 active:bg-slate-100"
+            >
+              <span className="grid h-9 w-9 place-items-center rounded-full bg-sky-50 text-sky-600"><ImagePlus size={18} /></span> Enviar foto
+            </button>
+            <button
+              onClick={() => {
+                setMenuOpen(false);
+                openPicker();
+              }}
+              className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-slate-700 active:bg-slate-100"
+            >
+              <span className="grid h-9 w-9 place-items-center rounded-full bg-amber-50 text-amber-600"><Package size={18} /></span> Enviar produto
+            </button>
+            {mobileActions && <div className="my-1 border-t border-slate-100" />}
+            {mobileActions?.(() => setMenuOpen(false))}
+          </div>
+        </>
+      )}
+
       {recording ? (
         <div className="flex items-center gap-3">
           <button onClick={() => stopRecording(true)} className="flex h-11 w-11 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100" title="Cancelar">
@@ -300,10 +332,21 @@ export function Composer({
       ) : (
         <div className="flex items-end gap-2">
           <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => { pickImage(e.target.files?.[0]); e.target.value = ""; }} />
+          {/* Celular: um botão "+" abre as opções para cima e sobra espaço para digitar */}
+          <button
+            onClick={() => setMenuOpen((o) => !o)}
+            disabled={disabled || sending}
+            className={`relative z-20 flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition md:hidden ${
+              menuOpen ? "rotate-45 bg-slate-800 text-white" : "bg-slate-100 text-slate-600"
+            } disabled:opacity-40`}
+            aria-label="Mais opções"
+          >
+            <Plus size={22} />
+          </button>
           <button
             onClick={() => fileRef.current?.click()}
             disabled={disabled || sending}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100 disabled:opacity-40"
+            className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100 disabled:opacity-40 md:flex"
             title="Enviar foto"
           >
             <ImagePlus size={20} />
@@ -311,7 +354,7 @@ export function Composer({
           <button
             onClick={openPicker}
             disabled={disabled || sending}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100 disabled:opacity-40"
+            className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100 disabled:opacity-40 md:flex"
             title="Enviar produto do catálogo"
           >
             <Package size={20} />
@@ -333,7 +376,8 @@ export function Composer({
                 sendTextOrImage();
               }
             }}
-            placeholder={image ? "Legenda (opcional)" : "Mensagem  (digite / para respostas rápidas)"}
+            placeholder={image ? "Legenda (opcional)" : "Mensagem (/ respostas rápidas)"}
+            title="Digite / para respostas rápidas"
             className="max-h-40 min-h-[44px] flex-1 resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-[15px] outline-none focus:border-[var(--accent)] focus:bg-white"
           />
           {draft.trim() || image ? (

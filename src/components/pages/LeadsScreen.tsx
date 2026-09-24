@@ -13,6 +13,8 @@ type ViewMode = "conversas" | "funil";
 
 export function LeadsScreen() {
   const [leads, setLeads] = useState<Lead[]>([]);
+  /** Celular com uma conversa aberta: esconde o cabeçalho para a conversa ocupar a tela */
+  const [mobileChat, setMobileChat] = useState(false);
   const [tags, setTags] = useState<Tag[]>([]);
   const [sellers, setSellers] = useState<Seller[]>([]);
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
@@ -85,7 +87,9 @@ export function LeadsScreen() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2.5 md:gap-3 md:px-6 md:py-3">
+      <div
+        className={`${mobileChat && view === "conversas" ? "hidden md:flex" : "flex"} flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2.5 md:gap-3 md:px-6 md:py-3`}
+      >
         <h1 className="mr-2 text-xl font-semibold text-slate-900">Leads</h1>
 
         <div className="flex rounded-lg bg-slate-100 p-1">
@@ -146,6 +150,7 @@ export function LeadsScreen() {
             onSelectLead={setSelectedLeadId}
             canEdit={canEdit}
             funnels={funnels}
+            onMobileChat={setMobileChat}
           />
         ) : (
           <FunnelView
