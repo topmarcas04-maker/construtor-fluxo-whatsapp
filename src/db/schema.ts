@@ -274,6 +274,8 @@ export const messages = pgTable(
     authorName: varchar("author_name", { length: 150 }),
     /** Texto do áudio (transcrição do cliente ou o que a IA falou) */
     transcript: text("transcript"),
+    /** Arquivo guardado no bucket (vídeos) em vez de media_data_url */
+    mediaKey: varchar("media_key", { length: 300 }),
   },
   (table) => [
     index("messages_conversation_id_idx").on(table.conversationId),
@@ -452,6 +454,8 @@ export const aiSettings = pgTable("ai_settings", {
   emojiLevel: varchar("emoji_level", { length: 10 }).notNull().default("LOW"),
   /** Ritmo da resposta (FAST | NATURAL | CALM) — espera mostrando "digitando..." */
   replySpeed: varchar("reply_speed", { length: 10 }).notNull().default("NATURAL"),
+  /** IA pergunta se o cliente quer ver o vídeo do produto */
+  offerVideo: boolean("offer_video").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -744,6 +748,10 @@ export const products = pgTable(
     primaryActionId: uuid("primary_action_id"),
     /** Preços a prazo no cartão: até 3 opções [{ n: 12, total: 14990 }] */
     installments: jsonb("installments").$type<{ n: number; total: number | null }[]>().notNull().default([]),
+    /** Vídeo do produto no bucket (já comprimido em MP4) */
+    videoKey: varchar("video_key", { length: 300 }),
+    videoBytes: integer("video_bytes"),
+    videoSeconds: integer("video_seconds"),
     sort: integer("sort").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

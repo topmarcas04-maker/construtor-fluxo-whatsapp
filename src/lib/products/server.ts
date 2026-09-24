@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import { productCategories, productImages, products } from "@/db/schema";
+import { storageReady } from "@/lib/storage/s3";
 
 export { priceLabel } from "./format";
 
@@ -38,6 +39,8 @@ export async function listProducts(accountId: string) {
     : [];
   return {
     categories: cats,
+    /** Bucket de vídeos configurado no servidor */
+    videoStorage: storageReady(),
     products: prods.map((p) => ({
       ...p,
       images: imgs.filter((i) => i.productId === p.id).map((i) => ({

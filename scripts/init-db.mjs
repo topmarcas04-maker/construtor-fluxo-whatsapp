@@ -556,6 +556,13 @@ ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS reply_length varchar(10) NOT NU
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS emoji_level varchar(10) NOT NULL DEFAULT 'LOW';
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS reply_speed varchar(10) NOT NULL DEFAULT 'NATURAL';
 
+-- Vídeo dos produtos (arquivo no bucket)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS video_key varchar(300);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS video_bytes integer;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS video_seconds integer;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_key varchar(300);
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS offer_video boolean NOT NULL DEFAULT true;
+
 -- Recontato automático
 CREATE TABLE IF NOT EXISTS followup_settings (
   id varchar(64) PRIMARY KEY,

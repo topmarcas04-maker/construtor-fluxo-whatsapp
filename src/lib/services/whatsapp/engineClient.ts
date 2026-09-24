@@ -94,12 +94,13 @@ export function sendWhatsappProduct(
   phoneJid: string,
   productId: string,
   authorName: string | null,
-  imageId?: string | null
+  imageId?: string | null,
+  video?: boolean
 ) {
   return call<{ success: boolean }>(
     `/send-product`,
-    { method: "POST", body: JSON.stringify({ accountId, phoneJid, productId, authorName, imageId: imageId || null }) },
-    60000
+    { method: "POST", body: JSON.stringify({ accountId, phoneJid, productId, authorName, imageId: imageId || null, video: Boolean(video) }) },
+    video ? 150000 : 60000
   );
 }
 

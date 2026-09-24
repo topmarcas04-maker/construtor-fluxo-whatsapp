@@ -109,3 +109,47 @@ export function kindDetails(p: {
   }
   return out;
 }
+
+type CaptionProduct = PriceInfo & {
+  name: string;
+  kind?: string | null;
+  description?: string | null;
+  availability?: string | null;
+  leadTimeDays?: number | null;
+  installments?: Installment[] | null;
+};
+type CaptionImage = { id: string; label?: string | null; active?: boolean | null; availability?: string | null; leadTimeDays?: number | null };
+
+/** Foto escolhida: pelo id (painel) ou pelo nome/cor (IA); senão a principal. A IA só usa cores ligadas. */
+export function pickProductImage<T extends CaptionImage>(all: T[], pick: { imageId?: string | null; label?: string | null } = {}) {
+  const imgs = pick.imageId ? all : all.filter((i) => i.active !== false);
+  const norm = (v: string) => v.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+  const wanted = pick.label ? norm(pick.label) : "";
+  return (
+    (pick.imageId && imgs.find((i) => i.id === pick.imageId)) ||
+    (wanted &&
+      (imgs.find((i) => i.label && norm(i.label) === wanted) ||
+        imgs.find((i) => i.label && (norm(i.label).includes(wanted) || wanted.includes(norm(i.label)))))) ||
+    imgs[0] ||
+    null
+  );
+}
+
+/** Legenda do card do produto enviado ao cliente (nome, preço, parcelas, entrega) */
+export function productCaption(product: CaptionProduct, img: CaptionImage | null, withDescription = false) {
+  const physical = (product.kind || "PHYSICAL") === "PHYSICAL";
+  const hasPrice = product.price != null || product.promoPrice != null;
+  const lines = [
+    `*${product.name}*${img?.label ? ` — ${img.label}` : ""}`,
+    physical && hasPrice ? `${priceLabel(product)} à vista` : kindPriceLabel(product),
+  ];
+  if (physical) {
+    const inst = installmentRows(product);
+    if (inst.length) lines.push(`ou ${inst.map(installmentText).join(" | ")}`);
+    lines.push(availabilityText(effectiveAvailability(product, img)));
+  } else {
+    lines.push(...kindDetails(product as Parameters<typeof kindDetails>[0]));
+  }
+  if (withDescription && product.description?.trim()) lines.push("", product.description.trim().slice(0, 700));
+  return lines.join("\n");
+}

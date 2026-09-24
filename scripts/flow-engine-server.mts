@@ -74,6 +74,8 @@ import {
   kindPriceLabel,
   kindDetails,
   KIND_LABEL,
+  pickProductImage,
+  productCaption,
 } from "../src/lib/products/format";
 import { ensureColumns, ensureFunnels } from "../src/lib/funnel/shared";
 import { ensureActions, type AiAction } from "../src/lib/actions/shared";
@@ -93,6 +95,7 @@ import { withDefaults, fillName, type FollowupSettings } from "../src/lib/follow
 import { generateFollowup } from "../src/lib/ai/followup";
 import { replyDelayMs, typingMs } from "../src/lib/ai/style";
 import { loadCatalogFor } from "../src/lib/ai/catalog";
+import { storageReady, getObject, signedUrl } from "../src/lib/storage/s3";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
 import { spawn } from "node:child_process";
@@ -1192,6 +1195,8 @@ async function runAi(accountId: string, conversationId: string, force = false) {
   // Ações (procedimentos) ativas da conta
   const actions = (await ensureActions(db, accountId)).filter((a) => a.active);
   const catalog = settings.catalogEnabled ? await loadCatalog(accountId, actions) : [];
+  // Sem bucket configurado a IA não oferece vídeo
+  if (!storageReady()) for (const c of catalog) c.ai.hasVideo = false;
   // Colunas com regra para a IA (ex.: "Ligação") de todos os funis; a do funil do lead tem preferência
   const funnelList = await ensureFunnels(db, accountId);
   const allColumns = (await Promise.all(funnelList.map((f) => ensureColumns(db, accountId, f.id)))).flat();
@@ -1204,6 +1209,7 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     {
       systemPrompt: settings.systemPrompt || "Você é a atendente virtual da empresa.",
       style: { style: settings.style, styleCustom: settings.styleCustom, replyLength: settings.replyLength, emojiLevel: settings.emojiLevel },
+      offerVideo: settings.offerVideo,
       lead: {
         name: lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conversation.leadName,
         city: lead.city,
@@ -1322,6 +1328,16 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     if ("error" in r) console.warn(`[IA ${accountId.slice(0, 8)}] foto do produto ${ref.code}: ${r.error}`);
   }
 
+  // Vídeo do produto (quando o cliente pediu ou aceitou ver)
+  if (decision.videoCode) {
+    const item = catalog.find((c) => c.ai.code === decision.videoCode && c.ai.hasVideo);
+    if (item) {
+      await typingFor(accountId, conversation.phoneJid, 1500, "composing");
+      const r = await sendProductVideo(accountId, conversation.phoneJid, item.id, "AI", null);
+      if ("error" in r) console.warn(`[IA ${accountId.slice(0, 8)}] vídeo do produto ${decision.videoCode}: ${r.error}`);
+    }
+  }
+
   if (decision.handoff) {
     await handoffToSeller(accountId, lead.id, conversation.phoneJid, conversation.leadName, decision, settings, rules);
   }
@@ -1410,35 +1426,69 @@ async function sendProductPhoto(
     orderBy: (t, { asc }) => asc(t.sort),
   });
   // Foto escolhida no painel pode ser de cor desligada; a IA só usa as ligadas
-  const imgs = pick.imageId ? allImgs : allImgs.filter((i) => i.active !== false);
-  // Foto escolhida: pelo id (painel) ou pelo nome/cor (IA); senão a principal
-  const norm = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
-  const wanted = pick.label ? norm(pick.label) : "";
-  const img =
-    (pick.imageId && imgs.find((i) => i.id === pick.imageId)) ||
-    (wanted &&
-      (imgs.find((i) => i.label && norm(i.label) === wanted) ||
-        imgs.find((i) => i.label && (norm(i.label).includes(wanted) || wanted.includes(norm(i.label)))))) ||
-    imgs[0];
-  const physical = product.kind === "PHYSICAL";
-  const hasPrice = product.price != null || product.promoPrice != null;
-  const lines = [
-    `*${product.name}*${img?.label ? ` — ${img.label}` : ""}`,
-    physical && hasPrice ? `${priceLabel(product)} à vista` : kindPriceLabel(product),
-  ];
-  if (physical) {
-    const inst = installmentRows(product);
-    if (inst.length) lines.push(`ou ${inst.map(installmentText).join(" | ")}`);
-    lines.push(availabilityText(effectiveAvailability(product, img)));
-  } else {
-    lines.push(...kindDetails(product));
-  }
-  if (withDescription && product.description?.trim()) lines.push("", product.description.trim().slice(0, 700));
-  const caption = lines.join("\n");
+  const img = pickProductImage(allImgs, pick);
+  const caption = productCaption(product, img, withDescription);
   if (!img) return sendText(accountId, phoneJid, caption, sender, authorName);
   const m = /^data:([^;]+);base64,(.*)$/s.exec(img.dataUrl);
   if (!m) return { error: "Foto inválida" };
   return sendMedia(accountId, phoneJid, { kind: "image", base64: m[2], mimetype: m[1], caption }, sender, authorName);
+}
+
+/** Vídeo do produto (guardado no bucket) */
+async function sendProductVideo(accountId: string, phoneJid: string, productId: string, sender: Sender, authorName: string | null) {
+  const product = await db.query.products.findFirst({
+    where: and(eq(products.id, productId), eq(products.accountId, accountId)),
+  });
+  if (!product) return { error: "Produto não encontrado" };
+  if (!product.videoKey) return { error: "Este produto não tem vídeo" };
+  if (!storageReady()) return { error: "Armazenamento de vídeos não configurado" };
+  const body = `[vídeo] ${product.name}`;
+  const channel = metaChannelOf(phoneJid);
+  try {
+    if (channel) {
+      const { conv, conn, token } = await metaConnectionFor(accountId, phoneJid);
+      if (!conn || !token || !conv) return { error: "Instagram/Facebook desta conta não está conectado" };
+      const [row] = await db
+        .insert(messages)
+        .values({ conversationId: conv.id, direction: "OUT", body, messageType: "video", sentAt: new Date(), sender, authorName: authorName || null, mediaKey: product.videoKey, mediaMimeType: "video/mp4" })
+        .returning({ id: messages.id });
+      const mid = await sendMetaAttachment(token, metaUserId(phoneJid), "video", await signedUrl(product.videoKey, 6 * 3600));
+      if (mid) {
+        rememberSent(mid);
+        await db.update(messages).set({ whatsappMessageId: mid }).where(eq(messages.id, row.id));
+      }
+      await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
+      return { success: true, messageId: mid };
+    }
+    const s = sessions.get(accountId);
+    if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
+    const buffer = await getObject(product.videoKey);
+    const caption = sender === "HUMAN" ? await signed(accountId, `*${product.name}*`, authorName) : `*${product.name}*`;
+    const response = await s.sock.sendMessage(phoneJid, { video: buffer, mimetype: "video/mp4", caption });
+    if (response?.key?.id) rememberSent(response.key.id);
+    const conv = await db.query.conversations.findFirst({
+      where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
+    });
+    if (conv) {
+      await db.insert(messages).values({
+        conversationId: conv.id,
+        direction: "OUT",
+        body,
+        messageType: "video",
+        whatsappMessageId: response?.key?.id,
+        sentAt: new Date(),
+        sender,
+        authorName: authorName || null,
+        mediaKey: product.videoKey,
+        mediaMimeType: "video/mp4",
+      });
+      await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
+    }
+    return { success: true, messageId: response?.key?.id };
+  } catch (error) {
+    console.error("[Error] sendProductVideo:", error);
+    return { error: (error as Error)?.message || String(error) };
+  }
 }
 
 async function applyDecision(
@@ -2179,9 +2229,11 @@ function startApiServer() {
         }
         if (url.pathname === "/send-product") {
           if (!body.phoneJid || !body.productId) return json(res, 400, { error: "Produto inválido" });
-          const r = await sendProductPhoto(acc.id, body.phoneJid, String(body.productId), "HUMAN", body.authorName || null, true, {
-            imageId: body.imageId ? String(body.imageId) : null,
-          });
+          const r = body.video
+            ? await sendProductVideo(acc.id, body.phoneJid, String(body.productId), "HUMAN", body.authorName || null)
+            : await sendProductPhoto(acc.id, body.phoneJid, String(body.productId), "HUMAN", body.authorName || null, true, {
+                imageId: body.imageId ? String(body.imageId) : null,
+              });
           return json(res, "error" in r ? 502 : 200, r);
         }
         return json(res, 404, { error: "not found" });

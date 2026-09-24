@@ -32,5 +32,6 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   // Tudo, menos arquivos estáticos do Next e ícones
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|ico|webp)$).*)"],
+  // api/upload/: arquivos grandes (vídeos) — o login é conferido na própria rota
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/upload/|.*\\.(?:png|jpg|jpeg|svg|ico|webp)$).*)"],
 };

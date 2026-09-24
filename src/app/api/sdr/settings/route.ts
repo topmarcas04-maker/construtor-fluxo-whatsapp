@@ -160,6 +160,7 @@ export async function PUT(req: NextRequest) {
   if (LENGTH_OPTIONS.some((o) => o.key === body.replyLength)) set.replyLength = body.replyLength;
   if (EMOJI_OPTIONS.some((o) => o.key === body.emojiLevel)) set.emojiLevel = body.emojiLevel;
   if (SPEED_OPTIONS.some((o) => o.key === body.replySpeed)) set.replySpeed = body.replySpeed;
+  if (typeof body.offerVideo === "boolean") set.offerVideo = body.offerVideo;
   if (body.alertPhone !== undefined) set.alertPhone = String(body.alertPhone || "").replace(/\D/g, "").slice(0, 20) || null;
   if (body.reminderMinutesBefore !== undefined) {
     set.reminderMinutesBefore = Math.max(0, Math.min(1440, Number(body.reminderMinutesBefore) || 0));

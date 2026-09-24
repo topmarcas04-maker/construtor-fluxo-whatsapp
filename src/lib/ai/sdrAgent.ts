@@ -53,6 +53,8 @@ export interface AgentInput {
   /** Colunas do funil com regra: a IA coloca o lead nelas quando a regra se aplica */
   columns?: { name: string; rule: string }[];
   /** Catálogo de produtos que a IA pode consultar (código curto P1, P2...) */
+  /** A IA oferece o vídeo do produto ("quer ver um vídeo?") */
+  offerVideo?: boolean;
   catalog?: {
     code: string;
     name: string;
@@ -60,6 +62,8 @@ export interface AgentInput {
     price: string;
     description: string | null;
     hasPhoto: boolean;
+    /** Tem vídeo cadastrado */
+    hasVideo?: boolean;
     /** Nomes das fotos (ex.: cores) */
     photoLabels?: string[];
     /** "Pronta entrega" ou "Pedido/reserva: entrega em até 15 dias" */
@@ -95,6 +99,8 @@ export interface AgentDecision {
   phone: string | null;
   /** Fotos a enviar: código do catálogo (P1, P2...) e, se houver, o nome da foto (ex.: a cor) */
   productCodes: { code: string; label: string | null }[];
+  /** Vídeo a enviar: código do catálogo (P1, P2...) */
+  videoCode: string | null;
   /** Ação concluída/aceita pelo cliente (nome exato) */
   actionName: string | null;
   /** Código do catálogo (P1, P2...) do produto que o cliente quer */
@@ -189,6 +195,11 @@ const TOOL = {
         maxItems: 3,
         description:
           "Fotos do CATÁLOGO para enviar junto com a resposta, quando o cliente pedir para ver ou quando ajudar a vender. Use o código (ex.: P3) ou código/foto para uma foto específica, como uma cor (ex.: P3/Azul). Máximo 3. Omita se não houver catálogo ou não for o caso.",
+      },
+      enviar_video: {
+        type: "string",
+        description:
+          "Código do CATÁLOGO (ex.: P3) de um produto marcado com \"vídeo: sim\" para enviar o vídeo logo depois da resposta. Use SOMENTE quando o cliente pedir ou aceitar ver o vídeo. Omita nos outros casos.",
       },
     },
     required: ["resposta", "tipo_compra", "estagio", "pontuacao", "resumo", "transferir"],
@@ -306,6 +317,7 @@ function catalogBlock(input: AgentInput) {
     }
     if (!p.hasPhoto) parts.push("(sem foto)");
     else if (p.photoLabels?.length) parts.push(`fotos: ${p.photoLabels.join(", ")}`);
+    if (p.hasVideo) parts.push("vídeo: sim");
     return `- ${parts.join(" | ")}`;
   });
   return `
@@ -322,8 +334,22 @@ ${lines.join("\n")}
 - Só ofereça as cores listadas em "cores disponíveis". Se o cliente pedir outra cor, diga que no momento não tem e mostre as disponíveis.
 - Para mostrar fotos, coloque o código (ex.: P3) em "enviar_fotos" — as fotos vão logo depois da sua resposta; não escreva links.
 - Se o cliente pedir uma cor ou versão que tem foto com nome (ex.: "fotos: Preta, Azul"), use código/nome (ex.: P3/Azul) para mandar a foto certa. Se a cor pedida não existir, diga quais cores tem.
-- Se o cliente pedir algo que não está no catálogo, diga que vai verificar com um consultor. Nunca invente produto ou preço.
+${videoRules(input)}- Se o cliente pedir algo que não está no catálogo, diga que vai verificar com um consultor. Nunca invente produto ou preço.
 - Não mostre os códigos (P1, P2...) ao cliente.`;
+}
+
+function videoRules(input: AgentInput) {
+  if (!(input.catalog || []).some((p) => p.hasVideo)) return "";
+  const lines = [
+    `- Vídeos: produtos com "vídeo: sim" têm um vídeo curto. Para enviar, coloque o código em "enviar_video" (ex.: P3) — o vídeo vai logo depois da sua resposta; não escreva links.`,
+    `- Só envie o vídeo quando o cliente pedir ou aceitar (ex.: "quero", "pode mandar", "sim"). Envie no máximo um vídeo por resposta e nunca reenvie um vídeo que já aparece na conversa como "[vídeo] nome do produto".`,
+  ];
+  if (input.offerVideo !== false)
+    lines.push(
+      `- Quando o cliente mostrar interesse real num produto com vídeo (perguntou detalhes, preço ou pediu foto), ofereça UMA vez, de forma natural: "Quer ver um vídeo dela?". Não ofereça de novo se ele não quis ou se o vídeo já foi enviado.`
+    );
+  else lines.push(`- Não ofereça o vídeo por conta própria; envie só se o cliente pedir.`);
+  return lines.join("\n") + "\n";
 }
 
 /** Converte o histórico para o formato de mensagens da API (alternando user/assistant) */
@@ -392,6 +418,9 @@ export function parseDecision(raw: Record<string, unknown>, allowedTags: string[
       ? String(raw.produto_interesse).trim().toUpperCase()
       : null,
     productCodes: parsePhotoRefs(raw.enviar_fotos),
+    videoCode: /^\s*p\d{1,4}\b/i.test(String(raw.enviar_video || ""))
+      ? /p\d{1,4}/i.exec(String(raw.enviar_video))![0].toUpperCase()
+      : null,
   };
 }
 

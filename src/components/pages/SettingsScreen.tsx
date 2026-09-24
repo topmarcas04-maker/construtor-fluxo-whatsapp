@@ -65,6 +65,7 @@ interface AiSettings {
   replyLength: string;
   emojiLevel: string;
   replySpeed: string;
+  offerVideo: boolean;
   voice: {
     openai: VoiceKeyInfo;
     eleven: VoiceKeyInfo;
@@ -515,6 +516,15 @@ function AiTab() {
             <Toggle checked={s.notifySeller} onChange={(v) => setS({ ...s, notifySeller: v })} label={s.notifySeller ? "Sim, avisar no WhatsApp dele" : "Não avisar"} />
           </div>
         </Field>
+        <Field label="Vídeo dos produtos" hint='Quando o cliente se interessa por um produto com vídeo, a IA pergunta "quer ver um vídeo dela?" e envia se ele aceitar.'>
+          <div className="pt-2">
+            <Toggle
+              checked={s.offerVideo !== false}
+              onChange={(v) => setS({ ...s, offerVideo: v })}
+              label={s.offerVideo !== false ? "IA oferece o vídeo" : "Só envia se o cliente pedir"}
+            />
+          </div>
+        </Field>
       </div>
 
       <StyleCard
@@ -530,7 +540,7 @@ function AiTab() {
       </Field>
 
       <AiTester
-        draft={{ systemPrompt: s.systemPrompt, style: s.style, styleCustom: s.styleCustom, replyLength: s.replyLength, emojiLevel: s.emojiLevel }}
+        draft={{ systemPrompt: s.systemPrompt, style: s.style, styleCustom: s.styleCustom, replyLength: s.replyLength, emojiLevel: s.emojiLevel, offerVideo: s.offerVideo, replySpeed: s.replySpeed, model: s.model }}
         disabled={noAi ? "Esta conta está sem IA" : !s.integration.ready ? "Configure a chave da IA para testar" : null}
       />
 

@@ -6,6 +6,7 @@ import { productCategories, products } from "@/db/schema";
 import { requireUser } from "@/lib/auth/server";
 import { getOwnProduct, replaceImages, saveImages } from "@/lib/products/server";
 import { productValues } from "@/lib/products/validate";
+import { storageReady, deleteObject } from "@/lib/storage/s3";
 
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const auth = await requireUser("produtos");
@@ -44,6 +45,10 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     return NextResponse.json({ error: "Você pode ver os produtos, mas não tem permissão para editar." }, { status: 403 });
   }
   const { id } = await ctx.params;
-  await db.delete(products).where(and(eq(products.id, id), eq(products.accountId, auth.accountId)));
+  const [gone] = await db
+    .delete(products)
+    .where(and(eq(products.id, id), eq(products.accountId, auth.accountId)))
+    .returning({ videoKey: products.videoKey });
+  if (gone?.videoKey && storageReady()) await deleteObject(gone.videoKey);
   return NextResponse.json({ ok: true });
 }

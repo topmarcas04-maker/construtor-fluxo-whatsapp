@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ImagePlus, Mic, Send, Trash2, Loader2, X, Package, Search } from "lucide-react";
+import { ImagePlus, Mic, Send, Trash2, Loader2, X, Package, Search, Film } from "lucide-react";
 import type { QuickReply } from "@/lib/types/sdr";
 
 export type OutgoingPayload =
   | { text: string }
   | { media: { kind: "image" | "audio"; dataUrl: string; fileName?: string }; caption?: string }
-  | { productId: string; imageId?: string };
+  | { productId: string; imageId?: string; video?: boolean };
 
 interface PickerProduct {
   id: string;
@@ -15,6 +15,7 @@ interface PickerProduct {
   price: number | null;
   promoPrice: number | null;
   active: boolean;
+  videoKey?: string | null;
   images: { id: string; url: string; label?: string | null; active?: boolean }[];
 }
 
@@ -93,6 +94,10 @@ export function Composer({
   const sendProduct = async (p: PickerProduct, imageId?: string) => {
     setPickerOpen(false);
     await send(imageId ? { productId: p.id, imageId } : { productId: p.id });
+  };
+  const sendVideo = async (p: PickerProduct) => {
+    setPickerOpen(false);
+    await send({ productId: p.id, video: true });
   };
 
   const shownCatalog = (catalog || []).filter((p) =>
@@ -238,8 +243,17 @@ export function Composer({
                     </span>
                   </span>
                 </button>
-                {p.images.some((im) => im.label && im.active !== false) && (
+                {(p.videoKey || p.images.some((im) => im.label && im.active !== false)) && (
                   <div className="flex flex-wrap gap-1.5 px-3 pb-2 pl-[68px]">
+                    {p.videoKey && (
+                      <button
+                        onClick={() => sendVideo(p)}
+                        className="inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-0.5 text-xs font-semibold text-violet-700 hover:border-violet-400"
+                        title="Enviar o vídeo do produto"
+                      >
+                        <Film size={11} /> Enviar vídeo
+                      </button>
+                    )}
                     {p.images
                       .filter((im) => im.label && im.active !== false)
                       .map((im) => (

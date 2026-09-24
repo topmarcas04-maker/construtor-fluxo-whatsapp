@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Palette, Timer, Send, RotateCcw, Sparkles, Image as ImageIcon, Zap, UserRound, CalendarDays, MessageCircleMore } from "lucide-react";
+import { Palette, Timer, Send, RotateCcw, Sparkles, Zap, UserRound, CalendarDays, MessageCircleMore } from "lucide-react";
 import { Textarea } from "@/components/ui";
-import { STYLE_PRESETS, LENGTH_OPTIONS, EMOJI_OPTIONS, SPEED_OPTIONS } from "@/lib/ai/style";
+import { STYLE_PRESETS, LENGTH_OPTIONS, EMOJI_OPTIONS, SPEED_OPTIONS, replyDelayMs, typingMs } from "@/lib/ai/style";
 
 export interface StyleValues {
   style: string;
@@ -96,73 +96,147 @@ export function StyleCard({ v, onChange }: { v: StyleValues; onChange: (patch: P
   );
 }
 
-type Line = { from: "lead" | "ai" | "info"; text: string };
+type Line =
+  | { from: "lead" | "ai" | "info"; text: string; at: string }
+  | { from: "media"; kind: "image" | "video" | "text"; url: string | null; text: string; at: string };
 
-/** Conversa de teste com a IA usando o que está na tela (mesmo sem salvar) */
+const hhmm = () => new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** *negrito* do WhatsApp */
+function WaText({ text }: { text: string }) {
+  const parts = text.split(/(\*[^*\n]+\*)/g);
+  return (
+    <>
+      {parts.map((p, i) => (/^\*[^*\n]+\*$/.test(p) ? <strong key={i}>{p.slice(1, -1)}</strong> : <span key={i}>{p}</span>))}
+    </>
+  );
+}
+
+/** Conversa de teste com a IA usando o que está na tela (mesmo sem salvar), no visual do WhatsApp */
 export function AiTester({ draft, disabled }: { draft: Record<string, unknown>; disabled?: string | null }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [typing, setTyping] = useState(false);
+  const [realTime, setRealTime] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const skip = useRef(false);
+  const session = useRef(0);
   const scroll = useRef<HTMLDivElement>(null);
   useEffect(() => {
     scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: "smooth" });
-  }, [lines, busy]);
+  }, [lines, typing]);
+
+  /** Espera que pode ser pulada pelo botão */
+  const wait = async (ms: number) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end && !skip.current) await sleep(Math.min(200, end - Date.now()));
+  };
 
   const send = async (value: string) => {
     if (!value.trim() || busy) return;
-    const next: Line[] = [...lines, { from: "lead", text: value.trim() }];
+    const my = session.current;
+    const sentAt = Date.now();
+    const next: Line[] = [...lines, { from: "lead", text: value.trim(), at: hhmm() }];
     setLines(next);
     setText("");
     setBusy(true);
     setError(null);
+    skip.current = false;
     try {
+      const history = next
+        .filter((l) => l.from !== "info")
+        .map((l) =>
+          l.from === "media"
+            ? { from: "ai", text: l.kind === "video" ? `[vídeo] ${l.text.replace(/\*/g, "")}` : l.text }
+            : { from: l.from, text: l.text }
+        );
+      setTyping(!realTime);
       const res = await fetch("/api/sdr/settings/ai-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next.filter((l) => l.from !== "info").map((l) => ({ from: l.from, text: l.text })), draft }),
+        body: JSON.stringify({ messages: history, draft }),
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "A IA não respondeu");
-      const add: Line[] = (d.parts as string[]).map((p) => ({ from: "ai" as const, text: p }));
-      for (const ph of d.photos as string[]) add.push({ from: "info", text: `📷 Enviaria a foto: ${ph}` });
-      if (d.action) add.push({ from: "info", text: `⚡ Ação: ${d.action}` });
-      if (d.appointment) add.push({ from: "info", text: `📅 Agendaria: ${d.appointment}` });
-      if (d.handoff) add.push({ from: "info", text: "👤 Passaria para um vendedor" });
-      add.push({ from: "info", text: `Nota ${d.score}/100${d.summary ? ` · ${d.summary}` : ""}` });
-      setLines((l) => [...l, ...add]);
+      if (my !== session.current) return;
+      const speed = (d.speed as string) || (draft.replySpeed as string);
+      const parts = d.parts as string[];
+      // Mesmo ritmo do WhatsApp: espera, "digitando...", uma mensagem de cada vez
+      if (realTime && parts.length) {
+        setTyping(true);
+        await wait(replyDelayMs(speed, Date.now() - sentAt));
+      }
+      for (let i = 0; i < parts.length; i++) {
+        if (my !== session.current) return;
+        if (i > 0 && realTime) {
+          setTyping(true);
+          await wait(typingMs(speed, parts[i]));
+        }
+        setTyping(false);
+        setLines((l) => [...l, { from: "ai", text: parts[i], at: hhmm() }]);
+      }
+      for (const m of (d.media || []) as { kind: "image" | "video" | "text"; url: string | null; caption: string }[]) {
+        if (realTime) await wait(900);
+        if (my !== session.current) return;
+        setLines((l) => [...l, { from: "media", kind: m.kind, url: m.url, text: m.caption, at: hhmm() }]);
+      }
+      const info: Line[] = [];
+      const at = hhmm();
+      if (d.action) info.push({ from: "info", text: `⚡ Ação: ${d.action}`, at });
+      if (d.appointment) info.push({ from: "info", text: `📅 Agendaria: ${d.appointment}`, at });
+      if (d.handoff) info.push({ from: "info", text: "👤 Passaria para um vendedor", at });
+      info.push({ from: "info", text: `Nota ${d.score}/100${d.summary ? ` · ${d.summary}` : ""}`, at });
+      setLines((l) => [...l, ...info]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(false);
+      if (my === session.current) {
+        setTyping(false);
+        setBusy(false);
+      }
     }
   };
 
+  const reset = () => {
+    session.current++;
+    setLines([]);
+    setError(null);
+    setTyping(false);
+    setBusy(false);
+  };
+
   return (
-    <div className="overflow-hidden rounded-xl border border-violet-200">
-      <div className="flex items-center justify-between gap-3 bg-violet-50/70 px-4 py-3">
+    <div className="overflow-hidden rounded-xl border border-slate-200">
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-[#075e54] px-4 py-3 text-white">
         <div>
-          <p className="flex items-center gap-2 font-semibold text-slate-900">
-            <MessageCircleMore size={17} className="text-violet-600" /> Testar a IA
+          <p className="flex items-center gap-2 font-semibold">
+            <MessageCircleMore size={17} /> Testar a IA
           </p>
-          <p className="text-xs text-slate-500">Converse como se fosse o cliente. Usa o que está na tela (mesmo sem salvar). Nada é enviado nem salvo.</p>
+          <p className="text-xs text-white/75">
+            Converse como se fosse o cliente. Usa o que está na tela (mesmo sem salvar). Nada é enviado nem salvo.
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setLines([]);
-            setError(null);
-          }}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
-        >
-          <RotateCcw size={14} /> Nova conversa
-        </button>
+        <div className="flex items-center gap-2">
+          <label className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-semibold" title="Espera e mostra 'digitando...' igual ao WhatsApp">
+            <input type="checkbox" checked={realTime} onChange={(e) => setRealTime(e.target.checked)} className="accent-emerald-400" />
+            Tempo real
+          </label>
+          <button
+            type="button"
+            onClick={reset}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white/15 px-3 py-1.5 text-sm font-semibold hover:bg-white/25"
+          >
+            <RotateCcw size={14} /> Nova conversa
+          </button>
+        </div>
       </div>
-      <div ref={scroll} className="h-[380px] space-y-2 overflow-y-auto bg-[#efeae2] px-3 py-4">
+      <div ref={scroll} className="h-[420px] space-y-1.5 overflow-y-auto bg-[#efeae2] px-3 py-4">
         {lines.length === 0 && (
           <div className="grid h-full place-items-center text-center text-sm text-slate-500">
             <div>
-              <Sparkles size={26} className="mx-auto mb-2 text-violet-400" />
+              <Sparkles size={26} className="mx-auto mb-2 text-emerald-600" />
               Mande uma mensagem como um cliente, por exemplo:
               <div className="mt-3 flex flex-wrap justify-center gap-1.5">
                 {["Oi, quanto custa a scooter?", "Tem em outra cor?", "Parcela em quantas vezes?", "Achei caro"].map((q) => (
@@ -171,7 +245,7 @@ export function AiTester({ draft, disabled }: { draft: Record<string, unknown>; 
                     type="button"
                     disabled={Boolean(disabled)}
                     onClick={() => send(q)}
-                    className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-600 hover:border-violet-400 hover:text-violet-700"
+                    className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-600 hover:border-emerald-500 hover:text-emerald-700"
                   >
                     {q}
                   </button>
@@ -182,30 +256,48 @@ export function AiTester({ draft, disabled }: { draft: Record<string, unknown>; 
         )}
         {lines.map((l, i) =>
           l.from === "info" ? (
-            <p key={i} className="mx-auto w-fit max-w-[90%] rounded-lg bg-amber-50 px-2.5 py-1 text-center text-[11px] font-semibold text-amber-800">
+            <p key={i} className="mx-auto w-fit max-w-[90%] rounded-lg bg-amber-50 px-2.5 py-1 text-center text-[11px] font-semibold text-amber-800 shadow-sm">
               {l.text}
             </p>
           ) : (
-            <div key={i} className={`flex ${l.from === "ai" ? "justify-end" : "justify-start"}`}>
+            <div key={i} className={`flex ${l.from === "lead" ? "justify-start" : "justify-end"}`}>
               <div
-                className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-[14px] shadow-sm ${
-                  l.from === "ai" ? "rounded-br-md bg-violet-600 text-white" : "rounded-bl-md bg-white text-slate-800"
+                className={`max-w-[75%] rounded-lg px-2 pb-1 pt-1.5 text-[14px] text-slate-800 shadow-sm ${
+                  l.from === "lead" ? "rounded-tl-none bg-white" : "rounded-tr-none bg-[#d9fdd3]"
                 }`}
               >
-                {l.text}
+                {l.from === "media" && l.url && l.kind === "image" && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={l.url} alt="" className="mb-1 max-h-64 w-full rounded-md object-cover" />
+                )}
+                {l.from === "media" && l.url && l.kind === "video" && (
+                  <video controls preload="metadata" src={l.url} className="mb-1 max-h-64 w-full rounded-md bg-black" />
+                )}
+                <p className="whitespace-pre-wrap px-1">
+                  <WaText text={l.text} />
+                </p>
+                <p className="mt-0.5 text-right text-[10px] text-slate-400">
+                  {l.at}
+                  {l.from !== "lead" && <span className="ml-1 text-sky-500">✓✓</span>}
+                </p>
               </div>
             </div>
           )
         )}
-        {busy && (
-          <div className="flex justify-end">
-            <span className="rounded-2xl bg-violet-600 px-3 py-2 text-xs font-semibold text-white/85">digitando...</span>
+        {typing && (
+          <div className="flex items-center justify-end gap-2">
+            {realTime && (
+              <button type="button" onClick={() => (skip.current = true)} className="text-[11px] font-semibold text-slate-500 underline hover:text-slate-700">
+                pular espera
+              </button>
+            )}
+            <span className="rounded-lg rounded-tr-none bg-[#d9fdd3] px-3 py-2 text-xs font-semibold italic text-emerald-700 shadow-sm">digitando...</span>
           </div>
         )}
       </div>
       {error && <p className="bg-red-50 px-4 py-2 text-sm text-red-600">{error}</p>}
       <form
-        className="flex gap-2 border-t border-slate-100 p-3"
+        className="flex gap-2 border-t border-slate-100 bg-[#f0f2f5] p-3"
         onSubmit={(e) => {
           e.preventDefault();
           send(text);
@@ -216,14 +308,14 @@ export function AiTester({ draft, disabled }: { draft: Record<string, unknown>; 
           onChange={(e) => setText(e.target.value)}
           disabled={Boolean(disabled) || busy}
           placeholder={disabled || "Escreva como o cliente..."}
-          className="min-w-0 flex-1 rounded-full border border-slate-200 px-4 py-2 text-sm outline-none focus:border-violet-400 disabled:bg-slate-50"
+          className="min-w-0 flex-1 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:border-emerald-500 disabled:bg-slate-50"
         />
-        <button type="submit" disabled={Boolean(disabled) || busy || !text.trim()} className="grid h-9 w-9 place-items-center rounded-full bg-violet-600 text-white disabled:opacity-40">
+        <button type="submit" disabled={Boolean(disabled) || busy || !text.trim()} className="grid h-9 w-9 place-items-center rounded-full bg-[#00a884] text-white disabled:opacity-40">
           <Send size={15} />
         </button>
       </form>
       <div className="flex flex-wrap gap-3 border-t border-slate-100 px-4 py-2 text-[11px] text-slate-400">
-        <span className="inline-flex items-center gap-1"><ImageIcon size={11} /> fotos</span>
+        <span>Fotos e vídeos aparecem como o cliente recebe.</span>
         <span className="inline-flex items-center gap-1"><Zap size={11} /> ações</span>
         <span className="inline-flex items-center gap-1"><CalendarDays size={11} /> agenda</span>
         <span className="inline-flex items-center gap-1"><UserRound size={11} /> vendedor</span>

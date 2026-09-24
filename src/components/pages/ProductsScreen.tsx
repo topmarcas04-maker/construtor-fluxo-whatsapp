@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Search, Package, ImagePlus, X, Pencil, Trash2, Bot, Tag, Check, Eye, EyeOff, Truck, Clock, CreditCard, Star, Zap } from "lucide-react";
+import { Plus, Search, Package, ImagePlus, X, Pencil, Trash2, Bot, Tag, Check, Eye, EyeOff, Truck, Clock, CreditCard, Star, Zap, Film } from "lucide-react";
 import type { AiAction } from "@/lib/actions/common";
 import {
   installmentRows,
@@ -102,6 +102,10 @@ export interface Product {
   installments?: Installment[];
   actionIds?: string[];
   primaryActionId?: string | null;
+  /** Vídeo no bucket (a chave só indica que existe) */
+  videoKey?: string | null;
+  videoSeconds?: number | null;
+  videoBytes?: number | null;
   images: {
     id: string;
     url: string;
@@ -224,7 +228,37 @@ type Form = {
     availability: "" | "READY" | "ORDER";
     leadTimeDays: string;
   }[];
+  /** Vídeo: o atual (se houver), um arquivo novo escolhido ou a remoção */
+  video: { current: { seconds: number | null; bytes: number | null } | null; file: File | null; remove: boolean };
 };
+
+const VIDEO_MAX_MB = 200;
+
+/** Envia o vídeo com progresso; o servidor comprime (pode levar até alguns minutos) */
+function uploadVideo(productId: string, file: File, onStatus: (s: string) => void) {
+  return new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/upload/product-video/${productId}`);
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      const pct = Math.round((e.loaded / e.total) * 100);
+      onStatus(pct < 100 ? `Enviando vídeo ${pct}%...` : "Processando vídeo (comprimindo)...");
+    };
+    xhr.onload = () => {
+      let out: { error?: string } = {};
+      try {
+        out = JSON.parse(xhr.responseText || "{}");
+      } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error(out.error || `Não foi possível enviar o vídeo (erro ${xhr.status}).`));
+    };
+    xhr.onerror = () => reject(new Error("A conexão caiu durante o envio do vídeo. Tente de novo."));
+    xhr.send(file);
+  });
+}
+
+const fmtSeconds = (s: number | null | undefined) => (s == null ? "" : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`);
 
 /** Quantidades sugeridas (aparecem em cinza): se o total foi preenchido e a quantidade não, usa a sugerida */
 const SUGGESTED_N = ["12", "18", "21"];
@@ -248,7 +282,7 @@ function parseMoney(v: string) {
 const toInput = (v: number | null) => (v == null ? "" : String(v).replace(".", ","));
 
 export function ProductsScreen() {
-  const [data, setData] = useState<{ categories: Category[]; products: Product[] } | null>(null);
+  const [data, setData] = useState<{ categories: Category[]; products: Product[]; videoStorage?: boolean } | null>(null);
   const [cat, setCat] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<Product | "new" | null>(null);
@@ -265,6 +299,9 @@ export function ProductsScreen() {
   const [catActions, setCatActions] = useState<{ cat: Category; ids: string[]; primary: string | null; funnelId: string } | null>(null);
   const [funnelList, setFunnelList] = useState<{ id: string; name: string; isDefault: boolean }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLInputElement>(null);
+  const [videoStatus, setVideoStatus] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const r = await fetch("/api/products", { cache: "no-store" });
@@ -318,6 +355,7 @@ export function ProductsScreen() {
       leadTimeDays: "",
       installments: EMPTY_INSTALLMENTS.map((x) => ({ ...x })),
       photos: [],
+      video: { current: null, file: null, remove: false },
     });
     setError(null);
     setEditing("new");
@@ -354,6 +392,7 @@ export function ProductsScreen() {
         availability: i.availability === "READY" || i.availability === "ORDER" ? i.availability : "",
         leadTimeDays: i.leadTimeDays != null ? String(i.leadTimeDays) : "",
       })),
+      video: { current: p.videoKey ? { seconds: p.videoSeconds ?? null, bytes: p.videoBytes ?? null } : null, file: null, remove: false },
     });
     setError(null);
     setEditing(p);
@@ -425,6 +464,20 @@ export function ProductsScreen() {
       clearTimeout(timer);
       const out = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(out.error || `O servidor não conseguiu salvar (erro ${res.status}). Tente de novo.`);
+      // Vídeo: depois que o produto está salvo (produto novo precisa do id)
+      const productId = isNew ? (out.id as string) : (editing as Product).id;
+      try {
+        if (form.video.file && productId) {
+          setVideoStatus("Enviando vídeo...");
+          await uploadVideo(productId, form.video.file, setVideoStatus);
+        } else if (form.video.remove && form.video.current && productId) {
+          await fetch(`/api/upload/product-video/${productId}`, { method: "DELETE" });
+        }
+      } catch (ve) {
+        setNotice(`Produto salvo, mas o vídeo não foi enviado: ${(ve as Error).message}`);
+      } finally {
+        setVideoStatus(null);
+      }
       setEditing(null);
       load();
     } catch (e) {
@@ -513,6 +566,13 @@ export function ProductsScreen() {
           )
         }
       />
+
+      {notice && (
+        <div className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)} className="text-amber-700 hover:text-amber-900"><X size={16} /></button>
+        </div>
+      )}
 
       {catalogAi !== null && (
         <Card className="mb-5 flex flex-wrap items-center justify-between gap-4 border-violet-100 bg-violet-50/50 p-4">
@@ -681,6 +741,11 @@ export function ProductsScreen() {
                   </span>
                   {p.active ? "Ativo" : "Desligado"}
                 </button>
+                {p.videoKey && (
+                  <span className="absolute bottom-3 left-3 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-[11px] font-semibold text-white">
+                    <Film size={11} /> vídeo
+                  </span>
+                )}
                 {p.images.length > 1 && (
                   <span className="absolute bottom-3 right-3 rounded-full bg-black/60 px-2 py-0.5 text-[11px] font-semibold text-white">{p.images.length} fotos</span>
                 )}
@@ -786,7 +851,7 @@ export function ProductsScreen() {
           <>
             {error && <p className="mr-auto max-w-md self-center text-sm font-semibold text-red-600">{error}</p>}
             <Button variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button>
-            <Button onClick={save} disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>
+            <Button onClick={save} disabled={saving}>{videoStatus || (saving ? "Salvando..." : "Salvar")}</Button>
           </>
         }
       >
@@ -874,6 +939,79 @@ export function ProductsScreen() {
                 )}
                 <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
               </div>
+            </div>
+
+            <div>
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">
+                <Film size={15} /> Vídeo (opcional)
+              </p>
+              <p className="mb-2 text-xs text-slate-500">
+                Um vídeo curto mostrando o produto (até 90 segundos). O sistema diminui o arquivo automaticamente. A IA pergunta se o cliente
+                quer ver e envia quando ele aceitar; o vendedor também pode enviar pela conversa.
+              </p>
+              {data?.videoStorage === false ? (
+                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                  O armazenamento de vídeos ainda não foi ligado no servidor. Peça ao administrador para criar o bucket no Railway.
+                </p>
+              ) : (
+                <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 p-3">
+                  {form.video.file ? (
+                    <>
+                      <span className="grid h-10 w-10 place-items-center rounded-lg bg-violet-50 text-violet-600"><Film size={18} /></span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-slate-800">{form.video.file.name}</p>
+                        <p className="text-xs text-slate-500">{(form.video.file.size / 1048576).toFixed(1)} MB · será enviado ao salvar</p>
+                      </div>
+                      <button onClick={() => setForm({ ...form, video: { ...form.video, file: null } })} className="text-xs font-semibold text-slate-500 hover:text-red-600">Cancelar</button>
+                    </>
+                  ) : form.video.current && !form.video.remove && editing !== "new" ? (
+                    <>
+                      <video
+                        controls
+                        preload="none"
+                        src={`/api/products/${(editing as Product).id}/video`}
+                        className="h-28 max-w-[200px] rounded-lg bg-black"
+                      />
+                      <div className="min-w-0 flex-1 text-xs text-slate-500">
+                        <p className="text-sm font-semibold text-slate-800">Vídeo cadastrado</p>
+                        {fmtSeconds(form.video.current.seconds)}
+                        {form.video.current.bytes ? ` · ${(form.video.current.bytes / 1048576).toFixed(1)} MB` : ""}
+                      </div>
+                      <button onClick={() => videoRef.current?.click()} className="text-xs font-semibold text-[var(--accent)]">Trocar</button>
+                      <button onClick={() => setForm({ ...form, video: { ...form.video, remove: true } })} className="text-xs font-semibold text-red-600">Remover</button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => videoRef.current?.click()}
+                        className="inline-flex items-center gap-2 rounded-lg border-2 border-dashed border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-500 hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                      >
+                        <Film size={17} /> Adicionar vídeo
+                      </button>
+                      {form.video.remove && (
+                        <span className="text-xs text-slate-500">
+                          O vídeo será removido ao salvar.{" "}
+                          <button onClick={() => setForm({ ...form, video: { ...form.video, remove: false } })} className="font-semibold text-[var(--accent)]">Desfazer</button>
+                        </span>
+                      )}
+                    </>
+                  )}
+                  <input
+                    ref={videoRef}
+                    type="file"
+                    accept="video/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      e.target.value = "";
+                      if (!f) return;
+                      if (f.size > VIDEO_MAX_MB * 1048576) return setError(`Vídeo muito grande (máximo ${VIDEO_MAX_MB} MB).`);
+                      setError(null);
+                      setForm({ ...form, video: { ...form.video, file: f, remove: false } });
+                    }}
+                  />
+                </div>
+              )}
             </div>
 
             <div>
@@ -1185,6 +1323,12 @@ export function ProductDetail({ p, category, actionNames }: { p: Product; catego
                 <img src={im.url} alt="" className="h-full w-full object-cover" />
               </button>
             ))}
+          </div>
+        )}
+        {p.videoKey && (
+          <div className="mt-3">
+            <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-600"><Film size={13} /> Vídeo</p>
+            <video controls preload="none" src={`/api/products/${p.id}/video`} className="max-h-56 w-full rounded-xl bg-black" />
           </div>
         )}
       </div>
