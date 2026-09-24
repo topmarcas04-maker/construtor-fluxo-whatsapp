@@ -74,10 +74,10 @@ export function isQualified(q: QualifySettings, d: { name?: string | null; city?
 }
 
 /** Item do catálogo sem preço, parcelas nem especificações (enquanto o lead não foi qualificado) */
-export function maskCatalogItem<T extends { price: string; description: string | null; installments?: string[]; details?: string[]; hasVideo?: boolean }>(
+export function maskCatalogItem<T extends { price: string; description: string | null; installments?: string[]; details?: string[]; hasVideo?: boolean; hasPhoto: boolean; photoLabels?: string[] }>(
   item: T
 ): T {
-  return { ...item, price: "(liberado depois que souber os dados do cliente)", description: null, installments: [], details: [], hasVideo: false };
+  return { ...item, price: "(liberado depois que souber os dados do cliente)", description: null, installments: [], details: [], hasVideo: false, hasPhoto: false, photoLabels: [] };
 }
 
 /** Bloco do prompt da IA */
@@ -106,16 +106,18 @@ export function qualifyBlock(
     const need = essentials.map((f) => f.ask).join(" e ");
     lines.push(
       `- IMPORTANTE: enquanto não souber ${need}, NÃO passe preço, parcelas, promoções, condições NEM a lista de especificações do produto. Isso vale principalmente quando o cliente chega pelo anúncio com a mensagem pronta ("quero mais informações sobre...") ou pergunta o preço logo de cara.`,
-      `- Na primeira resposta: cumprimente, mostre que entendeu qual produto ele quer (uma frase curta, sem detalhes técnicos) e peça ${need}, dizendo que é para passar as informações e a melhor condição pra ele. Ex.: "Oi! Que bom que gostou da FX2 😊 Já te passo tudo! Qual seu nome e de qual cidade você fala?". Pode mandar a foto do produto junto.`,
+      `- Na primeira resposta: cumprimente, mostre que entendeu qual produto ele quer (uma frase curta, sem detalhes técnicos) e peça ${need}, dizendo que é para passar as informações e a melhor condição pra ele. Ex.: "Oi! Que bom que gostou da FX2 😊 Já te passo tudo! Qual seu nome e de qual cidade você fala?". NÃO mande foto nem vídeo ainda.`,
       `- Se o cliente pedir as informações ou o preço de novo sem responder, não trave a conversa: passe o que ele pediu e continue pedindo o que falta.`,
-      `- Assim que souber, passe as informações e as condições aos poucos; as outras perguntas podem vir depois, junto com a conversa.`
+      `- Depois que souber: responda SOMENTE o que o cliente pediu, de forma curta (ex.: pediu "mais informações" → 2 ou 3 destaques principais; pediu preço → o preço e as parcelas). Não despeje ficha técnica, preço, parcelas e fotos de uma vez.`,
+      `- Fotos e vídeo: envie só quando o cliente pedir para ver ou quando ele escolher um modelo/cor. Pode oferecer ("quer que eu te mande a foto?").`,
+      `- As outras perguntas podem vir depois, junto com a conversa.`
     );
   } else {
     lines.push(`- Responda o que o cliente perguntou (inclusive o preço) e, na mesma mensagem, peça um dado que falta.`);
   }
   if (pending)
     lines.push(
-      `- AGORA: preço, parcelas e especificações estão ocultos no catálogo até você saber ${qualifyEssentials(q)
+      `- AGORA: preço, parcelas, especificações e fotos estão ocultos no catálogo até você saber ${qualifyEssentials(q)
         .map((k) => QUALIFY_FIELDS.find((f) => f.key === k)!.ask)
         .join(" e ")}. Não diga que não sabe o preço: diga que já vai passar tudo e peça esses dados. Preencha "nome" somente com o nome que o cliente escreveu.`
     );

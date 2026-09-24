@@ -126,7 +126,7 @@ export async function POST(req: NextRequest) {
             .orderBy(asc(productImages.sort)),
         ])
       : [[], []];
-    for (const ref of d.productCodes) {
+    for (const ref of unlocked ? d.productCodes : []) {
       const product = prodRows.find((p) => p.id === catalog.find((c) => c.ai.code === ref.code)?.id);
       if (!product) continue;
       const img = pickProductImage(imgRows.filter((i) => i.productId === product.id), { label: ref.label });

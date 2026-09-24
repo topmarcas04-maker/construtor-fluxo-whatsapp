@@ -1339,7 +1339,8 @@ async function runAi(accountId: string, conversationId: string, force = false) {
   }
 
   // Fotos dos produtos que a IA escolheu mostrar
-  for (const ref of decision.productCodes) {
+  // Antes do nome e da cidade (qualificação) não vai foto
+  for (const ref of unlocked ? decision.productCodes : []) {
     const item = catalog.find((c) => c.ai.code === ref.code);
     if (!item) continue;
     await pause(900);
