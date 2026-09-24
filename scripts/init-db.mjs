@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   last_message_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS conversations_phone_jid_idx ON conversations (phone_jid);
+-- (índice antigo por telefone removido: o mesmo cliente pode falar com contas diferentes)
 
 CREATE TABLE IF NOT EXISTS messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
