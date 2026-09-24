@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Search, Package, ImagePlus, X, Pencil, Trash2, Bot, Tag, Check, Eye, EyeOff, Truck, Clock, CreditCard, Star, Zap, Film } from "lucide-react";
+import { Plus, Search, Package, ImagePlus, X, Pencil, Trash2, Bot, Tag, Check, Eye, EyeOff, Truck, Clock, CreditCard, Star, Zap, Film, Download, FileSpreadsheet } from "lucide-react";
 import type { AiAction } from "@/lib/actions/common";
 import {
   installmentRows,
@@ -14,6 +14,7 @@ import {
   KIND_LABEL,
   type Installment,
 } from "@/lib/products/format";
+import { ProductImport } from "@/components/products/ProductImport";
 import { Page, PageHeader, Card, Button, Field, Input, Select, Textarea, Toggle, Badge, Modal, EmptyState, ErrorNote } from "@/components/ui";
 
 export interface Category {
@@ -302,6 +303,7 @@ export function ProductsScreen() {
   const videoRef = useRef<HTMLInputElement>(null);
   const [videoStatus, setVideoStatus] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
     const r = await fetch("/api/products", { cache: "no-store" });
@@ -558,14 +560,32 @@ export function ProductsScreen() {
         description="Monte o catálogo com fotos, preço e descrição. A IA consulta estes produtos para responder e pode enviar as fotos no WhatsApp."
         actions={
           canEdit ? (
-            <Button onClick={openNew}>
-              <Plus size={16} /> Novo produto
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href="/api/products/export"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                title="Baixar o catálogo em planilha (Excel)"
+              >
+                <Download size={15} /> Baixar planilha
+              </a>
+              <button
+                onClick={() => setImporting(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                title="Cadastrar ou atualizar vários produtos de uma vez"
+              >
+                <FileSpreadsheet size={15} /> Importar planilha
+              </button>
+              <Button onClick={openNew}>
+                <Plus size={16} /> Novo produto
+              </Button>
+            </div>
           ) : (
             <Badge>Somente visualização</Badge>
           )
         }
       />
+
+      <ProductImport open={importing} onClose={() => setImporting(false)} onDone={load} />
 
       {notice && (
         <div className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
