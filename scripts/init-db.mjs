@@ -568,6 +568,18 @@ ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS seller_hours jsonb;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS after_hours_message text;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS qualify jsonb;
 
+-- API pública (chaves por conta)
+CREATE TABLE IF NOT EXISTS api_keys (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name varchar(80) NOT NULL,
+  prefix varchar(16) NOT NULL,
+  key_hash varchar(64) NOT NULL UNIQUE,
+  last_used_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS api_keys_account_idx ON api_keys (account_id);
+
 -- Distribuição: rodízio e turno dos vendedores
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS rotation_enabled boolean NOT NULL DEFAULT false;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS rotation_batch integer NOT NULL DEFAULT 1;

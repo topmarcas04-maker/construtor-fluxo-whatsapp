@@ -308,6 +308,7 @@ async function startSession(accountId: string) {
         "120363000000000001@g.us": { id: "120363000000000001@g.us", subject: "Equipe Resplen", participants: [1, 2, 3] },
         "120363000000000002@g.us": { id: "120363000000000002@g.us", subject: "Clientes VIP", participants: [1, 2, 3, 4, 5] },
       }),
+      onWhatsApp: async (phone: string) => [{ exists: !phone.endsWith("0000"), jid: `${phone}@s.whatsapp.net` }],
       groupMetadata: async (jid: string) => ({ id: jid, subject: jid.endsWith("1@g.us") ? "Equipe Resplen" : "Clientes VIP" }),
       end: () => {},
       logout: async () => {},
@@ -2316,6 +2317,20 @@ function startApiServer() {
         const acc = await validAccount(body.accountId);
         if (!acc) return json(res, 400, { error: "Conta inválida" });
 
+        if (url.pathname === "/resolve-number") {
+          // Confere se o número tem WhatsApp e devolve o endereço certo (resolve o 9º dígito)
+          const digits = String(body.phone || "").replace(/\D/g, "");
+          if (digits.length < 10) return json(res, 400, { error: "Número inválido" });
+          const sock = sessions.get(acc.id)?.sock;
+          if (!sock || sessions.get(acc.id)?.state !== "connected") return json(res, 502, { error: "WhatsApp desta conta não está conectado" });
+          try {
+            const found = await sock.onWhatsApp(digits);
+            const hit = Array.isArray(found) ? found.find((f: any) => f?.exists) : null;
+            return json(res, 200, { exists: Boolean(hit), jid: hit?.jid || null });
+          } catch (e) {
+            return json(res, 200, { exists: null, jid: null, error: (e as Error)?.message });
+          }
+        }
         if (url.pathname === "/groups") {
           const r = await listGroups(acc.id);
           return json(res, "error" in r ? 502 : 200, r);
@@ -2345,7 +2360,7 @@ function startApiServer() {
           if (!body.phoneJid || !media?.base64 || !["image", "audio", "document"].includes(media.kind)) {
             return json(res, 400, { error: "Mídia inválida" });
           }
-          const r = await sendMedia(acc.id, body.phoneJid, media, "HUMAN", body.authorName || null);
+          const r = await sendMedia(acc.id, body.phoneJid, media, body.sender === "AUTO" ? "AUTO" : "HUMAN", body.authorName || null);
           return json(res, "error" in r ? 502 : 200, r);
         }
         if (url.pathname === "/send-product") {

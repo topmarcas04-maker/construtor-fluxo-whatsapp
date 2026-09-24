@@ -417,6 +417,19 @@ export const distributionRules = pgTable(
   (table) => [index("distribution_rules_priority_idx").on(table.priority)]
 );
 
+/** Chaves de API para outros sistemas (guardamos só o hash) */
+export const apiKeys = pgTable("api_keys", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  accountId: uuid("account_id")
+    .notNull()
+    .references(() => accounts.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 80 }).notNull(),
+  prefix: varchar("prefix", { length: 16 }).notNull(),
+  keyHash: varchar("key_hash", { length: 64 }).notNull().unique(),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const quickReplies = pgTable("quick_replies", {
   id: uuid("id").primaryKey().defaultRandom(),
   accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),

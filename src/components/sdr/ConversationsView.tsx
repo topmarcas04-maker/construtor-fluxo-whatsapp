@@ -549,7 +549,7 @@ export function ConversationsView({
                             </>
                           ) : msg.sender === "AUTO" ? (
                             <>
-                              <Bell size={11} /> Lembrete automático
+                              <Bell size={11} /> {msg.authorName || "Lembrete automático"}
                             </>
                           ) : msg.sender === "BOT" ? (
                             <>

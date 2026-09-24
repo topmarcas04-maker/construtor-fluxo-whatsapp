@@ -78,12 +78,14 @@ export interface OutgoingMedia {
   mimetype: string;
   fileName?: string | null;
   caption?: string | null;
+  /** Quem envia (padrão: equipe). AUTO = automático/integração */
+  sender?: "HUMAN" | "AUTO";
 }
 
 export function sendWhatsappMedia(accountId: string, phoneJid: string, media: OutgoingMedia, authorName: string | null) {
   return call<{ success: boolean }>(
     `/send-media`,
-    { method: "POST", body: JSON.stringify({ accountId, phoneJid, media, authorName }) },
+    { method: "POST", body: JSON.stringify({ accountId, phoneJid, media, authorName, sender: media.sender }) },
     60000
   );
 }
@@ -115,5 +117,14 @@ export function listWhatsappGroups(accountId: string) {
     `/groups`,
     { method: "POST", body: JSON.stringify({ accountId }) },
     20000
+  );
+}
+
+/** Confere se o número tem WhatsApp e devolve o endereço (jid) certo */
+export function resolveWhatsappNumber(accountId: string, phone: string) {
+  return call<{ exists: boolean | null; jid: string | null }>(
+    `/resolve-number`,
+    { method: "POST", body: JSON.stringify({ accountId, phone }) },
+    15000
   );
 }

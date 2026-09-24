@@ -10,6 +10,8 @@ const PUBLIC_PREFIXES = [
   "/api/meta/webhook",
   // Arquivos que a Meta baixa para enviar ao cliente — protegidos por link assinado
   "/api/public/file/",
+  // API para outros sistemas — protegida pela chave de API (rsk_...)
+  "/api/v1/",
 ];
 
 export function proxy(request: NextRequest) {

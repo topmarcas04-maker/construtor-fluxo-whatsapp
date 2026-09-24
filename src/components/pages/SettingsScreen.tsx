@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Bot, Trash2, Plus, Check, Pencil, KeyRound, CalendarDays, AudioLines, Play, Loader2, Repeat, Clock } from "lucide-react";
 import { ActionsTab } from "@/components/settings/ActionsTab";
 import { FollowupTab } from "@/components/settings/FollowupTab";
+import { ApiTab } from "@/components/settings/ApiTab";
 import { StyleCard, AiTester } from "@/components/settings/AiStyle";
 import { SellerHoursCard, ShiftEditor } from "@/components/settings/SellerHours";
 import { QualifyCard } from "@/components/settings/QualifyCard";
@@ -29,7 +30,7 @@ import {
   ErrorNote,
 } from "@/components/ui";
 
-type TabKey = "ia" | "acoes" | "recontato" | "whatsapp" | "vendedores" | "distribuicao" | "etiquetas" | "respostas";
+type TabKey = "ia" | "acoes" | "recontato" | "whatsapp" | "vendedores" | "distribuicao" | "etiquetas" | "respostas" | "api";
 
 interface Rule {
   id: string;
@@ -1201,6 +1202,7 @@ export function SettingsScreen() {
             { key: "distribuicao", label: "Distribuição" },
             { key: "etiquetas", label: "Etiquetas" },
             { key: "respostas", label: "Respostas rápidas" },
+            { key: "api", label: "API" },
           ]}
         />
         {tab === "ia" && <AiTab />}
@@ -1211,6 +1213,7 @@ export function SettingsScreen() {
         {tab === "distribuicao" && <RulesTab />}
         {tab === "etiquetas" && <TagsTab />}
         {tab === "respostas" && <QuickRepliesTab />}
+        {tab === "api" && <ApiTab />}
       </Card>
     </Page>
   );
