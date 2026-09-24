@@ -17,7 +17,7 @@ import { columnOfLead, funnelOfLead, type FunnelWithColumns } from "@/lib/funnel
 import { MessageMedia, mediaCaption } from "./MessageMedia";
 
 /** Mostra o *negrito* do WhatsApp como negrito no painel */
-function waFormat(text: string | null | undefined) {
+export function waFormat(text: string | null | undefined) {
   if (!text) return text;
   return text.split(/(\*[^*\n]+\*)/g).map((part, i) =>
     /^\*[^*\n]+\*$/.test(part) ? <b key={i}>{part.slice(1, -1)}</b> : part

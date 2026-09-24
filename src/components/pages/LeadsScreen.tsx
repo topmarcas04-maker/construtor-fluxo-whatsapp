@@ -1,15 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MessageSquare, KanbanSquare, Search } from "lucide-react";
+import { MessageSquare, KanbanSquare, Search, Users } from "lucide-react";
 import type { Lead, QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import { leadDisplayName } from "@/lib/types/sdr";
 import { ExpandButton } from "@/components/layout/Fullscreen";
 import { ConversationsView } from "@/components/sdr/ConversationsView";
 import { FunnelView } from "@/components/sdr/FunnelView";
+import { GroupsView } from "@/components/sdr/GroupsView";
 import type { FunnelColumn, FunnelWithColumns } from "@/lib/funnel/common";
 
-type ViewMode = "conversas" | "funil";
+type ViewMode = "conversas" | "grupos" | "funil";
 
 export function LeadsScreen() {
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -89,7 +90,7 @@ export function LeadsScreen() {
   return (
     <div className="flex h-full flex-col">
       <div
-        className={`${mobileChat && view === "conversas" ? "hidden md:flex" : "flex"} flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2.5 md:gap-3 md:px-6 md:py-3`}
+        className={`${mobileChat && view !== "funil" ? "hidden md:flex" : "flex"} flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2.5 md:gap-3 md:px-6 md:py-3`}
       >
         <h1 className="mr-2 text-xl font-semibold text-slate-900">Leads</h1>
 
@@ -97,12 +98,16 @@ export function LeadsScreen() {
           {(
             [
               { key: "conversas", label: "Conversas", icon: MessageSquare },
+              { key: "grupos", label: "Grupos", icon: Users },
               { key: "funil", label: "Funil", icon: KanbanSquare },
             ] as const
           ).map(({ key, label, icon: Icon }) => (
             <button
               key={key}
-              onClick={() => setView(key)}
+              onClick={() => {
+                setView(key);
+                setMobileChat(false);
+              }}
               className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition ${
                 view === key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"
               }`}
@@ -158,6 +163,8 @@ export function LeadsScreen() {
             funnels={funnels}
             onMobileChat={setMobileChat}
           />
+        ) : view === "grupos" ? (
+          <GroupsView quickReplies={quickReplies} onMobileChat={setMobileChat} />
         ) : (
           <FunnelView
             leads={filtered}

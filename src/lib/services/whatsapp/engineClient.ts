@@ -108,3 +108,12 @@ export function sendWhatsappProduct(
 export function forwardMetaEvent(payload: unknown) {
   return call<{ ok: boolean }>(`/meta-event`, { method: "POST", body: JSON.stringify(payload) }, 25000);
 }
+
+/** Grupos do WhatsApp em que o número conectado participa */
+export function listWhatsappGroups(accountId: string) {
+  return call<{ groups: { jid: string; name: string; size: number | null }[] }>(
+    `/groups`,
+    { method: "POST", body: JSON.stringify({ accountId }) },
+    20000
+  );
+}

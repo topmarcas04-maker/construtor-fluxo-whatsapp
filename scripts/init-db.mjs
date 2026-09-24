@@ -572,6 +572,10 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualified_at timestamptz;
 -- Conversas não lidas
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_read_at timestamptz;
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS read_in_count integer NOT NULL DEFAULT 0;
+
+-- Grupos do WhatsApp no painel
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS is_group boolean NOT NULL DEFAULT false;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS group_enabled boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS messages_conv_dir_idx ON messages (conversation_id, direction);
 
 -- Recontato automático

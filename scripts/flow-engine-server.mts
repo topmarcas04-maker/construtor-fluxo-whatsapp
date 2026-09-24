@@ -303,6 +303,11 @@ async function startSession(accountId: string) {
       sendPresenceUpdate: async (kind: string, jid: string) => {
         console.log(`[SELFTEST ${accountId.slice(0, 8)}] presença ${kind} -> ${jid}`);
       },
+      groupFetchAllParticipating: async () => ({
+        "120363000000000001@g.us": { id: "120363000000000001@g.us", subject: "Equipe Resplen", participants: [1, 2, 3] },
+        "120363000000000002@g.us": { id: "120363000000000002@g.us", subject: "Clientes VIP", participants: [1, 2, 3, 4, 5] },
+      }),
+      groupMetadata: async (jid: string) => ({ id: jid, subject: jid.endsWith("1@g.us") ? "Equipe Resplen" : "Clientes VIP" }),
       end: () => {},
       logout: async () => {},
     } as unknown as Sock;
@@ -537,9 +542,79 @@ async function isSellerPhone(accountId: string, phone: string) {
   return all.some((s) => s.phone && s.phone.replace(/\D/g, "").slice(-10) === tail);
 }
 
+// ----------------------------------------------------------------------------
+// GRUPOS: só os grupos ligados no painel; sem lead, sem IA, sem chatbot e sem recontato
+// ----------------------------------------------------------------------------
+
+const groupNames = new Map<string, { name: string; at: number }>();
+async function groupSubject(accountId: string, jid: string) {
+  const hit = groupNames.get(jid);
+  if (hit && Date.now() - hit.at < 30 * 60e3) return hit.name;
+  try {
+    const meta = await sessions.get(accountId)?.sock?.groupMetadata(jid);
+    if (meta?.subject) {
+      groupNames.set(jid, { name: meta.subject, at: Date.now() });
+      return meta.subject as string;
+    }
+  } catch {}
+  return hit?.name || null;
+}
+
+async function handleGroupMessage(accountId: string, msg: any, fromMe: boolean) {
+  try {
+    const jid: string = msg.key.remoteJid;
+    if (!msg.key.id || (fromMe && recentSentIds.includes(msg.key.id))) return;
+    const conversation = await db.query.conversations.findFirst({
+      where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, jid)),
+    });
+    // Grupo que não foi ligado no painel: ignora
+    if (!conversation?.isGroup || !conversation.groupEnabled) return;
+    const extracted = extractText(msg.message);
+    if (!extracted) return;
+    const dup = await db.query.messages.findFirst({ where: eq(messages.whatsappMessageId, msg.key.id) });
+    if (dup) return;
+    const media = extracted.type !== "text" ? await downloadMedia(accountId, msg) : null;
+    const participant = String(msg.key.participant || msg.participant || "").split("@")[0].split(":")[0];
+    await db.insert(messages).values({
+      conversationId: conversation.id,
+      direction: fromMe ? "OUT" : "IN",
+      body: extracted.text,
+      messageType: extracted.type,
+      whatsappMessageId: msg.key.id,
+      sentAt: msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000) : new Date(),
+      sender: fromMe ? "HUMAN" : "LEAD",
+      authorName: fromMe ? "Celular da empresa" : msg.pushName || (participant ? `+${participant}` : null),
+      mediaDataUrl: media && "dataUrl" in media ? media.dataUrl : null,
+      mediaMimeType: media && "mime" in media ? media.mime : null,
+      mediaFileName: media && "fileName" in media ? media.fileName : null,
+    });
+    const set: Record<string, unknown> = { lastMessageAt: new Date() };
+    const name = await groupSubject(accountId, jid);
+    if (name && name !== conversation.leadName) set.leadName = name;
+    await db.update(conversations).set(set).where(eq(conversations.id, conversation.id));
+  } catch (error) {
+    console.error("[Error] handleGroupMessage:", error);
+  }
+}
+
+/** Grupos em que o número conectado participa */
+async function listGroups(accountId: string) {
+  const sock = sessions.get(accountId)?.sock;
+  if (!sock || sessions.get(accountId)?.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
+  try {
+    const all = await sock.groupFetchAllParticipating();
+    const list = Object.values(all || {}).map((g: any) => ({ jid: g.id as string, name: (g.subject as string) || "Grupo", size: Array.isArray(g.participants) ? g.participants.length : null }));
+    for (const g of list) groupNames.set(g.jid, { name: g.name, at: Date.now() });
+    return { groups: list.sort((a, b) => a.name.localeCompare(b.name)) };
+  } catch (e) {
+    return { error: (e as Error)?.message || String(e) };
+  }
+}
+
 async function handleIncomingMessage(accountId: string, msg: any) {
   try {
     const phoneJid: string = msg.key.remoteJid;
+    if (phoneJid?.endsWith("@g.us")) return handleGroupMessage(accountId, msg, false);
     if (isIgnoredJid(phoneJid)) return;
     const extracted = extractText(msg.message);
     if (!extracted) return;
@@ -643,6 +718,7 @@ function rememberSent(id: string) {
 async function handleOwnPhoneMessage(accountId: string, msg: any) {
   try {
     const phoneJid: string = msg.key.remoteJid;
+    if (phoneJid?.endsWith("@g.us")) return handleGroupMessage(accountId, msg, true);
     if (isIgnoredJid(phoneJid) || !msg.key.id || recentSentIds.includes(msg.key.id)) return;
     const extracted = extractText(msg.message);
     if (!extracted) return;
@@ -2225,6 +2301,10 @@ function startApiServer() {
         const acc = await validAccount(body.accountId);
         if (!acc) return json(res, 400, { error: "Conta inválida" });
 
+        if (url.pathname === "/groups") {
+          const r = await listGroups(acc.id);
+          return json(res, "error" in r ? 502 : 200, r);
+        }
         if (url.pathname === "/connect") {
           const s = getSession(acc.id);
           if (s.state === "idle") {
