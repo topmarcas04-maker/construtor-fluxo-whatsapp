@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X, Workflow, CalendarClock, KanbanSquare } from "lucide-react";
+import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X, Workflow, CalendarClock, KanbanSquare, PanelRightClose, PanelRightOpen } from "lucide-react";
 import type { Lead, Message, QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import {
   TAG_DOT_CLASSES,
@@ -132,6 +132,20 @@ export function ConversationsView({
   // Celular/tablet: uma tela por vez (lista → conversa) e a ficha abre por cima
   const [mobilePane, setMobilePane] = useState<"list" | "chat">("list");
   const [showFicha, setShowFicha] = useState(false);
+  /** Computador: ficha fixa à direita (pode recolher para a conversa ficar maior) */
+  const [fichaDocked, setFichaDocked] = useState(true);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("sdr_ficha_docked") === "0") setFichaDocked(false);
+    } catch {}
+  }, []);
+  const toggleDocked = () =>
+    setFichaDocked((v) => {
+      try {
+        localStorage.setItem("sdr_ficha_docked", v ? "0" : "1");
+      } catch {}
+      return !v;
+    });
   useEffect(() => {
     onMobileChat?.(mobilePane === "chat");
   }, [mobilePane, onMobileChat]);
@@ -243,7 +257,11 @@ export function ConversationsView({
   ];
 
   return (
-    <div className="grid h-full grid-cols-1 md:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[340px_minmax(0,1fr)_330px]">
+    <div
+      className={`grid h-full grid-cols-1 md:grid-cols-[340px_minmax(0,1fr)] ${
+        fichaDocked && selectedLead ? "xl:grid-cols-[340px_minmax(0,1fr)_330px]" : ""
+      }`}
+    >
       {/* Lista de conversas */}
       <div className={`min-h-0 flex-col border-r border-slate-200 bg-white ${mobilePane === "list" ? "flex" : "hidden md:flex"}`}>
         <div className="flex gap-1.5 overflow-x-auto border-b border-slate-100 px-3 py-2.5">
@@ -410,6 +428,15 @@ export function ConversationsView({
               >
                 <IdCard size={16} /> Ficha
               </button>
+              <button
+                onClick={toggleDocked}
+                title={fichaDocked ? "Recolher a ficha para a conversa ficar maior" : "Mostrar a ficha do lead ao lado"}
+                className={`hidden items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium xl:inline-flex ${
+                  fichaDocked ? "border-slate-200 bg-white text-slate-700 hover:bg-slate-50" : "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
+                }`}
+              >
+                {fichaDocked ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />} {fichaDocked ? "Recolher ficha" : "Ficha"}
+              </button>
               {columnSelect("max-w-[200px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm")}
               {selectedLead.aiPaused ? (
                 <button
@@ -553,7 +580,7 @@ export function ConversationsView({
       )}
 
       {/* Ficha do lead */}
-      {selectedLead && (
+      {selectedLead && fichaDocked && (
         <div className="hidden min-h-0 overflow-y-auto border-l border-slate-200 bg-white xl:block">
           <LeadPanel lead={selectedLead} tags={tags} sellers={sellers} onPatch={patchLead} canEdit={canEdit} />
         </div>
