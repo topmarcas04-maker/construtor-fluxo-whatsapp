@@ -48,7 +48,7 @@ import {
   followupSettings,
 } from "../src/db/schema";
 import { eq, and, desc, gte, lt, isNull, sql, inArray } from "drizzle-orm";
-import { runSdrAgent, pickSeller, type AgentDecision } from "../src/lib/ai/sdrAgent";
+import { runSdrAgent, type AgentDecision } from "../src/lib/ai/sdrAgent";
 import { resolveAiKey, resolveVoiceKey } from "../src/lib/tenancy/aiKey";
 import { transcribeAudio, synthesizeSpeech } from "../src/lib/voice/providers";
 import {
@@ -96,6 +96,7 @@ import { generateFollowup } from "../src/lib/ai/followup";
 import { replyDelayMs, typingMs } from "../src/lib/ai/style";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "../src/lib/ai/hours";
 import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem } from "../src/lib/ai/qualify";
+import { sellerPool, chooseSeller, type RotationState } from "../src/lib/ai/distribution";
 import { loadCatalogFor } from "../src/lib/ai/catalog";
 import { storageReady, getObject, signedUrl } from "../src/lib/storage/s3";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
@@ -1695,6 +1696,28 @@ async function saveAiAppointment(
   });
 }
 
+/** Escolhe o vendedor: regras + turno de cada um + rodízio entre os empatados (guarda a vez) */
+async function assignSeller(
+  accountId: string,
+  rules: { region: string | null; saleType: "ANY" | "WHOLESALE" | "RETAIL"; priority: number; active: boolean; sellerId: string; seller: { active: boolean } | null }[],
+  city: string | null,
+  saleType: "ANY" | "WHOLESALE" | "RETAIL"
+) {
+  const pool = sellerPool(rules.map((r) => ({ ...r, sellerActive: r.seller?.active !== false })), city, saleType);
+  if (pool.length <= 1) return pool[0] || null;
+  const [st, sel] = await Promise.all([
+    db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) }),
+    db.select({ id: sellers.id, shift: sellers.shift }).from(sellers).where(and(eq(sellers.accountId, accountId), inArray(sellers.id, pool))),
+  ]);
+  const r = chooseSeller(pool, {
+    shifts: Object.fromEntries(sel.map((x) => [x.id, x.shift])),
+    rotation: { enabled: Boolean(st?.rotationEnabled), batch: st?.rotationBatch || 1 },
+    state: (st?.rotationState || {}) as RotationState,
+  });
+  if (st && st.rotationEnabled) await db.update(aiSettings).set({ rotationState: r.state }).where(eq(aiSettings.id, accountId));
+  return r.sellerId;
+}
+
 async function handoffToSeller(
   accountId: string,
   leadId: string,
@@ -1714,11 +1737,7 @@ async function handoffToSeller(
   const current = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
   const city = d.city || current?.city || null;
   const saleType = d.saleType !== "ANY" ? d.saleType : current?.saleType || "ANY";
-  const sellerId = pickSeller(
-    rules.map((r) => ({ ...r, sellerActive: r.seller?.active !== false })),
-    city,
-    saleType
-  );
+  const sellerId = await assignSeller(accountId, rules, city, saleType);
   const seller = sellerId ? await db.query.sellers.findFirst({ where: eq(sellers.id, sellerId) }) : null;
 
   await db
@@ -1907,11 +1926,7 @@ async function applyBotOption(
         where: eq(schema.distributionRules.accountId, accountId),
         with: { seller: true },
       });
-      sellerId = pickSeller(
-        rules.map((r) => ({ ...r, sellerActive: r.seller?.active !== false })),
-        lead.city,
-        lead.saleType
-      );
+      sellerId = await assignSeller(accountId, rules, lead.city, lead.saleType);
     }
     const seller = sellerId ? await db.query.sellers.findFirst({ where: and(eq(sellers.id, sellerId), eq(sellers.accountId, accountId)) }) : null;
     if (seller) {

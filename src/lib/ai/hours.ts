@@ -107,3 +107,22 @@ export function sellerAvailability(h: SellerHours, now = new Date()) {
   }
   return { open: false, hoursText: hoursText(h), nextOpen: nextOpen || "no próximo dia útil" };
 }
+
+/** Quando o horário abre de novo (agora, se já está aberto). null = nunca abre */
+export function nextOpenAt(h: SellerHours, now = new Date()): Date | null {
+  if (!h.enabled) return now;
+  const { weekday, minute } = spNow(now);
+  for (let k = 0; k < 8; k++) {
+    const d = h.days[(weekday + k) % 7];
+    if (!d.open) continue;
+    const start = minutes(d.start);
+    const end = minutes(d.end);
+    if (k === 0) {
+      if (minute >= start && minute < end) return now;
+      if (minute >= start) continue;
+    }
+    const deltaMin = k * 24 * 60 + start - minute;
+    return new Date(now.getTime() + deltaMin * 60e3);
+  }
+  return null;
+}

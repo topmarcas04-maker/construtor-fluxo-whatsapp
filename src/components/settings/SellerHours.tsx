@@ -80,3 +80,33 @@ export function SellerHoursCard({
     </div>
   );
 }
+
+/** Turno de um vendedor: dias e horários (compacto) */
+export function ShiftEditor({ value, onChange }: { value: SellerHours; onChange: (v: SellerHours) => void }) {
+  const setDay = (i: number, patch: Partial<SellerHours["days"][number]>) =>
+    onChange({ ...value, days: value.days.map((d, k) => (k === i ? { ...d, ...patch } : d)) });
+  return (
+    <div className="grid gap-1.5 md:grid-cols-2 2xl:grid-cols-3">
+      {[1, 2, 3, 4, 5, 6, 0].map((i) => {
+        const d = value.days[i];
+        return (
+          <div key={i} className={`flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs ${d.open ? "border-slate-200" : "border-slate-100 bg-slate-50"}`}>
+            <label className="flex w-[70px] shrink-0 cursor-pointer items-center gap-1.5 font-semibold text-slate-700">
+              <input type="checkbox" checked={d.open} onChange={(e) => setDay(i, { open: e.target.checked })} className="accent-[var(--accent)]" />
+              {WEEKDAYS[i].slice(0, 3)}
+            </label>
+            {d.open ? (
+              <>
+                <input type="time" value={d.start} onChange={(e) => setDay(i, { start: e.target.value })} className="w-[92px] rounded border border-slate-200 px-1 py-0.5" />
+                <span className="text-slate-400">às</span>
+                <input type="time" value={d.end} onChange={(e) => setDay(i, { end: e.target.value })} className="w-[92px] rounded border border-slate-200 px-1 py-0.5" />
+              </>
+            ) : (
+              <span className="text-slate-400">folga</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}

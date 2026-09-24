@@ -567,6 +567,12 @@ ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS offer_video boolean NOT NULL DE
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS seller_hours jsonb;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS after_hours_message text;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS qualify jsonb;
+
+-- Distribuição: rodízio e turno dos vendedores
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS rotation_enabled boolean NOT NULL DEFAULT false;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS rotation_batch integer NOT NULL DEFAULT 1;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS rotation_state jsonb;
+ALTER TABLE sellers ADD COLUMN IF NOT EXISTS shift jsonb;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualified_at timestamptz;
 
 -- Conversas não lidas

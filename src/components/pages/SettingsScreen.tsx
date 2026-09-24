@@ -1,14 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Bot, Trash2, Plus, Check, Pencil, KeyRound, CalendarDays, AudioLines, Play, Loader2 } from "lucide-react";
+import { Bot, Trash2, Plus, Check, Pencil, KeyRound, CalendarDays, AudioLines, Play, Loader2, Repeat, Clock } from "lucide-react";
 import { ActionsTab } from "@/components/settings/ActionsTab";
 import { FollowupTab } from "@/components/settings/FollowupTab";
 import { StyleCard, AiTester } from "@/components/settings/AiStyle";
-import { SellerHoursCard } from "@/components/settings/SellerHours";
+import { SellerHoursCard, ShiftEditor } from "@/components/settings/SellerHours";
 import { QualifyCard } from "@/components/settings/QualifyCard";
 import type { QualifySettings } from "@/lib/ai/qualify";
 import type { SellerHours } from "@/lib/ai/hours";
+import { DEFAULT_SELLER_HOURS, normalizeSellerHours, hoursText } from "@/lib/ai/hours";
 import { REMINDER_OPTIONS } from "@/components/agenda/types";
 import type { QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import { TAG_COLOR_CLASSES, TAG_DOT_CLASSES, SALE_TYPE_LABEL } from "@/lib/types/sdr";
@@ -828,15 +829,41 @@ function RulesTab() {
   const [sellerId, setSellerId] = useState("");
   const [priority, setPriority] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [rotation, setRotation] = useState<{ enabled: boolean; batch: number } | null>(null);
+  const [shifts, setShifts] = useState<Record<string, SellerHours>>({});
+  const [savedShift, setSavedShift] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [r, s] = await Promise.all([
+    const [r, s, st] = await Promise.all([
       fetch("/api/sdr/rules").then((x) => x.json()),
       fetch("/api/sdr/sellers").then((x) => x.json()),
+      fetch("/api/sdr/settings").then((x) => (x.ok ? x.json() : null)),
     ]);
     setRules(r);
     setSellers(s);
+    setShifts(Object.fromEntries((s as (Seller & { shift?: unknown })[]).map((x) => [x.id, normalizeSellerHours(x.shift ?? { ...DEFAULT_SELLER_HOURS })])));
+    if (st) setRotation({ enabled: Boolean(st.rotationEnabled), batch: st.rotationBatch || 1 });
   }, []);
+
+  const saveRotation = async (next: { enabled: boolean; batch: number }) => {
+    setRotation(next);
+    try {
+      await api("/api/sdr/settings", "PUT", { rotationEnabled: next.enabled, rotationBatch: next.batch });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const saveShift = async (id: string, v: SellerHours) => {
+    try {
+      await api(`/api/sdr/sellers/${id}`, "PATCH", { shift: v });
+      setSavedShift(id);
+      setTimeout(() => setSavedShift(null), 2000);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  // Vendedores que aparecem nas regras (os que recebem leads)
+  const ruleSellers = sellers.filter((s) => rules.some((r) => r.seller?.id === s.id || (r as unknown as { sellerId?: string }).sellerId === s.id));
   useEffect(() => {
     load();
   }, [load]);
@@ -857,10 +884,18 @@ function RulesTab() {
   return (
     <div className="space-y-5 p-6">
       <p className="text-sm text-slate-600">
-        Quando a IA transfere um lead, ela usa estas regras para escolher o vendedor: pela <b>cidade/região</b> e pelo{" "}
-        <b>tipo de compra</b>. Maior prioridade ganha. Deixe a região vazia para valer para qualquer lugar.
+        Quando a IA (ou o chatbot) passa um lead para vendedor, estas regras escolhem quem recebe: pela <b>cidade/região</b> e pelo{" "}
+        <b>tipo de compra</b>. Regra com cidade ganha da regra sem cidade; depois ganha a <b>maior prioridade</b>. Vendedores que empatam
+        (mesma cidade e mesma prioridade) dividem os leads pelo <b>rodízio</b> abaixo.
       </p>
-      <div className="grid gap-3 md:grid-cols-[1.3fr_1fr_1fr_110px_auto]">
+      <div className="hidden gap-3 px-1 text-xs font-semibold uppercase tracking-wide text-slate-500 md:grid md:grid-cols-[1.3fr_1fr_1fr_110px_auto]">
+        <span>Cidade/região (vazio = todas)</span>
+        <span>Tipo de compra</span>
+        <span>Vendedor</span>
+        <span title="Número maior ganha. Use o mesmo número para dividir os leads entre vendedores.">Prioridade</span>
+        <span className="w-[110px]" />
+      </div>
+      <div className="-mt-3 grid gap-3 md:grid-cols-[1.3fr_1fr_1fr_110px_auto]">
         <Input placeholder="Cidade ou região (ex.: Varginha)" value={region} onChange={(e) => setRegion(e.target.value)} />
         <Select value={saleType} onChange={(e) => setSaleType(e.target.value)}>
           <option value="ANY">Qualquer tipo</option>
@@ -877,7 +912,8 @@ function RulesTab() {
         </Select>
         <Input
           type="number"
-          title="Prioridade"
+          title="Prioridade: número maior ganha. Mesmo número = dividem os leads (rodízio)."
+          placeholder="Prioridade"
           value={priority}
           onChange={(e) => setPriority(Number(e.target.value))}
         />
@@ -929,6 +965,95 @@ function RulesTab() {
           </table>
         )}
       </div>
+
+      {rotation && (
+        <div className="rounded-xl border border-slate-200 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="flex items-center gap-2 font-semibold text-slate-900">
+                <Repeat size={17} /> Rodízio entre vendedores
+              </p>
+              <p className="mt-1 max-w-2xl text-sm text-slate-500">
+                Quando mais de um vendedor serve para o lead (mesma cidade/tipo e mesma prioridade), eles se revezam.
+              </p>
+            </div>
+            <Toggle checked={rotation.enabled} onChange={(v) => saveRotation({ ...rotation, enabled: v })} label={rotation.enabled ? "Ligado" : "Desligado"} />
+          </div>
+          {rotation.enabled && (
+            <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-slate-700">
+              Cada vendedor recebe
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={rotation.batch}
+                onChange={(e) => setRotation({ ...rotation, batch: Math.max(1, Math.min(50, Number(e.target.value) || 1)) })}
+                onBlur={() => saveRotation(rotation)}
+                className="w-20 rounded-lg border border-slate-300 px-2 py-1.5 text-center outline-none focus:border-[var(--accent)]"
+              />
+              lead(s) seguidos antes de passar para o próximo.
+              <span className="text-xs text-slate-400">(ex.: 2 → João, João, Maria, Maria, João...)</span>
+            </div>
+          )}
+          {!rotation.enabled && (
+            <p className="mt-3 text-xs text-slate-400">Desligado: entre vendedores empatados, recebe sempre o mesmo (o primeiro da lista).</p>
+          )}
+        </div>
+      )}
+
+      {ruleSellers.length > 0 && (
+        <div className="rounded-xl border border-slate-200 p-5">
+          <p className="flex items-center gap-2 font-semibold text-slate-900">
+            <Clock size={17} /> Turno de cada vendedor (opcional)
+          </p>
+          <p className="mt-1 max-w-3xl text-sm text-slate-500">
+            Com turno ligado, o vendedor só recebe leads no horário dele. Fora do turno de todos, o lead vai para quem entra primeiro. Vendedor sem turno recebe a
+            qualquer hora.
+          </p>
+          <div className="mt-4 space-y-3">
+            {ruleSellers.map((sl) => {
+              const v = shifts[sl.id] || { ...DEFAULT_SELLER_HOURS };
+              return (
+                <div key={sl.id} className="rounded-lg border border-slate-100 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-semibold text-slate-800">
+                      {sl.name}
+                      <span className="ml-2 text-xs font-normal text-slate-500">{v.enabled ? hoursText(v) : "recebe a qualquer hora"}</span>
+                    </p>
+                    <div className="flex items-center gap-3">
+                      <Toggle
+                        checked={v.enabled}
+                        onChange={(on) => {
+                          const next = { ...v, enabled: on };
+                          setShifts({ ...shifts, [sl.id]: next });
+                          saveShift(sl.id, next);
+                        }}
+                        label={v.enabled ? "Turno ligado" : "Sem turno"}
+                      />
+                      {v.enabled && (
+                        <Button variant="secondary" onClick={() => saveShift(sl.id, v)}>
+                          {savedShift === sl.id ? (
+                            <>
+                              <Check size={15} /> Salvo
+                            </>
+                          ) : (
+                            "Salvar turno"
+                          )}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  {v.enabled && (
+                    <div className="mt-3">
+                      <ShiftEditor value={v} onChange={(nv) => setShifts({ ...shifts, [sl.id]: nv })} />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

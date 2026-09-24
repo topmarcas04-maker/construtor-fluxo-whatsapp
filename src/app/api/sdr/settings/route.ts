@@ -167,6 +167,8 @@ export async function PUT(req: NextRequest) {
   if (SPEED_OPTIONS.some((o) => o.key === body.replySpeed)) set.replySpeed = body.replySpeed;
   if (typeof body.offerVideo === "boolean") set.offerVideo = body.offerVideo;
   if (body.sellerHours && typeof body.sellerHours === "object") set.sellerHours = normalizeSellerHours(body.sellerHours);
+  if (typeof body.rotationEnabled === "boolean") set.rotationEnabled = body.rotationEnabled;
+  if (body.rotationBatch !== undefined) set.rotationBatch = Math.max(1, Math.min(50, Math.round(Number(body.rotationBatch) || 1)));
   if (body.qualify && typeof body.qualify === "object") set.qualify = normalizeQualify(body.qualify);
   if (typeof body.afterHoursMessage === "string") set.afterHoursMessage = body.afterHoursMessage.slice(0, 1000);
   if (body.alertPhone !== undefined) set.alertPhone = String(body.alertPhone || "").replace(/\D/g, "").slice(0, 20) || null;

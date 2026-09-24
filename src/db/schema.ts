@@ -370,6 +370,8 @@ export const sellers = pgTable("sellers", {
   name: varchar("name", { length: 150 }).notNull(),
   phone: varchar("phone", { length: 40 }),
   active: boolean("active").notNull().default(true),
+  /** Turno do vendedor (mesmo formato do horário dos consultores); vazio = sempre disponível */
+  shift: jsonb("shift").$type<import("../lib/ai/hours").SellerHours>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -470,6 +472,10 @@ export const aiSettings = pgTable("ai_settings", {
   afterHoursMessage: text("after_hours_message"),
   /** Qualificação do lead (ver lib/ai/qualify.ts) */
   qualify: jsonb("qualify").$type<import("../lib/ai/qualify").QualifySettings>(),
+  /** Rodízio entre vendedores empatados: quantos leads seguidos cada um recebe */
+  rotationEnabled: boolean("rotation_enabled").notNull().default(false),
+  rotationBatch: integer("rotation_batch").notNull().default(1),
+  rotationState: jsonb("rotation_state").$type<import("../lib/ai/distribution").RotationState>(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
