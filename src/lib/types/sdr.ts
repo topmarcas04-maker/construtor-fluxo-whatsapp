@@ -77,7 +77,7 @@ export interface Message {
   mediaUrl: string | null;
   mediaMimeType: string | null;
   mediaFileName: string | null;
-  sender: "LEAD" | "AI" | "HUMAN" | "FLOW" | "AUTO" | "BOT" | "FOLLOWUP" | null;
+  sender: "LEAD" | "AI" | "HUMAN" | "FLOW" | "AUTO" | "BOT" | "FOLLOWUP" | "BROADCAST" | null;
   /** Nome de quem enviou pelo painel */
   authorName: string | null;
   /** Texto do áudio (transcrição) */

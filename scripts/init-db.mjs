@@ -636,6 +636,135 @@ CREATE TABLE IF NOT EXISTS account_services (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Disparos (envio em massa)
+CREATE TABLE IF NOT EXISTS broadcasts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name varchar(120) NOT NULL,
+  message text NOT NULL,
+  drive_file_id uuid,
+  filters jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status varchar(12) NOT NULL DEFAULT 'SCHEDULED',
+  min_delay integer NOT NULL DEFAULT 40,
+  max_delay integer NOT NULL DEFAULT 120,
+  window_start varchar(5) NOT NULL DEFAULT '08:00',
+  window_end varchar(5) NOT NULL DEFAULT '20:00',
+  daily_limit integer NOT NULL DEFAULT 200,
+  total integer NOT NULL DEFAULT 0,
+  sent integer NOT NULL DEFAULT 0,
+  failed integer NOT NULL DEFAULT 0,
+  scheduled_at timestamptz,
+  next_at timestamptz,
+  started_at timestamptz,
+  finished_at timestamptz,
+  last_error text,
+  created_by varchar(150),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS broadcasts_account_idx ON broadcasts (account_id);
+CREATE INDEX IF NOT EXISTS broadcasts_status_idx ON broadcasts (status);
+CREATE TABLE IF NOT EXISTS broadcast_recipients (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  broadcast_id uuid NOT NULL REFERENCES broadcasts(id) ON DELETE CASCADE,
+  account_id uuid NOT NULL,
+  lead_id uuid,
+  conversation_id uuid,
+  phone_jid varchar(60) NOT NULL,
+  name varchar(200),
+  city varchar(120),
+  status varchar(10) NOT NULL DEFAULT 'PENDING',
+  error text,
+  sent_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS broadcast_recipients_bc_status_idx ON broadcast_recipients (broadcast_id, status);
+CREATE INDEX IF NOT EXISTS broadcast_recipients_account_sent_idx ON broadcast_recipients (account_id, sent_at);
+
+-- Drive (arquivos e vídeos)
+CREATE TABLE IF NOT EXISTS drive_folders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name varchar(120) NOT NULL,
+  parent_id uuid,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS drive_folders_account_idx ON drive_folders (account_id);
+CREATE TABLE IF NOT EXISTS drive_files (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  folder_id uuid,
+  name varchar(200) NOT NULL,
+  mime_type varchar(120) NOT NULL,
+  size integer NOT NULL,
+  kind varchar(10) NOT NULL,
+  storage_key varchar(300) NOT NULL,
+  created_by varchar(150),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS drive_files_account_idx ON drive_files (account_id, folder_id);
+
+-- Área de membros (aulas gravadas)
+CREATE TABLE IF NOT EXISTS member_courses (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  title varchar(150) NOT NULL,
+  description text,
+  cover text,
+  premium boolean NOT NULL DEFAULT false,
+  published boolean NOT NULL DEFAULT true,
+  sort integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS member_courses_account_idx ON member_courses (account_id);
+CREATE TABLE IF NOT EXISTS member_modules (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  course_id uuid NOT NULL REFERENCES member_courses(id) ON DELETE CASCADE,
+  title varchar(150) NOT NULL,
+  sort integer NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS member_lessons (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  course_id uuid NOT NULL REFERENCES member_courses(id) ON DELETE CASCADE,
+  module_id uuid REFERENCES member_modules(id) ON DELETE CASCADE,
+  title varchar(200) NOT NULL,
+  description text,
+  video_key varchar(300),
+  video_url varchar(500),
+  drive_file_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  duration_min integer,
+  premium boolean NOT NULL DEFAULT false,
+  published boolean NOT NULL DEFAULT true,
+  sort integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS member_lessons_course_idx ON member_lessons (course_id);
+CREATE TABLE IF NOT EXISTS member_progress (
+  user_id uuid NOT NULL,
+  lesson_id uuid NOT NULL REFERENCES member_lessons(id) ON DELETE CASCADE,
+  completed_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS member_progress_user_lesson_idx ON member_progress (user_id, lesson_id);
+
+-- Calls de acompanhamento
+ALTER TABLE account_services ADD COLUMN IF NOT EXISTS call_hours jsonb;
+ALTER TABLE account_services ADD COLUMN IF NOT EXISTS call_minutes integer NOT NULL DEFAULT 30;
+ALTER TABLE account_services ADD COLUMN IF NOT EXISTS call_link varchar(500);
+CREATE TABLE IF NOT EXISTS support_calls (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider_account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  client_account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  user_name varchar(150),
+  phone varchar(40),
+  starts_at timestamptz NOT NULL,
+  ends_at timestamptz NOT NULL,
+  topic text,
+  meeting_link varchar(500),
+  status varchar(10) NOT NULL DEFAULT 'SCHEDULED',
+  notes text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS support_calls_provider_idx ON support_calls (provider_account_id, starts_at);
+CREATE INDEX IF NOT EXISTS support_calls_client_idx ON support_calls (client_account_id);
+
 -- Migrações que rodam uma única vez
 CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());
 DO $$ BEGIN

@@ -49,6 +49,7 @@ export async function followupCandidates(db: Db, accountId: string, s: FollowupS
        AND c.channel = 'WHATSAPP'
        AND l.closed = false
        AND lm.direction = 'OUT'
+       AND coalesce(lm.sender, '') <> 'BROADCAST'
        AND EXISTS (SELECT 1 FROM messages mi WHERE mi.conversation_id = c.id AND mi.direction = 'IN')
   `);
 

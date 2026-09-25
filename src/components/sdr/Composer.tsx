@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ImagePlus, Mic, Send, Trash2, Loader2, X, Package, Search, Film, Plus } from "lucide-react";
+import { ImagePlus, Mic, Send, Trash2, Loader2, X, Package, Search, Film, Plus, FolderOpen } from "lucide-react";
+import { DrivePicker } from "@/components/drive/DrivePicker";
 import type { QuickReply } from "@/lib/types/sdr";
 
 export type OutgoingPayload =
   | { text: string }
   | { media: { kind: "image" | "audio"; dataUrl: string; fileName?: string }; caption?: string }
-  | { productId: string; imageId?: string; video?: boolean };
+  | { productId: string; imageId?: string; video?: boolean }
+  | { driveFileId: string };
 
 interface PickerProduct {
   id: string;
@@ -71,6 +73,7 @@ export function Composer({
   mobileActions?: (close: () => void) => ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [driveOpen, setDriveOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [image, setImage] = useState<string | null>(null);
@@ -311,6 +314,15 @@ export function Composer({
             >
               <span className="grid h-9 w-9 place-items-center rounded-full bg-amber-50 text-amber-600"><Package size={18} /></span> Enviar produto
             </button>
+            <button
+              onClick={() => {
+                setMenuOpen(false);
+                setDriveOpen(true);
+              }}
+              className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-slate-700 active:bg-slate-100"
+            >
+              <span className="grid h-9 w-9 place-items-center rounded-full bg-violet-50 text-violet-600"><FolderOpen size={18} /></span> Arquivo do Drive
+            </button>
             {mobileActions && <div className="my-1 border-t border-slate-100" />}
             {mobileActions?.(() => setMenuOpen(false))}
           </div>
@@ -359,6 +371,14 @@ export function Composer({
           >
             <Package size={20} />
           </button>
+          <button
+            onClick={() => setDriveOpen(true)}
+            disabled={disabled || sending}
+            className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100 disabled:opacity-40 md:flex"
+            title="Enviar arquivo do Drive"
+          >
+            <FolderOpen size={20} />
+          </button>
           <textarea
             rows={1}
             value={draft}
@@ -396,6 +416,7 @@ export function Composer({
           )}
         </div>
       )}
+      <DrivePicker open={driveOpen} onClose={() => setDriveOpen(false)} onPick={(f) => void send({ driveFileId: f.id })} />
     </div>
   );
 }

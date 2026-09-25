@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Pencil, Trash2, Search, Handshake, LogIn, Link2, Copy, Check, Bot } from "lucide-react";
 import { MODULES, moduleLabel, modulesAllowedForType, AI_SOURCE_LABEL } from "@/lib/auth/modules";
+import { DEFAULT_BENEFITS, benefitsText, type Plan, type PlanBenefits } from "@/lib/plans/shared";
+import { BenefitsFields } from "@/components/plans/BenefitsFields";
 import {
   Page,
   PageHeader,
@@ -35,6 +37,11 @@ interface Account {
   hasOwnKey: boolean;
   leadEdit: boolean;
   productEdit?: boolean;
+  planId?: string | null;
+  maxWhatsapp?: number;
+  callsPerMonth?: number;
+  supportAccess?: boolean;
+  premiumAccess?: boolean;
   waState: string | null;
   active: boolean;
   createdAt: string;
@@ -55,6 +62,8 @@ type Form = {
   aiSource: "OWN" | "PARENT" | "NONE";
   leadEdit: boolean;
   productEdit: boolean;
+  planId: string;
+  benefits: PlanBenefits;
   adminName: string;
   adminEmail: string;
   adminPassword: string;
@@ -89,10 +98,13 @@ export function AccountsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [origin, setOrigin] = useState("");
+  const [planData, setPlanData] = useState<{ plans: Plan[]; ceiling: PlanBenefits } | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/accounts");
     if (res.ok) setData(await res.json());
+    const pr = await fetch("/api/plans");
+    if (pr.ok) setPlanData(await pr.json());
   }, []);
   useEffect(() => {
     load();
@@ -138,6 +150,8 @@ export function AccountsScreen() {
       aiSource: "PARENT",
       leadEdit: false,
       productEdit: true,
+      planId: "",
+      benefits: { ...DEFAULT_BENEFITS },
       adminName: "",
       adminEmail: "",
       adminPassword: "",
@@ -160,6 +174,13 @@ export function AccountsScreen() {
       aiSource: a.aiSource,
       leadEdit: a.leadEdit,
       productEdit: a.productEdit !== false,
+      planId: a.planId || "",
+      benefits: {
+        maxWhatsapp: a.maxWhatsapp ?? 1,
+        callsPerMonth: a.callsPerMonth ?? 0,
+        supportAccess: Boolean(a.supportAccess),
+        premiumAccess: Boolean(a.premiumAccess),
+      },
       adminName: "",
       adminEmail: "",
       adminPassword: "",
@@ -188,6 +209,8 @@ export function AccountsScreen() {
         aiSource: form.aiSource,
         leadEdit: form.leadEdit,
         productEdit: form.productEdit,
+        planId: form.planId || null,
+        ...form.benefits,
       };
       if (isNew) body.admin = { name: form.adminName || form.responsible, email: form.adminEmail, password: form.adminPassword };
       const res = await fetch(isNew ? "/api/accounts" : `/api/accounts/${(editing as Account).id}`, {
@@ -312,6 +335,21 @@ export function AccountsScreen() {
                     <td className="px-5 py-3.5">
                       <p className="font-semibold text-slate-900">{a.name}</p>
                       <p className="text-xs text-slate-400">{[a.document, a.city].filter(Boolean).join(" · ") || "—"}</p>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {a.planId && planData?.plans.find((p) => p.id === a.planId) && (
+                          <Badge tone="purple">{planData.plans.find((p) => p.id === a.planId)!.name}</Badge>
+                        )}
+                        {benefitsText({
+                          maxWhatsapp: a.maxWhatsapp ?? 1,
+                          callsPerMonth: a.callsPerMonth ?? 0,
+                          supportAccess: Boolean(a.supportAccess),
+                          premiumAccess: Boolean(a.premiumAccess),
+                        })
+                          .slice(1)
+                          .map((t) => (
+                            <Badge key={t}>{t}</Badge>
+                          ))}
+                      </div>
                       {origin && (
                         <div className="mt-1">
                           <CopyLink url={`${origin}/login?c=${a.slug}`} />
@@ -436,6 +474,53 @@ export function AccountsScreen() {
                 </div>
               </section>
             )}
+
+            <section>
+              <p className="mb-1 font-semibold text-slate-800">Plano</p>
+              <p className="mb-3 text-sm text-slate-500">
+                Ao escolher um plano, os menus e benefícios abaixo são preenchidos com os dele. Você ainda pode ajustar só esta conta.
+              </p>
+              <select
+                value={form.planId}
+                onChange={(e) => {
+                  const plan = planData?.plans.find((p) => p.id === e.target.value);
+                  setForm(
+                    plan
+                      ? {
+                          ...form,
+                          planId: plan.id,
+                          modules: plan.modules.filter((k) => grantable.some((g) => g.key === k)),
+                          benefits: {
+                            maxWhatsapp: plan.maxWhatsapp,
+                            callsPerMonth: plan.callsPerMonth,
+                            supportAccess: plan.supportAccess,
+                            premiumAccess: plan.premiumAccess,
+                          },
+                        }
+                      : { ...form, planId: "" }
+                  );
+                }}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-[15px] outline-none focus:border-[var(--accent)] md:max-w-sm"
+              >
+                <option value="">Sem plano (personalizado)</option>
+                {(planData?.plans || [])
+                  .filter((p) => p.active || p.id === form.planId)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                      {p.price ? ` — ${p.price}` : ""}
+                    </option>
+                  ))}
+              </select>
+              {!planData?.plans.length && (
+                <p className="mt-1 text-xs text-slate-400">Crie seus planos no menu Planos.</p>
+              )}
+            </section>
+
+            <section>
+              <p className="mb-3 font-semibold text-slate-800">Benefícios</p>
+              <BenefitsFields value={form.benefits} onChange={(b) => setForm({ ...form, benefits: b })} ceiling={planData?.ceiling} />
+            </section>
 
             <section>
               <p className="mb-1 font-semibold text-slate-800">Menus liberados</p>

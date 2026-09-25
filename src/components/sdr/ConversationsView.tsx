@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X, Workflow, CalendarClock, KanbanSquare, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X, Workflow, CalendarClock, KanbanSquare, PanelRightClose, PanelRightOpen, Megaphone } from "lucide-react";
 import type { Lead, Message, QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import {
   TAG_DOT_CLASSES,
@@ -53,6 +53,8 @@ function previewPrefix(m: { direction: string; sender?: string | null }) {
       return "Chatbot: ";
     case "FOLLOWUP":
       return "Recontato: ";
+    case "BROADCAST":
+      return "Disparo: ";
     case "AUTO":
       return "Lembrete: ";
     default:
@@ -537,6 +539,8 @@ export function ConversationsView({
                           ? "rounded-br-md bg-teal-600 text-white"
                           : msg.sender === "FOLLOWUP"
                           ? "rounded-br-md bg-indigo-600 text-white"
+                          : msg.sender === "BROADCAST"
+                          ? "rounded-br-md bg-amber-600 text-white"
                             : "rounded-br-md bg-[var(--accent)] text-white"
                           : "rounded-bl-md bg-white text-slate-800"
                       }`}
@@ -558,6 +562,10 @@ export function ConversationsView({
                           ) : msg.sender === "FOLLOWUP" ? (
                             <>
                               <CalendarClock size={11} /> {msg.authorName || "Recontato"}
+                            </>
+                          ) : msg.sender === "BROADCAST" ? (
+                            <>
+                              <Megaphone size={11} /> {msg.authorName || "Disparo"}
                             </>
                           ) : (
                             <>

@@ -46,8 +46,13 @@ import {
   funnels,
   chatbots,
   followupSettings,
+  broadcasts,
+  broadcastRecipients,
+  driveFiles,
 } from "../src/db/schema";
-import { eq, and, desc, gte, lt, isNull, sql, inArray } from "drizzle-orm";
+import { eq, and, desc, gte, lt, lte, isNull, sql, inArray } from "drizzle-orm";
+import { inWindow, renderMessage } from "../src/lib/broadcast/common";
+import { WHATSAPP_VIDEO_MAX } from "../src/lib/drive/common";
 import { runSdrAgent, type AgentDecision } from "../src/lib/ai/sdrAgent";
 import { resolveAiKey, resolveVoiceKey } from "../src/lib/tenancy/aiKey";
 import { transcribeAudio, synthesizeSpeech } from "../src/lib/voice/providers";
@@ -119,7 +124,7 @@ const db = drizzle(pool, { schema });
 const AI_DEBOUNCE_MS = Number(process.env.AI_DEBOUNCE_MS || 6000);
 const SELFTEST = process.env.FLOW_ENGINE_SELFTEST === "1";
 
-type Sender = "AI" | "HUMAN" | "AUTO" | "BOT" | "FOLLOWUP";
+type Sender = "AI" | "HUMAN" | "AUTO" | "BOT" | "FOLLOWUP" | "BROADCAST";
 
 /** Espera um pouco antes do chatbot responder, para juntar mensagens seguidas */
 const BOT_DEBOUNCE_MS = Number(process.env.BOT_DEBOUNCE_MS || 1500);
@@ -1563,6 +1568,69 @@ async function sendProductPhoto(
 }
 
 /** Vídeo do produto (guardado no bucket) */
+/** Envia um arquivo do Drive (foto, vídeo, áudio ou documento) */
+async function sendDriveFile(accountId: string, phoneJid: string, fileId: string, sender: Sender, authorName: string | null) {
+  const f = await db.query.driveFiles.findFirst({ where: and(eq(driveFiles.id, fileId), eq(driveFiles.accountId, accountId)) });
+  if (!f) return { error: "Arquivo do Drive não encontrado" };
+  if (!storageReady()) return { error: "Armazenamento de arquivos não configurado" };
+  try {
+    const channel = metaChannelOf(phoneJid);
+    if (channel) {
+      const { conv, conn, token } = await metaConnectionFor(accountId, phoneJid);
+      if (!conn || !token || !conv) return { error: "Instagram/Facebook desta conta não está conectado" };
+      const type = f.kind === "document" ? "file" : (f.kind as "image" | "video" | "audio");
+      const [row] = await db
+        .insert(messages)
+        .values({ conversationId: conv.id, direction: "OUT", body: `[${f.kind === "document" ? "documento" : f.kind}] ${f.name}`, messageType: f.kind, sentAt: new Date(), sender, authorName: authorName || null, mediaKey: f.storageKey, mediaMimeType: f.mimeType, mediaFileName: f.name })
+        .returning({ id: messages.id });
+      const mid = await sendMetaAttachment(token, metaUserId(phoneJid), type, await signedUrl(f.storageKey, 6 * 3600));
+      if (mid) {
+        rememberSent(mid);
+        await db.update(messages).set({ whatsappMessageId: mid }).where(eq(messages.id, row.id));
+      }
+      await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
+      return { success: true, messageId: mid };
+    }
+    const s = sessions.get(accountId);
+    if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
+    const buffer = await getObject(f.storageKey);
+    let content: any;
+    let type = f.kind;
+    if (f.kind === "image") content = { image: buffer, mimetype: f.mimeType };
+    else if (f.kind === "video" && f.size <= WHATSAPP_VIDEO_MAX) content = { video: buffer, mimetype: f.mimeType };
+    else if (f.kind === "audio") content = { audio: buffer, mimetype: f.mimeType, ptt: false };
+    else {
+      type = "document";
+      content = { document: buffer, mimetype: f.mimeType, fileName: f.name };
+    }
+    const response = await s.sock.sendMessage(phoneJid, content);
+    if (response?.key?.id) rememberSent(response.key.id);
+    const conv = await db.query.conversations.findFirst({
+      where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
+    });
+    if (conv) {
+      await db.insert(messages).values({
+        conversationId: conv.id,
+        direction: "OUT",
+        body: type === "document" ? `[documento] ${f.name}` : `[${type === "image" ? "imagem" : type === "video" ? "vídeo" : "áudio"}]`,
+        messageType: type,
+        whatsappMessageId: response?.key?.id,
+        sentAt: new Date(),
+        sender,
+        authorName: authorName || null,
+        mediaKey: f.storageKey,
+        mediaMimeType: f.mimeType,
+        mediaFileName: f.name,
+      });
+      await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
+    }
+    return { success: true, messageId: response?.key?.id };
+  } catch (error) {
+    console.error("[Error] sendDriveFile:", error);
+    return { error: (error as Error)?.message || String(error) };
+  }
+}
+
 async function sendProductVideo(accountId: string, phoneJid: string, productId: string, sender: Sender, authorName: string | null) {
   const product = await db.query.products.findFirst({
     where: and(eq(products.id, productId), eq(products.accountId, accountId)),
@@ -2086,6 +2154,104 @@ async function runChatbot(accountId: string, conversationId: string, ctx: Incomi
 // RECONTATO AUTOMÁTICO (lead que parou de responder)
 // ============================================================================
 
+// ============================================================================
+// DISPAROS (envio em massa, um por vez, com intervalo sorteado)
+// ============================================================================
+
+let broadcastsRunning = false;
+
+/** Início do dia (00:00 de Brasília) */
+function spDayStart(d = new Date()) {
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+  return new Date(`${day}T00:00:00-03:00`);
+}
+
+async function processBroadcasts() {
+  if (broadcastsRunning) return;
+  broadcastsRunning = true;
+  try {
+    const now = new Date();
+    const rows = await db
+      .select()
+      .from(broadcasts)
+      .where(and(inArray(broadcasts.status, ["SCHEDULED", "RUNNING"]), lte(broadcasts.nextAt, now)))
+      .orderBy(broadcasts.createdAt);
+    const busy = new Set<string>(); // no máximo um envio por conta a cada rodada
+    for (const b of rows) {
+      if (busy.has(b.accountId)) continue;
+      if (b.scheduledAt && b.scheduledAt.getTime() > now.getTime()) continue;
+      const note = (lastError: string | null) => db.update(broadcasts).set({ lastError }).where(eq(broadcasts.id, b.id));
+      if (b.status === "SCHEDULED") {
+        await db.update(broadcasts).set({ status: "RUNNING", startedAt: b.startedAt || now }).where(eq(broadcasts.id, b.id));
+      }
+      if (!inWindow(b.windowStart, b.windowEnd, now)) {
+        await note(`Fora do horário de envio (${b.windowStart} às ${b.windowEnd}). Continua no próximo horário.`);
+        continue;
+      }
+      const acc = await loadAccount(b.accountId);
+      if (!acc || !acc.active) continue;
+      if (sessions.get(b.accountId)?.state !== "connected") {
+        await note("WhatsApp desconectado. O disparo continua quando reconectar.");
+        continue;
+      }
+      const [{ n }] = (
+        await db.execute(sql`SELECT count(*)::int AS n FROM broadcast_recipients
+          WHERE account_id = ${b.accountId} AND status IN ('SENT','FAILED') AND sent_at >= ${spDayStart(now)}`)
+      ).rows as { n: number }[];
+      if (n >= b.dailyLimit) {
+        await note(`Limite de ${b.dailyLimit} envios por dia atingido. Continua amanhã.`);
+        continue;
+      }
+      const next = await db.query.broadcastRecipients.findFirst({
+        where: and(eq(broadcastRecipients.broadcastId, b.id), eq(broadcastRecipients.status, "PENDING")),
+      });
+      if (!next) {
+        await db.update(broadcasts).set({ status: "DONE", finishedAt: now, lastError: null }).where(eq(broadcasts.id, b.id));
+        continue;
+      }
+      busy.add(b.accountId);
+      const text = renderMessage(b.message, { name: next.name, city: next.city });
+      let r: { success?: boolean; error?: string } = await sendText(b.accountId, next.phoneJid, text, "BROADCAST", `Disparo: ${b.name}`);
+      if (!r.error && b.driveFileId) r = await sendDriveFile(b.accountId, next.phoneJid, b.driveFileId, "BROADCAST", `Disparo: ${b.name}`);
+      const ok = !r.error;
+      await db
+        .update(broadcastRecipients)
+        .set({ status: ok ? "SENT" : "FAILED", error: ok ? null : String(r.error).slice(0, 300), sentAt: new Date() })
+        .where(eq(broadcastRecipients.id, next.id));
+      const wait = (b.minDelay + Math.random() * Math.max(0, b.maxDelay - b.minDelay)) * 1000;
+      await db
+        .update(broadcasts)
+        .set({
+          sent: ok ? sql`${broadcasts.sent} + 1` : broadcasts.sent,
+          failed: ok ? broadcasts.failed : sql`${broadcasts.failed} + 1`,
+          nextAt: new Date(Date.now() + wait),
+          lastError: ok ? null : String(r.error).slice(0, 300),
+        })
+        .where(eq(broadcasts.id, b.id));
+      // Muitas falhas seguidas: pausa para não insistir num número com problema
+      if (!ok) {
+        const last = await db
+          .select({ status: broadcastRecipients.status })
+          .from(broadcastRecipients)
+          .where(and(eq(broadcastRecipients.broadcastId, b.id), inArray(broadcastRecipients.status, ["SENT", "FAILED"])))
+          .orderBy(desc(broadcastRecipients.sentAt))
+          .limit(5);
+        if (last.length === 5 && last.every((x) => x.status === "FAILED")) {
+          await db
+            .update(broadcasts)
+            .set({ status: "PAUSED", lastError: "Pausado automaticamente: 5 envios seguidos falharam. Confira o WhatsApp e continue." })
+            .where(eq(broadcasts.id, b.id));
+        }
+      }
+      console.log(`[Disparo ${b.accountId.slice(0, 8)}] ${b.name} → ${next.phoneJid}: ${ok ? "ok" : r.error}`);
+    }
+  } catch (err) {
+    console.error("[Disparos] erro:", (err as Error)?.message || err);
+  } finally {
+    broadcastsRunning = false;
+  }
+}
+
 let followupsRunning = false;
 const FOLLOWUP_PER_RUN = 15;
 
@@ -2405,6 +2571,11 @@ function startApiServer() {
           const r = await sendMedia(acc.id, body.phoneJid, media, body.sender === "AUTO" ? "AUTO" : "HUMAN", body.authorName || null);
           return json(res, "error" in r ? 502 : 200, r);
         }
+        if (url.pathname === "/send-drive") {
+          if (!body.phoneJid || !body.fileId) return json(res, 400, { error: "Arquivo inválido" });
+          const r = await sendDriveFile(acc.id, body.phoneJid, String(body.fileId), "HUMAN", body.authorName || null);
+          return json(res, "error" in r ? 502 : 200, r);
+        }
         if (url.pathname === "/send-product") {
           if (!body.phoneJid || !body.productId) return json(res, 400, { error: "Produto inválido" });
           const r = body.video
@@ -2434,6 +2605,7 @@ async function main() {
   setInterval(() => syncSessions().catch((e) => console.error("[sync]", e)), 60_000);
   setInterval(() => processReminders(), SELFTEST ? 3_000 : 30_000);
   setInterval(() => processFollowups(), SELFTEST ? 3_000 : 60_000);
+  setInterval(() => processBroadcasts(), SELFTEST ? 2_000 : 10_000);
 
   const shutdown = async () => {
     console.log("\n🛑 Encerrando motor...");

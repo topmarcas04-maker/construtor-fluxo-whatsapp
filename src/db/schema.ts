@@ -598,8 +598,212 @@ export const accountServices = pgTable("account_services", {
   supportPhone: varchar("support_phone", { length: 40 }),
   /** Horário do suporte (texto, aparece para o cliente) */
   supportHours: varchar("support_hours", { length: 160 }),
+  /** Horários livres para calls de acompanhamento (mesmo formato do horário dos consultores) */
+  callHours: jsonb("call_hours").$type<import("../lib/ai/hours").SellerHours>(),
+  /** Duração de cada call (minutos) */
+  callMinutes: integer("call_minutes").notNull().default(30),
+  /** Link fixo da reunião (Meet, Zoom...). Pode ser trocado em cada call */
+  callLink: varchar("call_link", { length: 500 }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** Call de acompanhamento marcada por uma conta com quem a cadastrou */
+export const supportCalls = pgTable(
+  "support_calls",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Quem atende (conta mãe) */
+    providerAccountId: uuid("provider_account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    /** Quem marcou */
+    clientAccountId: uuid("client_account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    userName: varchar("user_name", { length: 150 }),
+    phone: varchar("phone", { length: 40 }),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    topic: text("topic"),
+    meetingLink: varchar("meeting_link", { length: 500 }),
+    /** SCHEDULED | DONE | CANCELED | NO_SHOW */
+    status: varchar("status", { length: 10 }).notNull().default("SCHEDULED"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("support_calls_provider_idx").on(table.providerAccountId, table.startsAt), index("support_calls_client_idx").on(table.clientAccountId)]
+);
+
+// ============================================================================
+// DISPAROS (envio em massa)
+// ============================================================================
+
+export const broadcasts = pgTable(
+  "broadcasts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 120 }).notNull(),
+    /** Texto (variações separadas por uma linha com ---) */
+    message: text("message").notNull(),
+    /** Arquivo do Drive enviado junto (opcional) */
+    driveFileId: uuid("drive_file_id"),
+    /** Filtros usados para montar o público (ver lib/broadcast/common.ts) */
+    filters: jsonb("filters").notNull().default({}),
+    /** DRAFT | SCHEDULED | RUNNING | PAUSED | DONE | CANCELED */
+    status: varchar("status", { length: 12 }).notNull().default("SCHEDULED"),
+    minDelay: integer("min_delay").notNull().default(40),
+    maxDelay: integer("max_delay").notNull().default(120),
+    windowStart: varchar("window_start", { length: 5 }).notNull().default("08:00"),
+    windowEnd: varchar("window_end", { length: 5 }).notNull().default("20:00"),
+    dailyLimit: integer("daily_limit").notNull().default(200),
+    total: integer("total").notNull().default(0),
+    sent: integer("sent").notNull().default(0),
+    failed: integer("failed").notNull().default(0),
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
+    nextAt: timestamp("next_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdBy: varchar("created_by", { length: 150 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("broadcasts_account_idx").on(table.accountId), index("broadcasts_status_idx").on(table.status)]
+);
+
+export const broadcastRecipients = pgTable(
+  "broadcast_recipients",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    broadcastId: uuid("broadcast_id")
+      .notNull()
+      .references(() => broadcasts.id, { onDelete: "cascade" }),
+    accountId: uuid("account_id").notNull(),
+    leadId: uuid("lead_id"),
+    conversationId: uuid("conversation_id"),
+    phoneJid: varchar("phone_jid", { length: 60 }).notNull(),
+    name: varchar("name", { length: 200 }),
+    city: varchar("city", { length: 120 }),
+    /** PENDING | SENT | FAILED | SKIPPED */
+    status: varchar("status", { length: 10 }).notNull().default("PENDING"),
+    error: text("error"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("broadcast_recipients_bc_status_idx").on(table.broadcastId, table.status),
+    index("broadcast_recipients_account_sent_idx").on(table.accountId, table.sentAt),
+  ]
+);
+
+// ============================================================================
+// DRIVE (arquivos e vídeos da conta)
+// ============================================================================
+
+export const driveFolders = pgTable(
+  "drive_folders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 120 }).notNull(),
+    parentId: uuid("parent_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("drive_folders_account_idx").on(table.accountId)]
+);
+
+export const driveFiles = pgTable(
+  "drive_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    folderId: uuid("folder_id"),
+    name: varchar("name", { length: 200 }).notNull(),
+    mimeType: varchar("mime_type", { length: 120 }).notNull(),
+    size: integer("size").notNull(),
+    /** image | video | audio | document */
+    kind: varchar("kind", { length: 10 }).notNull(),
+    storageKey: varchar("storage_key", { length: 300 }).notNull(),
+    createdBy: varchar("created_by", { length: 150 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("drive_files_account_idx").on(table.accountId, table.folderId)]
+);
+
+// ============================================================================
+// ÁREA DE MEMBROS (aulas gravadas)
+// ============================================================================
+
+/** Curso criado por uma conta (Master ou Parceiro) para as contas abaixo dela */
+export const memberCourses = pgTable(
+  "member_courses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    title: varchar("title", { length: 150 }).notNull(),
+    description: text("description"),
+    /** Capa em data URL (até ~400 KB) */
+    cover: text("cover"),
+    premium: boolean("premium").notNull().default(false),
+    published: boolean("published").notNull().default(true),
+    sort: integer("sort").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("member_courses_account_idx").on(table.accountId)]
+);
+
+export const memberModules = pgTable("member_modules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  courseId: uuid("course_id")
+    .notNull()
+    .references(() => memberCourses.id, { onDelete: "cascade" }),
+  title: varchar("title", { length: 150 }).notNull(),
+  sort: integer("sort").notNull().default(0),
+});
+
+export const memberLessons = pgTable(
+  "member_lessons",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    courseId: uuid("course_id")
+      .notNull()
+      .references(() => memberCourses.id, { onDelete: "cascade" }),
+    moduleId: uuid("module_id").references(() => memberModules.id, { onDelete: "cascade" }),
+    title: varchar("title", { length: 200 }).notNull(),
+    description: text("description"),
+    /** Vídeo enviado para o bucket */
+    videoKey: varchar("video_key", { length: 300 }),
+    /** Ou link de vídeo (YouTube, Vimeo, Panda...) */
+    videoUrl: varchar("video_url", { length: 500 }),
+    /** Material de apoio: arquivos do Drive do autor */
+    driveFileIds: jsonb("drive_file_ids").$type<string[]>().notNull().default([]),
+    durationMin: integer("duration_min"),
+    premium: boolean("premium").notNull().default(false),
+    published: boolean("published").notNull().default(true),
+    sort: integer("sort").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("member_lessons_course_idx").on(table.courseId)]
+);
+
+export const memberProgress = pgTable(
+  "member_progress",
+  {
+    userId: uuid("user_id").notNull(),
+    lessonId: uuid("lesson_id")
+      .notNull()
+      .references(() => memberLessons.id, { onDelete: "cascade" }),
+    completedAt: timestamp("completed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("member_progress_user_lesson_idx").on(table.userId, table.lessonId)]
+);
 
 // ============================================================================
 // INSTAGRAM E FACEBOOK (META)

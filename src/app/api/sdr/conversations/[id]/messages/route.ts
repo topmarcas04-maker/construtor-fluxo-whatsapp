@@ -1,10 +1,10 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
-import { conversations, leads, messages, products } from "@/db/schema";
+import { conversations, driveFiles, leads, messages, products } from "@/db/schema";
 import { markConversationRead } from "@/lib/sdr/read";
 import { and, eq, sql } from "drizzle-orm";
-import { sendWhatsappMedia, sendWhatsappMessage, sendWhatsappProduct } from "@/lib/services/whatsapp/engineClient";
+import { sendWhatsappDriveFile, sendWhatsappMedia, sendWhatsappMessage, sendWhatsappProduct } from "@/lib/services/whatsapp/engineClient";
 import { requireUser } from "@/lib/auth/server";
 
 /** Tamanho máximo de arquivo enviado pelo painel */
@@ -69,7 +69,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // Quem responde leu a conversa
     await markConversationRead(id);
     let result;
-    if (body.productId) {
+    if (body.driveFileId) {
+      const file = await db.query.driveFiles.findFirst({
+        where: and(eq(driveFiles.id, String(body.driveFileId)), eq(driveFiles.accountId, auth.accountId)),
+      });
+      if (!file) return NextResponse.json({ error: "Arquivo não encontrado" }, { status: 404 });
+      await db.update(leads).set({ aiPaused: true, botId: null, botStep: null, botTries: 0, updatedAt: new Date() }).where(eq(leads.conversationId, id));
+      result = await sendWhatsappDriveFile(auth.accountId, conversation.phoneJid, file.id, author);
+    } else if (body.productId) {
       const product = await db.query.products.findFirst({
         where: and(eq(products.id, String(body.productId)), eq(products.accountId, auth.accountId)),
       });

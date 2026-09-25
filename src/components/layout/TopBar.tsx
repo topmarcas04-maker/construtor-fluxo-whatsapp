@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, LogOut, Building2, Search, Check, Menu } from "lucide-react";
+import { ChevronDown, LogOut, Building2, Search, Check, Menu, Headphones } from "lucide-react";
 import { roleLabel, ACCOUNT_TYPE_LABEL } from "@/lib/auth/modules";
 import type { CurrentUser } from "@/lib/auth/server";
 
@@ -20,6 +20,31 @@ async function actAs(accountId: string | null) {
     body: JSON.stringify({ accountId }),
   });
   window.location.href = "/";
+}
+
+/** Botão de suporte pelo WhatsApp (quando o plano da conta dá direito) */
+function SupportButton({ accountId }: { accountId: string }) {
+  const [support, setSupport] = useState<{ phone: string; hours: string | null; provider: string } | null>(null);
+  useEffect(() => {
+    fetch("/api/support")
+      .then((r) => (r.ok ? r.json() : { support: null }))
+      .then((d) => setSupport(d.support || null))
+      .catch(() => {});
+  }, [accountId]);
+  if (!support) return null;
+  const text = encodeURIComponent("Olá! Preciso de ajuda com o painel.");
+  return (
+    <a
+      href={`https://wa.me/${support.phone}?text=${text}`}
+      target="_blank"
+      rel="noreferrer"
+      title={support.hours ? `Suporte: ${support.hours}` : "Falar com o suporte"}
+      className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
+    >
+      <Headphones size={16} />
+      <span className="hidden md:inline">Suporte</span>
+    </a>
+  );
 }
 
 /** Seletor "visualizar como": Master/Parceiro entram no painel de contas abaixo deles */
@@ -151,6 +176,7 @@ export function TopBar({ title, user, onOpenMenu }: { title: string; user: Curre
         </div>
 
         <div className="flex items-center gap-1.5 md:gap-3">
+          <SupportButton accountId={user.account.id} />
           {user.canManage && user.homeAccount.type !== "CLIENT" && <AccountSwitcher user={user} />}
           <div ref={ref} className="relative">
             <button

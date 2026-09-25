@@ -106,6 +106,11 @@ export function sendWhatsappProduct(
   );
 }
 
+/** Envia um arquivo do Drive (foto, vídeo, áudio ou documento) */
+export function sendWhatsappDriveFile(accountId: string, phoneJid: string, fileId: string, authorName: string | null) {
+  return call<{ success: boolean }>(`/send-drive`, { method: "POST", body: JSON.stringify({ accountId, phoneJid, fileId, authorName }) }, 150000);
+}
+
 /** Repassa ao motor as mensagens do Instagram/Facebook recebidas pelo webhook da Meta */
 export function forwardMetaEvent(payload: unknown) {
   return call<{ ok: boolean }>(`/meta-event`, { method: "POST", body: JSON.stringify(payload) }, 25000);
