@@ -1,9 +1,10 @@
 import { modulesAllowedForType, type AccountType, type ModuleKey } from "@/lib/auth/modules";
+import { normalizeBenefits, type PlanBenefits } from "@/lib/plans/shared";
 
 /** Valida os campos da conta (parceiro/cliente) vindos do formulário */
 export function accountValues(
   body: Record<string, unknown>,
-  opts: { partial: boolean; childType: AccountType; parentModules: string[] }
+  opts: { partial: boolean; childType: AccountType; parentModules: string[]; ceiling?: PlanBenefits; planIds?: string[] }
 ) {
   const values: Record<string, unknown> = {};
   const str = (v: unknown, max: number) => (v === undefined ? undefined : String(v ?? "").trim().slice(0, max) || null);
@@ -45,5 +46,14 @@ export function accountValues(
   if (body.active !== undefined) values.active = Boolean(body.active);
   if (body.leadEdit !== undefined) values.leadEdit = Boolean(body.leadEdit);
   if (body.productEdit !== undefined) values.productEdit = Boolean(body.productEdit);
+  // Plano (só os planos da conta mãe) e benefícios (nunca acima do que a conta mãe tem)
+  if (body.planId !== undefined) {
+    const planId = body.planId ? String(body.planId) : null;
+    if (planId && !(opts.planIds || []).includes(planId)) return { error: "Plano inválido" } as const;
+    values.planId = planId;
+  }
+  if (["maxWhatsapp", "callsPerMonth", "supportAccess", "premiumAccess"].some((k) => body[k] !== undefined)) {
+    Object.assign(values, normalizeBenefits(body as never, opts.ceiling));
+  }
   return { values } as const;
 }

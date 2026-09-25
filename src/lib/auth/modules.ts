@@ -18,6 +18,7 @@ export const MODULES = [
   { key: "chatbot", label: "Chatbot", href: "/chatbot" },
   { key: "configuracoes", label: "Configurações", href: "/configuracoes" },
   { key: "parceiros", label: "Parceiros", href: "/parceiros" },
+  { key: "planos", label: "Planos", href: "/planos" },
   { key: "permissoes", label: "Permissões", href: "/permissoes" },
   { key: "plataforma", label: "Plataforma", href: "/plataforma" },
 ] as const;
@@ -35,7 +36,8 @@ export function moduleLabel(key: string, accountType?: string) {
 
 /** Menus que fazem sentido para cada tipo de conta (Cliente não tem sub-clientes) */
 export function modulesAllowedForType(type: AccountType): ModuleKey[] {
-  if (type === "CLIENT") return ALL_MODULE_KEYS.filter((k) => k !== "parceiros");
+  // Cliente não cadastra outras contas: não tem Parceiros/Clientes nem Planos
+  if (type === "CLIENT") return ALL_MODULE_KEYS.filter((k) => k !== "parceiros" && k !== "planos");
   return ALL_MODULE_KEYS;
 }
 

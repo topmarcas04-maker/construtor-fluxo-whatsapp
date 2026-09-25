@@ -2,12 +2,13 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { accounts, appUsers } from "@/db/schema";
+import { accounts, appUsers, plans } from "@/db/schema";
 import { requireUser } from "@/lib/auth/server";
 import { ALL_MODULE_KEYS, type AccountType } from "@/lib/auth/modules";
 import { hashPassword } from "@/lib/auth/password";
 import { getAccountModules, uniqueSlug } from "@/lib/tenancy/server";
 import { accountValues } from "./shared";
+import { accountBenefits } from "@/lib/plans/server";
 
 function childTypeOf(type: string): AccountType | null {
   if (type === "MASTER") return "PARTNER";
@@ -58,7 +59,8 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const parent = await db.query.accounts.findFirst({ where: eq(accounts.id, auth.accountId) });
   const parentModules = await getAccountModules(parent || null);
-  const parsed = accountValues(body, { partial: false, childType, parentModules });
+  const planIds = (await db.select({ id: plans.id }).from(plans).where(eq(plans.accountId, auth.accountId))).map((p) => p.id);
+  const parsed = accountValues(body, { partial: false, childType, parentModules, ceiling: parent ? accountBenefits(parent) : undefined, planIds });
   if ("error" in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 });
 
   const admin = body.admin || {};

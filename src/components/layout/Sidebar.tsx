@@ -14,6 +14,7 @@ import {
   Palette,
   AtSign,
   Workflow,
+  Crown,
   PanelLeftClose,
   PanelLeftOpen,
   X,
@@ -32,12 +33,13 @@ const ICONS: Record<ModuleKey, LucideIcon> = {
   chatbot: Workflow,
   configuracoes: Settings,
   parceiros: Handshake,
+  planos: Crown,
   permissoes: ShieldCheck,
   plataforma: Palette,
 };
 
 /** Agrupamento visual do menu. Menus novos entram no primeiro grupo automaticamente. */
-const ADMIN_KEYS: ModuleKey[] = ["parceiros", "permissoes", "plataforma"];
+const ADMIN_KEYS: ModuleKey[] = ["parceiros", "planos", "permissoes", "plataforma"];
 
 export function Sidebar({
   branding,

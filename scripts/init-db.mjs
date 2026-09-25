@@ -607,6 +607,35 @@ CREATE TABLE IF NOT EXISTS followup_settings (
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS fu_count integer NOT NULL DEFAULT 0;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS fu_last_at timestamptz;
 
+-- Planos e serviços (suporte, calls)
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS plan_id uuid;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS max_whatsapp integer NOT NULL DEFAULT 1;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS calls_per_month integer NOT NULL DEFAULT 0;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS support_access boolean NOT NULL DEFAULT false;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS premium_access boolean NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS plans (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name varchar(80) NOT NULL,
+  description text,
+  price varchar(60),
+  modules jsonb NOT NULL DEFAULT '[]'::jsonb,
+  max_whatsapp integer NOT NULL DEFAULT 1,
+  calls_per_month integer NOT NULL DEFAULT 0,
+  support_access boolean NOT NULL DEFAULT false,
+  premium_access boolean NOT NULL DEFAULT false,
+  sort integer NOT NULL DEFAULT 0,
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS plans_account_idx ON plans (account_id);
+CREATE TABLE IF NOT EXISTS account_services (
+  account_id uuid PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  support_phone varchar(40),
+  support_hours varchar(160),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- Migrações que rodam uma única vez
 CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());
 DO $$ BEGIN

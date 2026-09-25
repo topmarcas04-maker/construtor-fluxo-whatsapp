@@ -131,6 +131,16 @@ export const accounts = pgTable(
     leadEdit: boolean("lead_edit").notNull().default(false),
     /** Cliente pode editar os próprios produtos (definido por quem cadastrou) */
     productEdit: boolean("product_edit").notNull().default(true),
+    /** Plano escolhido por quem cadastrou (modelo; os benefícios ficam copiados abaixo e podem ser ajustados) */
+    planId: uuid("plan_id"),
+    /** Quantos números de WhatsApp a conta pode conectar (1 a 3) */
+    maxWhatsapp: integer("max_whatsapp").notNull().default(1),
+    /** Calls de acompanhamento por mês */
+    callsPerMonth: integer("calls_per_month").notNull().default(0),
+    /** Botão de suporte pelo WhatsApp */
+    supportAccess: boolean("support_access").notNull().default(false),
+    /** Conteúdo premium da área de membros */
+    premiumAccess: boolean("premium_access").notNull().default(false),
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -548,6 +558,46 @@ export const platformSettings = pgTable("platform_settings", {
   topBg: varchar("top_bg", { length: 20 }).notNull().default("#ffffff"),
   topText: varchar("top_text", { length: 20 }).notNull().default("#0f172a"),
   accent: varchar("accent", { length: 20 }).notNull().default("#155e75"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ============================================================================
+// PLANOS E SERVIÇOS (suporte, calls)
+// ============================================================================
+
+/** Plano que uma conta (Master ou Parceiro) oferece às contas que cadastra */
+export const plans = pgTable(
+  "plans",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Conta dona do plano (quem vende) */
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 80 }).notNull(),
+    description: text("description"),
+    /** Preço como texto livre (ex.: "R$ 297/mês") */
+    price: varchar("price", { length: 60 }),
+    modules: jsonb("modules").$type<string[]>().notNull().default([]),
+    maxWhatsapp: integer("max_whatsapp").notNull().default(1),
+    callsPerMonth: integer("calls_per_month").notNull().default(0),
+    supportAccess: boolean("support_access").notNull().default(false),
+    premiumAccess: boolean("premium_access").notNull().default(false),
+    sort: integer("sort").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("plans_account_idx").on(table.accountId)]
+);
+
+/** Serviços que a conta presta às contas abaixo dela: WhatsApp de suporte e agenda de calls */
+export const accountServices = pgTable("account_services", {
+  accountId: uuid("account_id")
+    .primaryKey()
+    .references(() => accounts.id, { onDelete: "cascade" }),
+  supportPhone: varchar("support_phone", { length: 40 }),
+  /** Horário do suporte (texto, aparece para o cliente) */
+  supportHours: varchar("support_hours", { length: 160 }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

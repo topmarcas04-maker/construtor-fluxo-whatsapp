@@ -2,11 +2,12 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db/client";
-import { accounts } from "@/db/schema";
+import { accounts, plans } from "@/db/schema";
 import { requireUser } from "@/lib/auth/server";
 import type { AccountType } from "@/lib/auth/modules";
 import { getAccountModules } from "@/lib/tenancy/server";
 import { accountValues } from "../shared";
+import { accountBenefits } from "@/lib/plans/server";
 
 async function ownChild(parentId: string, id: string) {
   return db.query.accounts.findFirst({ where: and(eq(accounts.id, id), eq(accounts.parentId, parentId)) });
@@ -24,6 +25,8 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     partial: true,
     childType: child.type as AccountType,
     parentModules: await getAccountModules(parent || null),
+    ceiling: parent ? accountBenefits(parent) : undefined,
+    planIds: (await db.select({ id: plans.id }).from(plans).where(eq(plans.accountId, auth.accountId))).map((p) => p.id),
   });
   if ("error" in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 });
   const [updated] = await db.update(accounts).set(parsed.values).where(eq(accounts.id, id)).returning();
