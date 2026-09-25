@@ -36,7 +36,11 @@ export async function broadcastAudience(db: Db, accountId: string, f: BroadcastF
      WHERE l.account_id = ${accountId}
        AND c.channel = 'WHATSAPP'
        AND c.is_group = false
-       AND c.phone_jid LIKE '%@s.whatsapp.net'
+       AND c.phone_jid NOT LIKE '%@g.us'
+       AND c.phone_jid NOT LIKE '%@broadcast'
+       AND c.phone_jid NOT LIKE '%@newsletter'
+       AND c.phone_jid NOT LIKE 'ig:%'
+       AND c.phone_jid NOT LIKE 'fb:%'
   `);
 
   const cols = await db

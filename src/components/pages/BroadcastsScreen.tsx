@@ -336,11 +336,14 @@ export function BroadcastsScreen() {
 
             {step === 1 && (
               <>
+                <p className="text-xs text-slate-500">
+                  Cada grupo marcado soma uma condição: o lead precisa passar em todos. Deixe um grupo sem nada marcado para valer todos.
+                </p>
                 <Field label="Com estas etiquetas (qualquer uma)">
-                  <Chips items={opts.tags} value={form.filters.tagIds} onChange={(v) => setF({ tagIds: v })} />
+                  <Chips items={opts.tags} value={form.filters.tagIds} onChange={(v) => setF({ tagIds: v, excludeTagIds: form.filters.excludeTagIds.filter((t) => !v.includes(t)) })} />
                 </Field>
                 <Field label="Sem estas etiquetas">
-                  <Chips items={opts.tags} value={form.filters.excludeTagIds} onChange={(v) => setF({ excludeTagIds: v })} tone="red" />
+                  <Chips items={opts.tags} value={form.filters.excludeTagIds} onChange={(v) => setF({ excludeTagIds: v, tagIds: form.filters.tagIds.filter((t) => !v.includes(t)) })} tone="red" />
                 </Field>
                 <div>
                   <p className="mb-1.5 text-sm font-semibold text-slate-800">Colunas do funil</p>
