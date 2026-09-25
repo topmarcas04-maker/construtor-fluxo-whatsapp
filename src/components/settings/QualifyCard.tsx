@@ -162,6 +162,31 @@ export function QualifyCard({ q, onChange }: { q: QualifySettings; onChange: (q:
                     })}
                   </div>
                 )}
+                <p className="mt-3 mb-1.5 text-xs font-semibold text-slate-600">Ao completar os dados:</p>
+                <div className="inline-flex flex-wrap gap-1 rounded-xl bg-white p-1">
+                  {(
+                    [
+                      ["ONLY_HANDOFF", "Só transferir, sem passar valor"],
+                      ["ANSWER", "Responder e depois transferir"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => onChange({ ...q, handoffReply: key })}
+                      className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
+                        q.handoffReply === key ? "bg-[var(--accent)] text-white" : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-xs text-slate-500">
+                  {q.handoffReply === "ONLY_HANDOFF"
+                    ? "A IA nunca passa preço, parcelas nem promoções: quem passa é o vendedor. Com os dados completos, o cliente recebe só a mensagem de transferência. Combine com \"Antes de informar\" para o preço nem chegar à IA."
+                    : "A IA ainda responde o que o cliente pediu (pode incluir o preço) e em seguida transfere."}
+                </p>
                 <p className="mt-2 text-xs text-slate-500">
                   {q.required.length
                     ? "Com todos esses dados, a IA para de responder e o lead vai para o próximo vendedor da fila (rodízio em Distribuição), com a mensagem de transferência."

@@ -95,7 +95,7 @@ import { withDefaults, fillName, type FollowupSettings } from "../src/lib/follow
 import { generateFollowup } from "../src/lib/ai/followup";
 import { replyDelayMs, typingMs } from "../src/lib/ai/style";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "../src/lib/ai/hours";
-import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, type QualifyData } from "../src/lib/ai/qualify";
+import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff, type QualifyData } from "../src/lib/ai/qualify";
 import { sellerPool, chooseSeller, type RotationState } from "../src/lib/ai/distribution";
 import { loadCatalogFor } from "../src/lib/ai/catalog";
 import { storageReady, getObject, signedUrl } from "../src/lib/storage/s3";
@@ -1330,11 +1330,35 @@ async function runAi(accountId: string, conversationId: string, force = false) {
   const aiOpts = { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL };
   let decision = await runSdrAgent(agentInput(pending), aiOpts);
   if (!decision) return;
+
+  // Dados de qualificação (endereço, uso, campos criados pela empresa...) e transferência automática:
+  // com os campos obrigatórios preenchidos, o lead vai para o próximo vendedor da fila.
+  const qData = mergeQualifyData(qualify, lead.qualifyData as QualifyData | null, decision.data);
+  if (JSON.stringify(qData) !== JSON.stringify(lead.qualifyData || {})) {
+    await db.update(leads).set({ qualifyData: qData }).where(eq(leads.id, lead.id));
+  }
+  const missingReq = missingForHandoff(qualify, {
+    name: decision.name || (lead.cardName && lead.cardName !== "Lead" ? lead.cardName : null),
+    city: decision.city || lead.city,
+    data: qData,
+    leadTexts,
+  });
+  const autoComplete = Boolean(missingReq && missingReq.length === 0);
+  // "Só transferir": com os dados completos a IA não passa preço, foto nem vídeo — só a transferência
+  const silentHandoff = autoComplete && onlyHandoff(qualify);
+  if (silentHandoff) {
+    decision.reply = (settings.handoffMessage ?? "").trim()
+      ? ""
+      : "Obrigado! Vou te passar para um de nossos consultores, que vai continuar seu atendimento por aqui.";
+    decision.productCodes = [];
+    decision.videoCode = null;
+  }
+
   // Cliente acabou de informar os dados: responde já com preço e detalhes liberados
   let unlocked = !pending;
   if (!lead.qualifiedAt && qualify.mode !== "OFF" && isQualified(qualify, decision, leadTexts, lead.city)) {
     await db.update(leads).set({ qualifiedAt: new Date() }).where(eq(leads.id, lead.id));
-    if (pending) {
+    if (pending && !silentHandoff) {
       const again = await runSdrAgent(agentInput(false), aiOpts).catch(() => null);
       if (again) decision = again;
       unlocked = true;
@@ -1372,19 +1396,7 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     decision.appointment.subject = (interestName && !base.includes(interestName) ? `${base} – ${interestName}` : base).slice(0, 200);
   }
 
-  // Dados de qualificação (endereço, uso, campos criados pela empresa...) e transferência automática:
-  // com os campos obrigatórios preenchidos, o lead vai para o próximo vendedor da fila.
-  const qData = mergeQualifyData(qualify, lead.qualifyData as QualifyData | null, decision.data);
-  if (JSON.stringify(qData) !== JSON.stringify(lead.qualifyData || {})) {
-    await db.update(leads).set({ qualifyData: qData }).where(eq(leads.id, lead.id));
-  }
-  const missingReq = missingForHandoff(qualify, {
-    name: decision.name || (lead.cardName && lead.cardName !== "Lead" ? lead.cardName : null),
-    city: decision.city || lead.city,
-    data: qData,
-    leadTexts,
-  });
-  if (missingReq && missingReq.length === 0 && !decision.handoff) {
+  if (autoComplete && !decision.handoff) {
     decision.handoff = true;
     decision.handoffReason = decision.handoffReason || "Dados da qualificação completos";
   }
@@ -1440,7 +1452,7 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     const item = catalog.find((c) => c.ai.code === ref.code);
     if (!item) continue;
     await pause(900);
-    const r = await sendProductPhoto(accountId, conversation.phoneJid, item.id, "AI", null, false, { label: ref.label, hidePrice: !unlocked });
+    const r = await sendProductPhoto(accountId, conversation.phoneJid, item.id, "AI", null, false, { label: ref.label, hidePrice: !unlocked || onlyHandoff(qualify) });
     if ("error" in r) console.warn(`[IA ${accountId.slice(0, 8)}] foto do produto ${ref.code}: ${r.error}`);
   }
 

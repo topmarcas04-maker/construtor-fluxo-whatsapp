@@ -13,7 +13,7 @@ import { ensureActions } from "@/lib/actions/shared";
 import { ensureFunnels, ensureColumns } from "@/lib/funnel/shared";
 import { storageReady } from "@/lib/storage/s3";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "@/lib/ai/hours";
-import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff } from "@/lib/ai/qualify";
+import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff } from "@/lib/ai/qualify";
 
 /**
  * POST — conversa de teste com a IA (nada é salvo nem enviado).
@@ -106,10 +106,21 @@ export async function POST(req: NextRequest) {
     const aiOpts = { apiKey: key.apiKey, model, baseUrl: process.env.ANTHROPIC_BASE_URL };
     let d = await runSdrAgent(input(pending), aiOpts);
     if (!d) return NextResponse.json({ error: "A IA não respondeu" }, { status: 502 });
+    // Transferência automática (igual ao atendimento real); "só transferir" não passa preço nem foto
+    const missingFirst = missingForHandoff(qualify, { name: d.name, city: d.city, data: mergeQualifyData(qualify, null, d.data), leadTexts });
+    const silentHandoff = Boolean(missingFirst && missingFirst.length === 0 && onlyHandoff(qualify));
+    if (silentHandoff) {
+      d.reply = String(draft.handoffMessage ?? settings.handoffMessage ?? "").trim()
+        ? ""
+        : "Obrigado! Vou te passar para um de nossos consultores, que vai continuar seu atendimento por aqui.";
+      d.productCodes = [];
+      d.videoCode = null;
+      d.handoff = true;
+    }
     let qualified = Boolean(body.qualified);
     if (!qualified && qualify.mode !== "OFF" && isQualified(qualify, d, leadTexts, null)) {
       qualified = true;
-      if (pending) d = (await runSdrAgent(input(false), aiOpts).catch(() => null)) || d;
+      if (pending && !silentHandoff) d = (await runSdrAgent(input(false), aiOpts).catch(() => null)) || d;
     }
     // Transferência automática quando os dados obrigatórios chegaram (igual ao atendimento real)
     const missingReq = missingForHandoff(qualify, { name: d.name, city: d.city, data: mergeQualifyData(qualify, null, d.data), leadTexts });
@@ -133,7 +144,7 @@ export async function POST(req: NextRequest) {
       const product = prodRows.find((p) => p.id === catalog.find((c) => c.ai.code === ref.code)?.id);
       if (!product) continue;
       const img = pickProductImage(imgRows.filter((i) => i.productId === product.id), { label: ref.label });
-      media.push({ kind: img ? "image" : "text", url: img ? `/api/products/image/${img.id}` : null, caption: productCaption(product, img, false, !unlocked) });
+      media.push({ kind: img ? "image" : "text", url: img ? `/api/products/image/${img.id}` : null, caption: productCaption(product, img, false, !unlocked || onlyHandoff(qualify)) });
     }
     const videoItem = d.videoCode && unlocked ? catalog.find((c) => c.ai.code === d.videoCode && c.ai.hasVideo) : null;
     const videoProduct = videoItem ? prodRows.find((p) => p.id === videoItem.id) : null;
