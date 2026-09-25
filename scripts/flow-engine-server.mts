@@ -95,7 +95,7 @@ import { withDefaults, fillName, type FollowupSettings } from "../src/lib/follow
 import { generateFollowup } from "../src/lib/ai/followup";
 import { replyDelayMs, typingMs } from "../src/lib/ai/style";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "../src/lib/ai/hours";
-import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem } from "../src/lib/ai/qualify";
+import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, type QualifyData } from "../src/lib/ai/qualify";
 import { sellerPool, chooseSeller, type RotationState } from "../src/lib/ai/distribution";
 import { loadCatalogFor } from "../src/lib/ai/catalog";
 import { storageReady, getObject, signedUrl } from "../src/lib/storage/s3";
@@ -1305,6 +1305,7 @@ async function runAi(accountId: string, conversationId: string, force = false) {
         stage: lead.stage,
         score: lead.score,
         summary: lead.aiSummary,
+        data: (lead.qualifyData || null) as QualifyData | null,
       },
       channel: conversation.channel,
       history: history.map((m) => ({
@@ -1369,6 +1370,23 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     const sched = action?.kind === "SCHEDULE" ? action : null;
     const base = sched?.appointmentTitle || sched?.name || decision.appointment.subject;
     decision.appointment.subject = (interestName && !base.includes(interestName) ? `${base} – ${interestName}` : base).slice(0, 200);
+  }
+
+  // Dados de qualificação (endereço, uso, campos criados pela empresa...) e transferência automática:
+  // com os campos obrigatórios preenchidos, o lead vai para o próximo vendedor da fila.
+  const qData = mergeQualifyData(qualify, lead.qualifyData as QualifyData | null, decision.data);
+  if (JSON.stringify(qData) !== JSON.stringify(lead.qualifyData || {})) {
+    await db.update(leads).set({ qualifyData: qData }).where(eq(leads.id, lead.id));
+  }
+  const missingReq = missingForHandoff(qualify, {
+    name: decision.name || (lead.cardName && lead.cardName !== "Lead" ? lead.cardName : null),
+    city: decision.city || lead.city,
+    data: qData,
+    leadTexts,
+  });
+  if (missingReq && missingReq.length === 0 && !decision.handoff) {
+    decision.handoff = true;
+    decision.handoffReason = decision.handoffReason || "Dados da qualificação completos";
   }
 
   await applyDecision(accountId, lead.id, conversationId, decision, allTags, ruleColumns, catalog, funnelList);
@@ -1704,12 +1722,21 @@ async function assignSeller(
   city: string | null,
   saleType: "ANY" | "WHOLESALE" | "RETAIL"
 ) {
-  const pool = sellerPool(rules.map((r) => ({ ...r, sellerActive: r.seller?.active !== false })), city, saleType);
+  let pool = sellerPool(rules.map((r) => ({ ...r, sellerActive: r.seller?.active !== false })), city, saleType);
+  const st = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
+  // Rodízio ligado e nenhuma regra serve para este lead: a fila é com todos os vendedores ativos
+  if (!pool.length && st?.rotationEnabled) {
+    const all = await db
+      .select({ id: sellers.id })
+      .from(sellers)
+      .where(and(eq(sellers.accountId, accountId), eq(sellers.active, true)));
+    pool = all.map((x) => x.id);
+  }
   if (pool.length <= 1) return pool[0] || null;
-  const [st, sel] = await Promise.all([
-    db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) }),
-    db.select({ id: sellers.id, shift: sellers.shift }).from(sellers).where(and(eq(sellers.accountId, accountId), inArray(sellers.id, pool))),
-  ]);
+  const sel = await db
+    .select({ id: sellers.id, shift: sellers.shift })
+    .from(sellers)
+    .where(and(eq(sellers.accountId, accountId), inArray(sellers.id, pool)));
   const r = chooseSeller(pool, {
     shifts: Object.fromEntries(sel.map((x) => [x.id, x.shift])),
     rotation: { enabled: Boolean(st?.rotationEnabled), batch: st?.rotationBatch || 1 },
@@ -1778,6 +1805,9 @@ async function handoffToSeller(
         `*Cliente:* ${d.name || current?.cardName || leadName || "sem nome"}`,
         city ? `*Cidade:* ${city}` : null,
         d.interest ? `*Interesse:* ${d.interest}` : null,
+        ...Object.values((current?.qualifyData || {}) as QualifyData)
+          .filter((x) => x.value)
+          .map((x) => `*${x.label}:* ${x.value}`),
         d.appointment ? `*Agendado:* ${d.appointment.subject} em ${d.appointment.date.split("-").reverse().join("/")} às ${d.appointment.time}` : null,
         `*Nota:* ${d.score}/100`,
         d.summary ? `\n${d.summary}` : null,

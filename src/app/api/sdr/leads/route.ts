@@ -72,6 +72,7 @@ export async function GET() {
         aiPaused: lead.aiPaused,
         inBot: Boolean(lead.botId),
         aiSummary: lead.aiSummary,
+        qualifyData: lead.qualifyData || null,
         score: lead.score,
         interest: lead.interest,
         saleType: lead.saleType,

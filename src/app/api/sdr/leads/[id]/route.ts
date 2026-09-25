@@ -119,6 +119,15 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     }
     if (body.city !== undefined) set.city = String(body.city || "").trim() || null;
     if (body.note !== undefined) set.note = String(body.note || "") || null;
+    // Dados da qualificação editados no painel: { chave: "valor" } (vazio apaga o valor)
+    if (body.qualifyData && typeof body.qualifyData === "object" && !Array.isArray(body.qualifyData)) {
+      const data = { ...((lead.qualifyData || {}) as Record<string, { label: string; value: string }>) };
+      for (const [k, v] of Object.entries(body.qualifyData as Record<string, unknown>)) {
+        if (!data[k]) continue;
+        data[k] = { ...data[k], value: String(v ?? "").trim().slice(0, 300) };
+      }
+      set.qualifyData = data;
+    }
     if (body.interest !== undefined) set.interest = String(body.interest || "").slice(0, 255) || null;
     if (body.aiPaused !== undefined) set.aiPaused = Boolean(body.aiPaused);
     if (body.saleType !== undefined && SALE_TYPES.includes(body.saleType)) set.saleType = body.saleType;

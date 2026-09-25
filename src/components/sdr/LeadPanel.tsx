@@ -193,6 +193,20 @@ export function LeadPanel({
         </div>
       </div>
 
+      {Object.keys(lead.qualifyData || {}).length > 0 && (
+        <div>
+          <span className={labelCls}>Dados da qualificação</span>
+          <div className="space-y-2">
+            {Object.entries(lead.qualifyData || {}).map(([key, item]) => (
+              <div key={key}>
+                <span className="mb-0.5 block text-xs text-slate-500">{item.label}</span>
+                <BlurInput value={item.value || ""} placeholder="—" onSave={(v) => onPatch({ qualifyData: { [key]: v } })} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div>
         <span className={labelCls}>Produto de interesse</span>
         <select

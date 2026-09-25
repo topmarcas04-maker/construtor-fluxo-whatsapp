@@ -348,6 +348,8 @@ export const leads = pgTable(
     fuLastAt: timestamp("fu_last_at", { withTimezone: true }),
     /** Quando o cliente informou os dados da qualificação (libera preço e detalhes para a IA) */
     qualifiedAt: timestamp("qualified_at", { withTimezone: true }),
+    /** Dados de qualificação coletados pela IA (endereço, uso, campos criados pela empresa…) */
+    qualifyData: jsonb("qualify_data").$type<import("../lib/ai/qualify").QualifyData>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

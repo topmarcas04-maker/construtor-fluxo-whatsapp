@@ -586,6 +586,8 @@ ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS rotation_batch integer NOT NULL
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS rotation_state jsonb;
 ALTER TABLE sellers ADD COLUMN IF NOT EXISTS shift jsonb;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualified_at timestamptz;
+-- Dados da qualificação (endereço, campos criados pela empresa) coletados pela IA
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualify_data jsonb;
 
 -- Conversas não lidas
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_read_at timestamptz;

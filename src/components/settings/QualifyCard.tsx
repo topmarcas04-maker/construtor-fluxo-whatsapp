@@ -1,14 +1,43 @@
 "use client";
 
-import { ClipboardList } from "lucide-react";
-import { Textarea } from "@/components/ui";
-import { QUALIFY_FIELDS, QUALIFY_MODES, type QualifySettings } from "@/lib/ai/qualify";
+import { useState } from "react";
+import { ClipboardList, Plus, X, UserCheck } from "lucide-react";
+import { Input, Textarea, Toggle } from "@/components/ui";
+import { MAX_CUSTOM_FIELDS, QUALIFY_MODES, allQualifyFields, type QualifySettings } from "@/lib/ai/qualify";
 
 /** O que a IA pergunta ao cliente e se pergunta antes de passar o preço */
 export function QualifyCard({ q, onChange }: { q: QualifySettings; onChange: (q: QualifySettings) => void }) {
   const mode = QUALIFY_MODES.find((m) => m.key === q.mode) || QUALIFY_MODES[0];
+  const fields = allQualifyFields(q);
   const toggle = (key: string) =>
-    onChange({ ...q, fields: q.fields.includes(key) ? q.fields.filter((f) => f !== key) : [...q.fields, key] });
+    onChange(
+      q.fields.includes(key)
+        ? { ...q, fields: q.fields.filter((f) => f !== key), required: q.required.filter((f) => f !== key) }
+        : { ...q, fields: [...q.fields, key] }
+    );
+  const toggleRequired = (key: string) =>
+    onChange({ ...q, required: q.required.includes(key) ? q.required.filter((f) => f !== key) : [...q.required, key] });
+
+  // Novo campo criado pela empresa
+  const [newLabel, setNewLabel] = useState("");
+  const [newAsk, setNewAsk] = useState("");
+  const addField = () => {
+    const label = newLabel.trim();
+    if (!label || q.customFields.length >= MAX_CUSTOM_FIELDS) return;
+    const key = `c_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+    const ask = newAsk.trim() || label.toLowerCase();
+    onChange({ ...q, customFields: [...q.customFields, { key, label, ask }], fields: [...q.fields, key] });
+    setNewLabel("");
+    setNewAsk("");
+  };
+  const removeField = (key: string) =>
+    onChange({
+      ...q,
+      customFields: q.customFields.filter((f) => f.key !== key),
+      fields: q.fields.filter((f) => f !== key),
+      required: q.required.filter((f) => f !== key),
+    });
+  const selected = fields.filter((f) => q.fields.includes(f.key));
 
   return (
     <div className="rounded-xl border border-slate-200 p-5">
@@ -43,24 +72,105 @@ export function QualifyCard({ q, onChange }: { q: QualifySettings; onChange: (q:
           <div className="mt-4">
             <p className="mb-1.5 text-sm font-semibold text-slate-800">O que perguntar</p>
             <div className="flex flex-wrap gap-2">
-              {QUALIFY_FIELDS.map((f) => {
+              {fields.map((f) => {
                 const on = q.fields.includes(f.key);
                 return (
-                  <button
+                  <span
                     key={f.key}
-                    type="button"
-                    onClick={() => toggle(f.key)}
-                    className={`rounded-full border px-3 py-1 text-sm font-semibold transition ${
+                    className={`inline-flex items-center rounded-full border text-sm font-semibold transition ${
                       on ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]" : "border-slate-200 text-slate-500 hover:border-slate-300"
                     }`}
                   >
-                    {on ? "✓ " : ""}
-                    {f.label}
-                  </button>
+                    <button type="button" onClick={() => toggle(f.key)} className="px-3 py-1" title={`A IA pergunta ${f.ask}`}>
+                      {on ? "✓ " : ""}
+                      {f.label}
+                    </button>
+                    {f.custom && (
+                      <button
+                        type="button"
+                        onClick={() => removeField(f.key)}
+                        className="-ml-1.5 mr-1.5 rounded-full p-0.5 opacity-60 hover:bg-slate-200 hover:opacity-100"
+                        title="Excluir este campo"
+                      >
+                        <X size={13} />
+                      </button>
+                    )}
+                  </span>
                 );
               })}
             </div>
+
+            {q.customFields.length < MAX_CUSTOM_FIELDS && (
+              <div className="mt-3 rounded-lg border border-dashed border-slate-300 p-3">
+                <p className="mb-2 text-xs font-semibold text-slate-600">Criar um campo novo</p>
+                <div className="grid gap-2 sm:grid-cols-[1fr_1.4fr_auto]">
+                  <Input value={newLabel} onChange={(e) => setNewLabel(e.target.value)} placeholder="Nome do campo (ex.: CNH)" maxLength={60} />
+                  <Input
+                    value={newAsk}
+                    onChange={(e) => setNewAsk(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addField())}
+                    placeholder='Como a IA pergunta (ex.: "se já tem CNH")'
+                    maxLength={200}
+                  />
+                  <button
+                    type="button"
+                    onClick={addField}
+                    disabled={!newLabel.trim()}
+                    className="inline-flex items-center justify-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                  >
+                    <Plus size={15} /> Adicionar
+                  </button>
+                </div>
+                <p className="mt-1.5 text-xs text-slate-500">O campo aparece na ficha do lead, preenchido pela IA, e no aviso que vai para o vendedor.</p>
+              </div>
+            )}
           </div>
+
+          <div className="mt-4 rounded-lg bg-slate-50 p-3">
+            <p className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <UserCheck size={16} /> Passar para o vendedor quando tiver os dados
+            </p>
+            <div className="mt-2">
+              <Toggle
+                checked={q.autoHandoff}
+                onChange={(v) => onChange({ ...q, autoHandoff: v })}
+                label={q.autoHandoff ? "Sim, transferir sozinho" : "Não, a IA decide quando transferir"}
+              />
+            </div>
+            {q.autoHandoff && (
+              <>
+                <p className="mt-3 mb-1.5 text-xs font-semibold text-slate-600">Transferir assim que o cliente informar:</p>
+                {selected.length === 0 ? (
+                  <p className="text-xs text-slate-500">Marque acima o que a IA deve perguntar.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {selected.map((f) => {
+                      const on = q.required.includes(f.key);
+                      return (
+                        <button
+                          key={f.key}
+                          type="button"
+                          onClick={() => toggleRequired(f.key)}
+                          className={`rounded-full border px-3 py-1 text-sm font-semibold transition ${
+                            on ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                          }`}
+                        >
+                          {on ? "✓ " : ""}
+                          {f.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="mt-2 text-xs text-slate-500">
+                  {q.required.length
+                    ? "Com todos esses dados, a IA para de responder e o lead vai para o próximo vendedor da fila (rodízio em Distribuição), com a mensagem de transferência."
+                    : "Escolha pelo menos um dado para a transferência automática funcionar."}
+                </p>
+              </>
+            )}
+          </div>
+
           <div className="mt-4">
             <p className="mb-1.5 text-sm font-semibold text-slate-800">Outras perguntas (opcional)</p>
             <Textarea

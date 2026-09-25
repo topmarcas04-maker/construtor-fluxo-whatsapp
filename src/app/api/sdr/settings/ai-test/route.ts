@@ -13,7 +13,7 @@ import { ensureActions } from "@/lib/actions/shared";
 import { ensureFunnels, ensureColumns } from "@/lib/funnel/shared";
 import { storageReady } from "@/lib/storage/s3";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "@/lib/ai/hours";
-import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem } from "@/lib/ai/qualify";
+import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff } from "@/lib/ai/qualify";
 
 /**
  * POST — conversa de teste com a IA (nada é salvo nem enviado).
@@ -111,6 +111,9 @@ export async function POST(req: NextRequest) {
       qualified = true;
       if (pending) d = (await runSdrAgent(input(false), aiOpts).catch(() => null)) || d;
     }
+    // Transferência automática quando os dados obrigatórios chegaram (igual ao atendimento real)
+    const missingReq = missingForHandoff(qualify, { name: d.name, city: d.city, data: mergeQualifyData(qualify, null, d.data), leadTexts });
+    if (missingReq && missingReq.length === 0) d.handoff = true;
     const unlocked = !pending || qualified;
     const parts = d.reply.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).slice(0, 3);
     // Fotos e vídeo como o cliente receberia (mesma foto e legenda do WhatsApp)

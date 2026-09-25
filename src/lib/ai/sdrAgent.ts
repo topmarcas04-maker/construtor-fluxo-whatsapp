@@ -10,7 +10,7 @@
  * Não use imports com "@/": este arquivo é importado pelo motor via caminho relativo.
  */
 
-import { qualifyBlock, type QualifySettings } from "./qualify";
+import { qualifyBlock, qualifyDataFields, type QualifyData, type QualifySettings } from "./qualify";
 import { styleBlock, type StyleSettings } from "./style";
 
 export interface AgentHistoryMessage {
@@ -27,6 +27,8 @@ export interface AgentLeadContext {
   stage: string;
   score: number | null;
   summary: string | null;
+  /** Dados de qualificação já coletados (endereço, uso, campos da empresa...) */
+  data?: QualifyData | null;
 }
 
 export interface AgentInput {
@@ -116,6 +118,8 @@ export interface AgentDecision {
   interestCode: string | null;
   /** Nome da coluna do funil (com regra) para onde mover o lead */
   columnName: string | null;
+  /** Dados de qualificação informados pelo cliente (chave do campo → valor) */
+  data: Record<string, string>;
 }
 
 export const TOOL_NAME = "registrar_atendimento";
@@ -215,6 +219,26 @@ const TOOL = {
   },
 } as const;
 
+/** Ferramenta com o campo "dados" montado a partir dos campos de qualificação da conta */
+function buildTool(input: AgentInput) {
+  const fields = input.qualify ? qualifyDataFields(input.qualify) : [];
+  if (!fields.length) return TOOL;
+  return {
+    ...TOOL,
+    input_schema: {
+      ...TOOL.input_schema,
+      properties: {
+        ...TOOL.input_schema.properties,
+        dados: {
+          type: "object",
+          description: "Dados de qualificação que o cliente JÁ informou na conversa. Deixe vazio o que ele não disse; nunca invente.",
+          properties: Object.fromEntries(fields.map((f) => [f.key, { type: "string", description: f.label }])),
+        },
+      },
+    },
+  };
+}
+
 const SALE_TYPE_TO_PT: Record<string, string> = { ANY: "não definido", WHOLESALE: "atacado", RETAIL: "varejo" };
 
 export function buildSystemPrompt(input: AgentInput) {
@@ -226,6 +250,9 @@ export function buildSystemPrompt(input: AgentInput) {
     l.city ? `cidade: ${l.city}` : null,
     l.interest ? `interesse: ${l.interest}` : null,
     l.saleType !== "ANY" ? `tipo de compra: ${SALE_TYPE_TO_PT[l.saleType]}` : null,
+    ...Object.values(l.data || {})
+      .filter((d) => d.value)
+      .map((d) => `${d.label.toLowerCase()}: ${d.value}`),
     l.summary ? `resumo anterior: ${l.summary}` : null,
   ].filter(Boolean);
 
@@ -244,7 +271,7 @@ REGRAS DE FORMATO
 - Não repita perguntas que o cliente já respondeu. Faça no máximo uma pergunta por vez.
 - Nunca invente preço, estoque, prazo ou condição que não esteja nas instruções ou no catálogo.
 - Se o cliente mandar áudio ou imagem que você não consegue ver, peça gentilmente para escrever.
-- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${styleBlock(input.style || {})}${qualifyBlock(input.qualify, { name: l.name, city: l.city }, input.qualifyPending)}${handoffBlock(input)}${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
+- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${styleBlock(input.style || {})}${qualifyBlock(input.qualify, { name: l.name, city: l.city, data: l.data }, input.qualifyPending)}${handoffBlock(input)}${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
 }
 
 function handoffBlock(input: AgentInput) {
@@ -443,6 +470,7 @@ export function parseDecision(raw: Record<string, unknown>, allowedTags: string[
     appointment: parseAppointment(raw.agendamento),
     phone: parsePhone(raw.telefone),
     columnName: clean(raw.mover_para_coluna, 80),
+    data: parseData(raw.dados),
     actionName: clean(raw.executar_acao, 80),
     interestCode: /^p\d{1,4}$/i.test(String(raw.produto_interesse || "").trim())
       ? String(raw.produto_interesse).trim().toUpperCase()
@@ -452,6 +480,16 @@ export function parseDecision(raw: Record<string, unknown>, allowedTags: string[
       ? /p\d{1,4}/i.exec(String(raw.enviar_video))![0].toUpperCase()
       : null,
   };
+}
+
+function parseData(v: unknown): Record<string, string> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    const text = clean(val, 300);
+    if (/^[a-z][a-z0-9_]{0,24}$/.test(k) && text) out[k] = text;
+  }
+  return out;
 }
 
 function parsePhone(v: unknown) {
@@ -505,7 +543,7 @@ export async function runSdrAgent(
       max_tokens: 1024,
       system: buildSystemPrompt(input),
       messages,
-      tools: [TOOL],
+      tools: [buildTool(input)],
       tool_choice: { type: "tool", name: TOOL_NAME },
     }),
     signal: AbortSignal.timeout(opts.timeoutMs ?? 45000),

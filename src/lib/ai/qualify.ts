@@ -20,22 +20,87 @@ export const QUALIFY_MODES = [
 
 export type QualifyMode = (typeof QUALIFY_MODES)[number]["key"];
 
+/** Campo criado pela própria empresa (master ou parceiro) para a IA perguntar */
+export interface QualifyCustomField {
+  /** Identificador interno ("c_" + letras/números) */
+  key: string;
+  /** Nome que aparece no painel (ex.: "CNH") */
+  label: string;
+  /** Como a IA deve perguntar (ex.: "se já tem CNH") */
+  ask: string;
+}
+
 export interface QualifySettings {
   mode: QualifyMode;
   fields: string[];
   /** Outras perguntas escritas pela empresa */
   custom: string;
+  /** Campos extras criados pela empresa (entram na lista de "O que perguntar") */
+  customFields: QualifyCustomField[];
+  /** Campos que precisam estar preenchidos para passar o lead ao vendedor */
+  required: string[];
+  /** Passa o lead para o próximo vendedor da fila assim que os campos obrigatórios chegam */
+  autoHandoff: boolean;
 }
 
-export const DEFAULT_QUALIFY: QualifySettings = { mode: "OFF", fields: ["name", "city"], custom: "" };
+export const DEFAULT_QUALIFY: QualifySettings = {
+  mode: "OFF",
+  fields: ["name", "city"],
+  custom: "",
+  customFields: [],
+  required: [],
+  autoHandoff: false,
+};
+
+export const MAX_CUSTOM_FIELDS = 12;
+
+/** Campos que vão para colunas próprias do lead (os outros ficam em leads.qualify_data) */
+export const COLUMN_FIELD_KEYS = ["name", "city"];
+
+function normalizeCustomFields(v: unknown): QualifyCustomField[] {
+  if (!Array.isArray(v)) return [];
+  const out: QualifyCustomField[] = [];
+  for (const raw of v) {
+    const o = (raw && typeof raw === "object" ? raw : {}) as Partial<QualifyCustomField>;
+    const key = typeof o.key === "string" && /^c_[a-z0-9]{3,16}$/.test(o.key) ? o.key : null;
+    const label = typeof o.label === "string" ? o.label.trim().slice(0, 60) : "";
+    const ask = typeof o.ask === "string" ? o.ask.trim().slice(0, 200) : "";
+    if (!key || !label || out.some((f) => f.key === key)) continue;
+    out.push({ key, label, ask: ask || label.toLowerCase() });
+    if (out.length >= MAX_CUSTOM_FIELDS) break;
+  }
+  return out;
+}
+
+/** Todos os campos disponíveis para esta conta: os padrão + os criados pela empresa */
+export function allQualifyFields(q: Pick<QualifySettings, "customFields">): { key: string; label: string; ask: string; custom: boolean }[] {
+  return [
+    ...QUALIFY_FIELDS.map((f) => ({ key: f.key as string, label: f.label as string, ask: f.ask as string, custom: false })),
+    ...(q.customFields || []).map((f) => ({ ...f, custom: true })),
+  ];
+}
+
+/** Campos marcados que a IA preenche em "dados" (nome e cidade têm campo próprio) */
+export function qualifyDataFields(q: QualifySettings) {
+  if (q.mode === "OFF") return [];
+  return allQualifyFields(q).filter((f) => q.fields.includes(f.key) && !COLUMN_FIELD_KEYS.includes(f.key));
+}
 
 export function normalizeQualify(v: unknown): QualifySettings {
   const o = (v && typeof v === "object" ? v : {}) as Partial<QualifySettings>;
   const mode = QUALIFY_MODES.some((m) => m.key === o.mode) ? (o.mode as QualifyMode) : DEFAULT_QUALIFY.mode;
-  const fields = Array.isArray(o.fields)
-    ? QUALIFY_FIELDS.map((f) => f.key).filter((k) => (o.fields as unknown[]).includes(k))
-    : DEFAULT_QUALIFY.fields;
-  return { mode, fields, custom: typeof o.custom === "string" ? o.custom.slice(0, 1000) : "" };
+  const customFields = normalizeCustomFields(o.customFields);
+  const known = allQualifyFields({ customFields }).map((f) => f.key);
+  const fields = Array.isArray(o.fields) ? known.filter((k) => (o.fields as unknown[]).includes(k)) : DEFAULT_QUALIFY.fields;
+  const required = Array.isArray(o.required) ? fields.filter((k) => (o.required as unknown[]).includes(k)) : [];
+  return {
+    mode,
+    fields,
+    custom: typeof o.custom === "string" ? o.custom.slice(0, 1000) : "",
+    customFields,
+    required,
+    autoHandoff: o.autoHandoff === true,
+  };
 }
 
 const ESSENTIAL_KEYS = ["name", "city", "address", "use"];
@@ -62,15 +127,48 @@ export function qualifyPending(q: QualifySettings, s: { qualifiedAt?: Date | str
  * (o nome do perfil do WhatsApp não conta).
  */
 export function isQualified(q: QualifySettings, d: { name?: string | null; city?: string | null }, leadTexts: string[], knownCity?: string | null) {
-  const said = norm(leadTexts.join(" \n "));
   return qualifyEssentials(q).every((k) => {
-    if (k === "name") {
-      const first = norm((d.name || "").trim().split(/\s+/)[0] || "");
-      return first.length >= 2 && new RegExp(`(^|[^a-z0-9])${first.replace(/[^a-z0-9]/g, "")}([^a-z0-9]|$)`).test(said);
-    }
+    if (k === "name") return nameSaidByLead(d.name, leadTexts);
     if (k === "city") return Boolean((d.city || knownCity || "").trim());
     return true;
   });
+}
+
+/** O nome só vale se o cliente escreveu (o nome do perfil do WhatsApp não conta) */
+function nameSaidByLead(name: string | null | undefined, leadTexts: string[]) {
+  const said = norm(leadTexts.join(" \n "));
+  const first = norm((name || "").trim().split(/\s+/)[0] || "");
+  return first.length >= 2 && new RegExp(`(^|[^a-z0-9])${first.replace(/[^a-z0-9]/g, "")}([^a-z0-9]|$)`).test(said);
+}
+
+/** Valores coletados de cada campo (fora nome e cidade), com o nome do campo para mostrar no painel */
+export type QualifyData = Record<string, { label: string; value: string }>;
+
+/**
+ * Transferência automática: quais campos obrigatórios ainda faltam?
+ * Lista vazia = pode passar para o vendedor. Sem obrigatórios ou desligado = null (não transfere sozinho).
+ */
+export function missingForHandoff(
+  q: QualifySettings,
+  s: { name?: string | null; city?: string | null; data?: QualifyData | null; leadTexts: string[] }
+): string[] | null {
+  if (q.mode === "OFF" || !q.autoHandoff || !q.required.length) return null;
+  return q.required.filter((k) => {
+    if (k === "name") return !nameSaidByLead(s.name, s.leadTexts);
+    if (k === "city") return !(s.city || "").trim();
+    return !(s.data?.[k]?.value || "").trim();
+  });
+}
+
+/** Junta os dados novos que a IA extraiu com os que o lead já tinha (só campos marcados) */
+export function mergeQualifyData(q: QualifySettings, current: QualifyData | null | undefined, incoming: Record<string, string> | null | undefined): QualifyData {
+  const out: QualifyData = { ...(current || {}) };
+  for (const f of qualifyDataFields(q)) {
+    const v = (incoming?.[f.key] || "").trim();
+    if (v) out[f.key] = { label: f.label, value: v.slice(0, 300) };
+    else if (out[f.key]) out[f.key] = { ...out[f.key], label: f.label };
+  }
+  return out;
 }
 
 /** Item do catálogo sem preço, parcelas nem especificações (enquanto o lead não foi qualificado) */
@@ -83,13 +181,16 @@ export function maskCatalogItem<T extends { price: string; description: string |
 /** Bloco do prompt da IA */
 export function qualifyBlock(
   q: QualifySettings | undefined,
-  known: { name?: string | null; city?: string | null },
+  known: { name?: string | null; city?: string | null; data?: QualifyData | null },
   pending = false
 ) {
   if (!q || q.mode === "OFF") return "";
   // O nome que vem do perfil do WhatsApp pode ser apelido, empresa ou emoji: a IA confere na conversa.
   // A cidade só é preenchida quando o cliente informa, então essa é confiável.
-  const missing = QUALIFY_FIELDS.filter((f) => q.fields.includes(f.key)).filter((f) => !(f.key === "city" && known.city));
+  const missing = allQualifyFields(q)
+    .filter((f) => q.fields.includes(f.key))
+    .filter((f) => !(f.key === "city" && known.city))
+    .filter((f) => !(known.data?.[f.key]?.value || "").trim());
   const custom = q.custom.trim();
   if (!missing.length && !custom) return "";
   const list = [missing.length ? missing.map((f) => f.ask).join("; ") : null, custom ? `e também: ${custom}` : null].filter(Boolean).join("; ");
@@ -121,5 +222,16 @@ export function qualifyBlock(
         .map((k) => QUALIFY_FIELDS.find((f) => f.key === k)!.ask)
         .join(" e ")}. Não diga que não sabe o preço: diga que já vai passar tudo e peça esses dados. Preencha "nome" somente com o nome que o cliente escreveu.`
     );
+  const dataFields = qualifyDataFields(q);
+  if (dataFields.length)
+    lines.push(
+      `- Sempre que o cliente informar algum destes dados, preencha em "dados" (repita os que já sabe): ${dataFields.map((f) => `${f.key} = ${f.label}`).join("; ")}.`
+    );
+  if (q.autoHandoff && q.required.length) {
+    const req = allQualifyFields(q).filter((f) => q.required.includes(f.key));
+    lines.push(
+      `- Assim que o cliente informar ${req.map((f) => f.ask).join(", ")}, o atendimento passa automaticamente para um consultor. Priorize conseguir esses dados, sem pressionar.`
+    );
+  }
   return `\n\nQUALIFICAÇÃO DO LEAD\n${lines.join("\n")}`;
 }

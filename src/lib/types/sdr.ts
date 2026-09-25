@@ -46,6 +46,8 @@ export interface Lead {
   createdAt: string;
   aiPaused: boolean;
   aiSummary: string | null;
+  /** Dados da qualificação coletados pela IA (chave → nome do campo e valor) */
+  qualifyData?: Record<string, { label: string; value: string }> | null;
   score: number | null;
   interest: string | null;
   saleType: "ANY" | "WHOLESALE" | "RETAIL";
