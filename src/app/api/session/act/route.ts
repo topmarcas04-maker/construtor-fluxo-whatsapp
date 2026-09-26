@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
-import { ACTING_COOKIE, getCurrentUser } from "@/lib/auth/server";
+import { ACTING_COOKIE, VIEW_AS_COOKIE, getCurrentUser } from "@/lib/auth/server";
 import { getAccount, isInSubtree } from "@/lib/tenancy/server";
 import { sessionCookieOptions } from "@/lib/auth/session";
 
@@ -13,6 +13,7 @@ export async function POST(request: Request) {
   if (!user) return NextResponse.json({ error: "Faça login novamente" }, { status: 401 });
   const { accountId } = await request.json().catch(() => ({ accountId: null }));
   const res = NextResponse.json({ ok: true });
+  res.cookies.set(VIEW_AS_COOKIE, "", { path: "/", maxAge: 0 });
 
   if (!accountId || accountId === user.homeAccount.id) {
     res.cookies.set(ACTING_COOKIE, "", { path: "/", maxAge: 0 });

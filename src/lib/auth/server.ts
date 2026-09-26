@@ -16,6 +16,8 @@ import { type ModuleKey } from "./modules";
 import { getAccount, getAccountModules, isInSubtree } from "@/lib/tenancy/server";
 
 export const ACTING_COOKIE = "sdr_acting";
+/** "Ver como vendedor": administrador do parceiro observa o painel de um vendedor (somente leitura) */
+export const VIEW_AS_COOKIE = "sdr_view_as";
 
 export interface CurrentAccount {
   id: string;
@@ -51,6 +53,8 @@ export interface CurrentUser {
   canEditProducts: boolean;
   /** Pode usar "Resetar lead (teste)" */
   canResetLeads?: boolean;
+  /** Preenchido quando um administrador está vendo o painel como este vendedor (modo observação) */
+  viewingAs?: { adminName: string } | null;
 }
 
 /** Permissão extra (não é menu) que o administrador dá a um vendedor */
@@ -89,6 +93,33 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     const actingAs = acting.id !== home.id;
 
     const accountModules = await getAccountModules(acting);
+
+    // Ver como vendedor (só em conta de parceiro): devolve o vendedor, sem poder alterar nada
+    const viewId = store.get(VIEW_AS_COOKIE)?.value;
+    if (isAdmin && viewId && acting.type === "PARTNER") {
+      const v = await db.query.appUsers.findFirst({ where: eq(appUsers.id, viewId) });
+      if (v && v.active && v.accountId === acting.id && v.role === "SELLER") {
+        const vp = (v.permissions as string[]) || [];
+        return {
+          id: v.id,
+          name: v.name,
+          email: v.email,
+          role: "SELLER",
+          permissions: vp,
+          sellerId: v.sellerId,
+          homeAccount: toAccount(home),
+          account: toAccount(acting),
+          actingAs,
+          modules: accountModules.filter((m) => vp.includes(m)),
+          canManage: false,
+          canEditLeads: false,
+          canEditProducts: false,
+          canResetLeads: false,
+          viewingAs: { adminName: user.name },
+        };
+      }
+    }
+
     const perms = (user.permissions as string[]) || [];
     const modules = isAdmin || actingAs ? accountModules : accountModules.filter((m) => perms.includes(m));
 

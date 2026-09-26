@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, LogOut, Building2, Search, Check, Menu, Headphones } from "lucide-react";
+import { ChevronDown, LogOut, Building2, Search, Check, Menu, Headphones, Eye } from "lucide-react";
 import { roleLabel, ACCOUNT_TYPE_LABEL } from "@/lib/auth/modules";
 import type { CurrentUser } from "@/lib/auth/server";
 
@@ -11,6 +11,21 @@ interface TreeAccount {
   type: string;
   parentId: string | null;
   active: boolean;
+}
+
+/** Entrar/sair do "Ver como vendedor" (modo observação) */
+export async function viewAsSeller(userId: string | null) {
+  const res = await fetch("/api/session/view-as", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    alert(d.error || "Não foi possível");
+    return;
+  }
+  window.location.href = userId ? "/leads" : "/permissoes";
 }
 
 async function actAs(accountId: string | null) {
@@ -151,6 +166,17 @@ export function TopBar({ title, user, onOpenMenu }: { title: string; user: Curre
 
   return (
     <>
+      {user.viewingAs && (
+        <div className="flex flex-wrap items-center justify-center gap-3 bg-sky-700 px-4 py-2 text-sm text-white">
+          <span className="flex items-center gap-1.5">
+            <Eye size={15} /> Modo observação: você ({user.viewingAs.adminName}) está vendo o painel como o vendedor <b>{user.name}</b>. Nada pode ser
+            alterado.
+          </span>
+          <button onClick={() => viewAsSeller(null)} className="rounded-md bg-white px-3 py-1 text-xs font-semibold text-sky-800">
+            Sair do modo vendedor
+          </button>
+        </div>
+      )}
       {user.actingAs && (
         <div className="flex items-center justify-center gap-3 bg-amber-100 px-4 py-2 text-sm text-amber-900">
           <span>

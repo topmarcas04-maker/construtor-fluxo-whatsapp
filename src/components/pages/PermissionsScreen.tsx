@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Pencil, Trash2, ShieldCheck } from "lucide-react";
+import { Plus, Pencil, Trash2, ShieldCheck, Eye } from "lucide-react";
+import { viewAsSeller } from "@/components/layout/TopBar";
 import { MODULES, ROLES, roleLabel, moduleLabel, type RoleKey } from "@/lib/auth/modules";
 import {
   Page,
@@ -216,6 +217,11 @@ export function PermissionsScreen() {
                     </td>
                     <td className="px-5 py-3.5 text-right">
                       <div className="flex justify-end gap-1">
+                        {u.role === "SELLER" && u.active && me?.account.type === "PARTNER" && (me.role === "ADMIN" || me.role === "MASTER") && (
+                          <Button variant="ghost" onClick={() => viewAsSeller(u.id)} title="Ver o painel como este vendedor (só observação)">
+                            <Eye size={15} /> <span className="hidden text-xs lg:inline">Ver como</span>
+                          </Button>
+                        )}
                         <Button variant="ghost" onClick={() => openEdit(u)} title="Editar">
                           <Pencil size={15} />
                         </Button>

@@ -5,7 +5,7 @@ import { db } from "@/db/client";
 import { appUsers } from "@/db/schema";
 import { verifyPassword } from "@/lib/auth/password";
 import { createSessionToken, SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth/session";
-import { ACTING_COOKIE } from "@/lib/auth/server";
+import { ACTING_COOKIE, VIEW_AS_COOKIE } from "@/lib/auth/server";
 import { getAccount } from "@/lib/tenancy/server";
 
 export async function POST(request: Request) {
@@ -31,5 +31,6 @@ export async function POST(request: Request) {
   const res = NextResponse.json({ ok: true });
   res.cookies.set(SESSION_COOKIE, createSessionToken(user.id), sessionCookieOptions);
   res.cookies.set(ACTING_COOKIE, "", { path: "/", maxAge: 0 });
+  res.cookies.set(VIEW_AS_COOKIE, "", { path: "/", maxAge: 0 });
   return res;
 }

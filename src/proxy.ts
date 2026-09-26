@@ -21,6 +21,19 @@ export function proxy(request: NextRequest) {
   }
 
   const uid = readSessionToken(request.cookies.get(SESSION_COOKIE)?.value);
+  // "Ver como vendedor" é só observação: nada que altere dados passa
+  if (
+    uid &&
+    request.cookies.get("sdr_view_as")?.value &&
+    pathname.startsWith("/api/") &&
+    !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
+    !pathname.startsWith("/api/session/")
+  ) {
+    return NextResponse.json(
+      { error: "Modo observação: você está vendo o painel como vendedor e não pode alterar nada. Clique em \"Sair do modo vendedor\" no topo." },
+      { status: 403 }
+    );
+  }
   if (uid) return NextResponse.next();
 
   if (pathname.startsWith("/api/")) {
