@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, ne, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { accounts, aiAgents, aiSettings, leads, productCategories, products, waNumbers } from "@/db/schema";
 import { STYLE_PRESETS, LENGTH_OPTIONS, EMOJI_OPTIONS } from "@/lib/ai/style";
@@ -6,6 +6,7 @@ import { normalizeQualify } from "@/lib/ai/qualify";
 import { ensureActions } from "@/lib/actions/shared";
 import { AGENT_ROLES, MAX_AGENTS_LIMIT, normalizePermissions, normalizeRouting } from "./common";
 import { ensureAgents } from "./shared";
+import { templatesFor } from "./templates";
 import { normalizeWaConfig } from "@/lib/whatsapp/config";
 import { slotLabels } from "@/lib/whatsapp/numbers";
 
@@ -14,6 +15,20 @@ export async function agentLimit(accountId: string) {
   const a = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId), columns: { type: true, maxAgents: true } });
   if (a?.type === "MASTER") return MAX_AGENTS_LIMIT;
   return Math.max(1, Math.min(MAX_AGENTS_LIMIT, a?.maxAgents || 1));
+}
+
+/** Total de agentes (ativos ou não) que uma conta pode guardar */
+export const MAX_AGENTS_TOTAL = 30;
+
+/** Pode ter mais um agente ATIVO? (o limite do plano conta só os ativos) */
+export async function activeLimitError(accountId: string, exceptId?: string) {
+  const limit = await agentLimit(accountId);
+  const where = exceptId
+    ? and(eq(aiAgents.accountId, accountId), eq(aiAgents.active, true), ne(aiAgents.id, exceptId))
+    : and(eq(aiAgents.accountId, accountId), eq(aiAgents.active, true));
+  const [{ n }] = (await db.select({ n: sql<number>`count(*)::int` }).from(aiAgents).where(where)) as { n: number }[];
+  if (n < limit) return null;
+  return `Seu plano permite ${limit} agente${limit > 1 ? "s" : ""} ativo${limit > 1 ? "s" : ""}. Desative outro agente antes, ou fale com quem administra a sua conta para liberar mais.`;
 }
 
 /** Lista para a tela: agentes, números de conversas, canais vinculados e opções de produtos/ações */
@@ -55,6 +70,15 @@ export async function agentsPayload(accountId: string) {
       channels: channels(a.id),
     })),
     limit,
+    activeCount: agents.filter((a) => a.active).length,
+    /** Modelos liberados para a conta (hasCopy = a conta já tem um agente dele) */
+    templates: (await templatesFor(accountId)).map((t) => ({
+      id: t.id,
+      name: t.name,
+      role: t.role,
+      description: t.description,
+      hasCopy: agents.some((a) => a.templateId === t.id),
+    })),
     options: {
       products: prods,
       categories: cats,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Plus, Pencil, Copy, Trash2, MessageCircleMore, Crown, Package, ListChecks, ShieldCheck, Smartphone, ArrowLeft, Check, Route, Users, Power } from "lucide-react";
+import { Bot, Plus, Pencil, Copy, Trash2, MessageCircleMore, Crown, Package, ListChecks, ShieldCheck, Smartphone, ArrowLeft, Check, Route, Users, Power, LayoutTemplate, RefreshCw } from "lucide-react";
 import { Page, PageHeader, Card, Badge, Button, Field, Input, Textarea, Toggle, ErrorNote, EmptyState } from "@/components/ui";
 import { StyleCard, AiTester } from "@/components/settings/AiStyle";
 import { QualifyCard } from "@/components/settings/QualifyCard";
@@ -11,10 +11,20 @@ import { AgentsReport } from "@/components/agents/AgentsReport";
 
 type AgentRow = AgentProfile & { conversations: number; channels: string[] };
 
+interface TemplateOption {
+  id: string;
+  name: string;
+  role: string;
+  description: string | null;
+  hasCopy: boolean;
+}
+
 interface Data {
   aiEnabled?: boolean;
   agents: AgentRow[];
   limit: number;
+  activeCount?: number;
+  templates?: TemplateOption[];
   options: {
     products: { id: string; name: string; categoryId: string | null; active: boolean }[];
     categories: { id: string; name: string }[];
@@ -93,13 +103,17 @@ function AgentEditor({
   onClose,
   onSaved,
   focusTest,
+  mode = "agent",
 }: {
   initial: AgentProfile | null;
   data: Data;
   onClose: () => void;
   onSaved: (d: Data) => void;
   focusTest?: boolean;
+  /** template = modelo do Master (sem produtos, ações, palavras-chave e teste) */
+  mode?: "agent" | "template";
 }) {
+  const isTemplate = mode === "template";
   const [a, setA] = useState<Omit<AgentProfile, "id"> & { id?: string }>(initial || NEW_AGENT);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -120,7 +134,9 @@ function AgentEditor({
     setSaving(true);
     setError(null);
     try {
-      const d: Data & { id?: string } = a.id ? await api(`/api/agents/${a.id}`, "PATCH", { ...a, ...extra }) : await api("/api/agents", "POST", a);
+      const base = isTemplate ? "/api/agent-templates" : "/api/agents";
+      const raw = a.id ? await api(`${base}/${a.id}`, "PATCH", { ...a, ...extra }) : await api(base, "POST", a);
+      const d: Data & { id?: string } = isTemplate ? { ...data, agents: raw.templates, id: raw.id } : raw;
       onSaved(d);
       if (!a.id && d.id) setA((x) => ({ ...x, id: d.id }));
       if (extra?.makePrimary) setA((x) => ({ ...x, isPrimary: true, active: true }));
@@ -133,9 +149,13 @@ function AgentEditor({
   };
 
   const remove = async () => {
-    if (!a.id || !confirm(`Excluir o agente "${a.name}"? As conversas dele passam para o Agente Principal.`)) return;
+    const msg = isTemplate
+      ? `Excluir o modelo "${a.name}"? Os agentes que as contas já receberam continuam funcionando, só perdem o "Atualizar do modelo".`
+      : `Excluir o agente "${a.name}"? As conversas dele passam para o Agente Principal.`;
+    if (!a.id || !confirm(msg)) return;
     try {
-      onSaved(await api(`/api/agents/${a.id}`, "DELETE"));
+      const raw = await api(`${isTemplate ? "/api/agent-templates" : "/api/agents"}/${a.id}`, "DELETE");
+      onSaved(isTemplate ? { ...data, agents: raw.templates } : raw);
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -156,7 +176,9 @@ function AgentEditor({
           <ArrowLeft size={15} /> Voltar para a lista
         </button>
         <div className="flex items-center gap-2">
-          {a.isPrimary ? (
+          {isTemplate ? (
+            <Badge tone="blue">Modelo</Badge>
+          ) : a.isPrimary ? (
             <Badge tone="purple">Agente Principal</Badge>
           ) : (
             a.id && (
@@ -206,7 +228,11 @@ function AgentEditor({
           </Field>
           {!a.isPrimary && (
             <div>
-              <Toggle checked={a.active} onChange={(v) => set({ active: v })} label={a.active ? "Ativo" : "Desativado"} />
+              <Toggle
+                checked={a.active}
+                onChange={(v) => set({ active: v })}
+                label={isTemplate ? (a.active ? "Disponível para liberar" : "Indisponível") : a.active ? "Ativo" : "Desativado"}
+              />
             </div>
           )}
         </div>
@@ -228,6 +254,8 @@ function AgentEditor({
 
       <QualifyCard q={qualify} onChange={(q) => set({ qualify: q })} />
 
+      {!isTemplate && (
+      <>
       <Section icon={Package} title="Produtos que o agente conhece" hint="Nenhum marcado = todos os produtos da conta. Marcando uma categoria, ele conhece todos os produtos dela.">
         <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Categorias</p>
         <Chips items={data.options.categories} selected={a.categoryIds} onToggle={(id) => toggleId("categoryIds", id)} empty="Nenhuma categoria cadastrada." />
@@ -238,6 +266,13 @@ function AgentEditor({
       <Section icon={ListChecks} title="Ações do Agente" hint="Procedimentos que ele pode executar (agendar, ligação, reserva...). Nenhuma marcada = todas as ações ativas.">
         <Chips items={data.options.actions} selected={a.actionIds} onToggle={(id) => toggleId("actionIds", id)} empty="Nenhuma ação cadastrada (Configurações → Ações do Agente)." />
       </Section>
+      </>
+      )}
+      {isTemplate && (
+        <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-500">
+          Produtos, ações, palavras-chave e números são escolhidos por cada conta que receber este modelo.
+        </p>
+      )}
 
       <Section
         icon={Route}
@@ -255,6 +290,7 @@ function AgentEditor({
           <Field label="Quando passar para ele (em palavras)" hint='Ex.: "clientes que já compraram e precisam de revisão ou peça".'>
             <Input value={routing.hint} maxLength={500} onChange={(e) => setRouting({ hint: e.target.value })} />
           </Field>
+          {!isTemplate && (
           <Field label="Palavras-chave da 1ª mensagem (campanhas)" hint='Separe por vírgula. Ex.: a frase do anúncio "Quero a Eko 10". A conversa já começa com ele.'>
             <Input
               value={kwText}
@@ -264,6 +300,7 @@ function AgentEditor({
               }}
             />
           </Field>
+          )}
         </div>
         {a.isPrimary && (
           <div className="mt-4 rounded-lg bg-violet-50/70 p-3">
@@ -305,9 +342,11 @@ function AgentEditor({
         </div>
       </Section>
 
-      <div ref={testRef}>
-        <AiTester draft={{}} agent={a as unknown as Record<string, unknown>} />
-      </div>
+      {!isTemplate && (
+        <div ref={testRef}>
+          <AiTester draft={{}} agent={a as unknown as Record<string, unknown>} />
+        </div>
+      )}
 
       <ErrorNote message={error} />
       <div className="flex items-center justify-end gap-3">
@@ -320,7 +359,7 @@ function AgentEditor({
           Fechar
         </Button>
         <Button onClick={() => save()} disabled={saving}>
-          {saving ? "Salvando..." : a.id ? "Salvar agente" : "Criar agente"}
+          {saving ? "Salvando..." : a.id ? (isTemplate ? "Salvar modelo" : "Salvar agente") : isTemplate ? "Criar modelo" : "Criar agente"}
         </Button>
       </div>
     </div>
@@ -330,9 +369,11 @@ function AgentEditor({
 export function AgentsScreen() {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ agent: AgentProfile | null; test?: boolean } | null>(null);
-  const [tab, setTab] = useState<"agentes" | "relatorios">("agentes");
+  const [editing, setEditing] = useState<{ agent: AgentProfile | null; test?: boolean; mode?: "agent" | "template" } | null>(null);
+  const [tab, setTab] = useState<"agentes" | "modelos" | "relatorios">("agentes");
   const [switching, setSwitching] = useState(false);
+  // Modelos (só o Master edita)
+  const [tpl, setTpl] = useState<{ canManage: boolean; templates: AgentRow[] }>({ canManage: false, templates: [] });
 
   const load = useCallback(async () => {
     try {
@@ -340,6 +381,9 @@ export function AgentsScreen() {
     } catch (e) {
       setError((e as Error).message);
     }
+    api("/api/agent-templates", "GET")
+      .then((r) => setTpl({ canManage: Boolean(r.canManage), templates: r.templates || [] }))
+      .catch(() => {});
   }, []);
   useEffect(() => {
     load();
@@ -347,7 +391,42 @@ export function AgentsScreen() {
 
   if (!data) return <Page>{error ? <ErrorNote message={error} /> : <p className="p-6 text-sm text-slate-400">Carregando...</p>}</Page>;
 
-  const full = data.agents.length >= data.limit;
+  const activeCount = data.activeCount ?? data.agents.filter((x) => x.active).length;
+  const full = data.agents.length >= 30;
+  const slotsFull = activeCount >= data.limit;
+  const available = (data.templates || []).filter((t) => !t.hasCopy);
+
+  const addFromTemplate = async (id: string) => {
+    setError(null);
+    try {
+      setData(await api("/api/agents", "POST", { fromTemplateId: id }));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const syncTemplate = async (ag: AgentRow) => {
+    if (
+      !confirm(
+        `Atualizar "${ag.name}" com a versão atual do modelo?\n\nTraz instruções, estilo, qualificação, permissões e assuntos do modelo. Mantém os produtos, as ações, as palavras-chave, o nome e se está ativo. O que você mudou nas instruções será substituído.`
+      )
+    )
+      return;
+    setError(null);
+    try {
+      setData(await api(`/api/agents/${ag.id}/sync-template`, "POST"));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const toggleTemplate = async (t: AgentRow) => {
+    setError(null);
+    try {
+      const r = await api(`/api/agent-templates/${t.id}`, "PATCH", { active: !t.active });
+      setTpl({ canManage: true, templates: r.templates });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
 
   const duplicate = async (id: string) => {
     setError(null);
@@ -379,14 +458,29 @@ export function AgentsScreen() {
   if (editing) {
     return (
       <Page>
-        <PageHeader title={editing.agent ? `Configurar Agente: ${editing.agent.name}` : "Novo Agente"} description="Cada agente tem função, instruções, qualificação, produtos e permissões próprias." />
+        {editing.mode === "template" ? (
+          <PageHeader
+            title={editing.agent ? `Modelo: ${editing.agent.name}` : "Novo modelo de agente"}
+            description="Modelo pronto que você libera para parceiros e clientes. Eles recebem uma cópia desativada e ajustam aos produtos deles."
+          />
+        ) : (
+          <PageHeader title={editing.agent ? `Configurar Agente: ${editing.agent.name}` : "Novo Agente"} description="Cada agente tem função, instruções, qualificação, produtos e permissões próprias." />
+        )}
         <AgentEditor
-          key={editing.agent?.id || "novo"}
+          key={(editing.mode || "agent") + (editing.agent?.id || "novo")}
+          mode={editing.mode}
           initial={editing.agent}
-          data={data}
+          data={editing.mode === "template" ? { ...data, agents: tpl.templates } : data}
           focusTest={editing.test}
-          onClose={() => setEditing(null)}
-          onSaved={(d) => setData((prev) => ({ ...(prev || {}), agents: d.agents, limit: d.limit, options: d.options }))}
+          onClose={() => {
+            setEditing(null);
+            if (editing.mode === "template") load();
+          }}
+          onSaved={(d) =>
+            editing.mode === "template"
+              ? setTpl({ canManage: true, templates: d.agents })
+              : setData((prev) => ({ ...(prev || {}), ...d }))
+          }
         />
       </Page>
     );
@@ -407,6 +501,7 @@ export function AgentsScreen() {
         {(
           [
             ["agentes", "Agentes"],
+            ...(tpl.canManage ? ([["modelos", "Modelos"]] as const) : []),
             ["relatorios", "Relatórios e consumo"],
           ] as const
         ).map(([k, label]) => (
@@ -423,6 +518,46 @@ export function AgentsScreen() {
 
       {tab === "relatorios" ? (
         <AgentsReport />
+      ) : tab === "modelos" ? (
+        <>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-3xl text-sm text-slate-500">
+              Modelos prontos para liberar em <b>Contas → editar → Modelos de agentes</b>. Cada conta recebe uma cópia <b>desativada</b>, ajusta aos
+              produtos e à estratégia dela e ativa conforme o limite do plano. Quando você melhorar um modelo, as contas usam &quot;Atualizar do modelo&quot;.
+            </p>
+            <Button onClick={() => setEditing({ agent: null, mode: "template" })}>
+              <Plus size={15} /> Novo modelo
+            </Button>
+          </div>
+          <ErrorNote message={error} />
+          <div className="grid gap-4 lg:grid-cols-2">
+            {tpl.templates.map((t) => (
+              <Card key={t.id} className="p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <span className={`flex h-11 w-11 items-center justify-center rounded-xl ${t.active ? "bg-sky-50 text-sky-600" : "bg-slate-100 text-slate-400"}`}>
+                      <LayoutTemplate size={22} />
+                    </span>
+                    <div>
+                      <p className="font-semibold text-slate-900">{t.name}</p>
+                      <p className="text-sm text-slate-500">{roleLabel(t.role, t.roleCustom)}</p>
+                    </div>
+                  </div>
+                  {t.active ? <Badge tone="blue">Disponível</Badge> : <Badge tone="gray">Indisponível</Badge>}
+                </div>
+                {(t.description || t.objective) && <p className="mt-3 line-clamp-2 text-sm text-slate-600">{t.description || t.objective}</p>}
+                <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                  <Button variant="secondary" onClick={() => setEditing({ agent: t, mode: "template" })}>
+                    <Pencil size={14} /> Editar
+                  </Button>
+                  <div className="ml-auto">
+                    <Toggle checked={t.active} onChange={() => toggleTemplate(t)} label={t.active ? "Disponível" : "Indisponível"} />
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
       ) : (
       <>
       {data.aiEnabled ? (
@@ -448,8 +583,9 @@ export function AgentsScreen() {
         </div>
       )}
       <p className="mb-4 text-sm text-slate-500">
-        {data.agents.length} de {data.limit} agente{data.limit > 1 ? "s" : ""} do seu plano.
-        {full && data.limit < 20 && " Para criar mais, fale com quem administra a sua conta."}
+        {activeCount} de {data.limit} agente{data.limit > 1 ? "s" : ""} ativo{data.limit > 1 ? "s" : ""} no seu plano
+        {data.agents.length > activeCount && ` (${data.agents.length - activeCount} desativado${data.agents.length - activeCount > 1 ? "s" : ""})`}.
+        {slotsFull && data.limit < 20 && " Para ativar mais, desative outro ou fale com quem administra a sua conta."}
       </p>
       <ErrorNote message={error} />
 
@@ -470,6 +606,7 @@ export function AgentsScreen() {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-1.5">
+                  {ag.templateId && <Badge tone="blue">Modelo</Badge>}
                   {ag.isPrimary && <Badge tone="purple">Principal</Badge>}
                   {ag.active ? <Badge tone="green">Ativo</Badge> : <Badge tone="gray">Desativado</Badge>}
                 </div>
@@ -499,9 +636,14 @@ export function AgentsScreen() {
                 <Button variant="secondary" onClick={() => setEditing({ agent: ag, test: true })}>
                   <MessageCircleMore size={14} /> Testar
                 </Button>
-                <Button variant="ghost" onClick={() => duplicate(ag.id)} disabled={full} title={full ? "Limite do plano atingido" : "Duplicar"}>
+                <Button variant="ghost" onClick={() => duplicate(ag.id)} disabled={full} title={full ? "Limite de agentes atingido" : "Duplicar"}>
                   <Copy size={14} /> Duplicar
                 </Button>
+                {ag.templateId && (data.templates || []).some((t) => t.id === ag.templateId) && (
+                  <Button variant="ghost" onClick={() => syncTemplate(ag)} title="Trazer as melhorias do modelo">
+                    <RefreshCw size={14} /> Atualizar do modelo
+                  </Button>
+                )}
                 {!ag.isPrimary && (
                   <div className="ml-auto">
                     <Toggle checked={ag.active} onChange={() => toggleActive(ag)} label={ag.active ? "Ativo" : "Desativado"} />
@@ -510,6 +652,21 @@ export function AgentsScreen() {
               </div>
             </Card>
           ))}
+        </div>
+      )}
+      {available.length > 0 && (
+        <div className="mt-6 rounded-xl border border-dashed border-sky-200 bg-sky-50/40 p-4">
+          <p className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+            <LayoutTemplate size={16} /> Modelos prontos disponíveis
+          </p>
+          <p className="mb-3 text-xs text-slate-500">Adicione um modelo: ele entra desativado para você ajustar aos seus produtos antes de ativar.</p>
+          <div className="flex flex-wrap gap-2">
+            {available.map((t) => (
+              <Button key={t.id} variant="secondary" onClick={() => addFromTemplate(t.id)} disabled={full} title={t.description || undefined}>
+                <Plus size={14} /> {t.name}
+              </Button>
+            ))}
+          </div>
         </div>
       )}
       {data.agents.filter((x) => x.active).length > 1 && (

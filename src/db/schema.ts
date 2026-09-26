@@ -135,6 +135,8 @@ export const accounts = pgTable(
     productEdit: boolean("product_edit").notNull().default(true),
     /** Parceiro pode usar "Resetar lead (teste)" (liberado pelo Master) */
     testReset: boolean("test_reset").notNull().default(false),
+    /** Modelos de agente liberados para esta conta (ids de agent_templates) */
+    agentTemplateIds: jsonb("agent_template_ids").$type<string[]>().notNull().default([]),
     /** Plano escolhido por quem cadastrou (modelo; os benefícios ficam copiados abaixo e podem ser ajustados) */
     planId: uuid("plan_id"),
     /** Quantos números de WhatsApp a conta pode conectar (1 a 3) */
@@ -525,12 +527,42 @@ export const aiAgents = pgTable(
     permissions: jsonb("permissions").notNull().default({}),
     /** Assuntos, palavras-chave, roteador e para quem pode transferir (ver AgentRouting) */
     routing: jsonb("routing").notNull().default({}),
+    /** Modelo de onde este agente veio (para "Atualizar do modelo") */
+    templateId: uuid("template_id"),
     sort: integer("sort").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("ai_agents_account_idx").on(table.accountId)]
 );
+
+/**
+ * Modelos de agente (criados pelo Master). Liberados por conta em accounts.agent_template_ids;
+ * a conta recebe uma cópia desativada de cada modelo liberado (ai_agents.template_id).
+ */
+export const agentTemplates = pgTable("agent_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 80 }).notNull(),
+  description: text("description"),
+  role: varchar("role", { length: 20 }).notNull().default("VENDAS"),
+  roleCustom: varchar("role_custom", { length: 60 }),
+  objective: text("objective"),
+  /** Disponível para liberar */
+  active: boolean("active").notNull().default(true),
+  instructions: text("instructions").notNull().default(""),
+  style: varchar("style", { length: 20 }).notNull().default("FRIENDLY"),
+  styleCustom: text("style_custom"),
+  replyLength: varchar("reply_length", { length: 10 }).notNull().default("MEDIUM"),
+  emojiLevel: varchar("emoji_level", { length: 10 }).notNull().default("LOW"),
+  offerVideo: boolean("offer_video").notNull().default(true),
+  qualify: jsonb("qualify"),
+  permissions: jsonb("permissions").notNull().default({}),
+  /** Assuntos e dica para o roteador; transferTo = ids de outros modelos */
+  routing: jsonb("routing").notNull().default({}),
+  sort: integer("sort").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 /**
  * Histórico dos Agentes de IA no lead: encaminhamento, transferência, qualificação,

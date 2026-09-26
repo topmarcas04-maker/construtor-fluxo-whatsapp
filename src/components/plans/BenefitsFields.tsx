@@ -36,7 +36,7 @@ export function BenefitsFields({
         <p className="mt-1 text-xs text-slate-400">Quantos números a conta pode conectar ao mesmo tempo.</p>
       </div>
       <div>
-        <p className="mb-1.5 text-sm font-semibold text-slate-800">Agentes de IA</p>
+        <p className="mb-1.5 text-sm font-semibold text-slate-800">Agentes de IA ativos</p>
         <Input
           type="number"
           min={1}
@@ -48,7 +48,7 @@ export function BenefitsFields({
           className="max-w-[120px]"
         />
         <p className="mt-1 text-xs text-slate-400">
-          Quantos agentes a conta pode criar, contando o principal (até {ceiling?.maxAgents ?? MAX_AGENTS_LIMIT}).
+          Quantos agentes podem ficar ativos ao mesmo tempo, contando o principal (até {ceiling?.maxAgents ?? MAX_AGENTS_LIMIT}). Os desativados não contam.
         </p>
       </div>
       <div>

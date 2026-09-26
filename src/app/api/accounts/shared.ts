@@ -4,7 +4,7 @@ import { normalizeBenefits, type PlanBenefits } from "@/lib/plans/shared";
 /** Valida os campos da conta (parceiro/cliente) vindos do formulário */
 export function accountValues(
   body: Record<string, unknown>,
-  opts: { partial: boolean; childType: AccountType; parentModules: string[]; ceiling?: PlanBenefits; planIds?: string[] }
+  opts: { partial: boolean; childType: AccountType; parentModules: string[]; ceiling?: PlanBenefits; planIds?: string[]; templateIds?: string[] }
 ) {
   const values: Record<string, unknown> = {};
   const str = (v: unknown, max: number) => (v === undefined ? undefined : String(v ?? "").trim().slice(0, max) || null);
@@ -46,6 +46,12 @@ export function accountValues(
   if (body.active !== undefined) values.active = Boolean(body.active);
   if (body.leadEdit !== undefined) values.leadEdit = Boolean(body.leadEdit);
   if (body.productEdit !== undefined) values.productEdit = Boolean(body.productEdit);
+  // Modelos de agente: só os que a conta mãe pode repassar
+  if (body.agentTemplateIds !== undefined) {
+    if (!Array.isArray(body.agentTemplateIds)) return { error: "Modelos inválidos" } as const;
+    const allowed = new Set(opts.templateIds || []);
+    values.agentTemplateIds = [...new Set(body.agentTemplateIds.map(String))].filter((id) => allowed.has(id));
+  }
   // Resetar lead de teste: só o Master libera, e só para parceiros
   if (body.testReset !== undefined && opts.childType === "PARTNER") values.testReset = Boolean(body.testReset);
   // Plano (só os planos da conta mãe) e benefícios (nunca acima do que a conta mãe tem)

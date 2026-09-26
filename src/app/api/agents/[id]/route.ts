@@ -4,7 +4,7 @@ import { and, eq, ne } from "drizzle-orm";
 import { db } from "@/db/client";
 import { aiAgents } from "@/db/schema";
 import { requireUser } from "@/lib/auth/server";
-import { agentValues, agentsPayload, detachAgent, ownAgent } from "@/lib/agents/server";
+import { activeLimitError, agentValues, agentsPayload, detachAgent, ownAgent } from "@/lib/agents/server";
 import { syncPrimaryToSettings } from "@/lib/agents/shared";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -21,6 +21,10 @@ export async function PATCH(req: NextRequest, c: Ctx) {
   // Só ativar/desativar
   if (Object.keys(body).length === 1 && typeof body.active === "boolean") {
     if (agent.isPrimary && !body.active) return NextResponse.json({ error: "O Agente Principal não pode ser desativado" }, { status: 400 });
+    if (body.active && !agent.active) {
+      const err = await activeLimitError(auth.accountId, id);
+      if (err) return NextResponse.json({ error: err }, { status: 403 });
+    }
     await db.update(aiAgents).set({ active: body.active, updatedAt: new Date() }).where(eq(aiAgents.id, id));
     return NextResponse.json(await agentsPayload(auth.accountId));
   }
@@ -30,6 +34,10 @@ export async function PATCH(req: NextRequest, c: Ctx) {
   const makePrimary = body.makePrimary === true && !agent.isPrimary;
   const values = { ...parsed.values, updatedAt: new Date() };
   if (agent.isPrimary || makePrimary) values.active = true;
+  if (values.active && !agent.active) {
+    const err = await activeLimitError(auth.accountId, id);
+    if (err) return NextResponse.json({ error: err }, { status: 403 });
+  }
   await db.update(aiAgents).set({ ...values, ...(makePrimary ? { isPrimary: true } : {}) }).where(eq(aiAgents.id, id));
   if (makePrimary) {
     await db.update(aiAgents).set({ isPrimary: false }).where(and(eq(aiAgents.accountId, auth.accountId), ne(aiAgents.id, id)));

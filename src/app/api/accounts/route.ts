@@ -9,6 +9,7 @@ import { hashPassword } from "@/lib/auth/password";
 import { getAccountModules, uniqueSlug } from "@/lib/tenancy/server";
 import { accountValues } from "./shared";
 import { accountBenefits } from "@/lib/plans/server";
+import { materializeTemplates, templatesFor } from "@/lib/agents/templates";
 
 function childTypeOf(type: string): AccountType | null {
   if (type === "MASTER") return "PARTNER";
@@ -60,7 +61,8 @@ export async function POST(req: NextRequest) {
   const parent = await db.query.accounts.findFirst({ where: eq(accounts.id, auth.accountId) });
   const parentModules = await getAccountModules(parent || null);
   const planIds = (await db.select({ id: plans.id }).from(plans).where(eq(plans.accountId, auth.accountId))).map((p) => p.id);
-  const parsed = accountValues(body, { partial: false, childType, parentModules, ceiling: parent ? accountBenefits(parent) : undefined, planIds });
+  const templateIds = (await templatesFor(auth.accountId)).map((t) => t.id);
+  const parsed = accountValues(body, { partial: false, childType, parentModules, ceiling: parent ? accountBenefits(parent) : undefined, planIds, templateIds });
   if ("error" in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 });
 
   const admin = body.admin || {};
@@ -97,6 +99,9 @@ export async function POST(req: NextRequest) {
     role: "ADMIN",
     permissions: ALL_MODULE_KEYS,
   });
+
+  // Modelos de agente liberados chegam como agentes desativados
+  if ((created.agentTemplateIds || []).length) await materializeTemplates(created.id).catch((e) => console.error("[modelos]", e));
 
   const { aiApiKeyEnc, ...safe } = created;
   void aiApiKeyEnc;

@@ -8,6 +8,7 @@ import type { AccountType } from "@/lib/auth/modules";
 import { getAccountModules } from "@/lib/tenancy/server";
 import { accountValues } from "../shared";
 import { accountBenefits } from "@/lib/plans/server";
+import { materializeTemplates, templatesFor } from "@/lib/agents/templates";
 
 async function ownChild(parentId: string, id: string) {
   return db.query.accounts.findFirst({ where: and(eq(accounts.id, id), eq(accounts.parentId, parentId)) });
@@ -27,9 +28,12 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     parentModules: await getAccountModules(parent || null),
     ceiling: parent ? accountBenefits(parent) : undefined,
     planIds: (await db.select({ id: plans.id }).from(plans).where(eq(plans.accountId, auth.accountId))).map((p) => p.id),
+    templateIds: (await templatesFor(auth.accountId)).map((t) => t.id),
   });
   if ("error" in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 });
   const [updated] = await db.update(accounts).set(parsed.values).where(eq(accounts.id, id)).returning();
+  // Modelos recém-liberados chegam como agentes desativados
+  if ("agentTemplateIds" in parsed.values) await materializeTemplates(id).catch((e) => console.error("[modelos]", e));
   const { aiApiKeyEnc, ...rest } = updated;
   return NextResponse.json({ ...rest, hasOwnKey: Boolean(aiApiKeyEnc) });
 }

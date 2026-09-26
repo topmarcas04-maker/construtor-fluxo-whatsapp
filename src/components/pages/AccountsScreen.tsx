@@ -38,6 +38,7 @@ interface Account {
   leadEdit: boolean;
   productEdit?: boolean;
   testReset?: boolean;
+  agentTemplateIds?: string[];
   planId?: string | null;
   maxWhatsapp?: number;
   maxAgents?: number;
@@ -65,6 +66,7 @@ type Form = {
   leadEdit: boolean;
   productEdit: boolean;
   testReset: boolean;
+  agentTemplateIds: string[];
   planId: string;
   benefits: PlanBenefits;
   adminName: string;
@@ -102,12 +104,16 @@ export function AccountsScreen() {
   const [saving, setSaving] = useState(false);
   const [origin, setOrigin] = useState("");
   const [planData, setPlanData] = useState<{ plans: Plan[]; ceiling: PlanBenefits } | null>(null);
+  // Modelos de agente que posso liberar (Master: os disponíveis; parceiro: os que recebeu)
+  const [templates, setTemplates] = useState<{ id: string; name: string; role: string; roleCustom: string | null; description: string | null; objective: string | null; active: boolean }[]>([]);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/accounts");
     if (res.ok) setData(await res.json());
     const pr = await fetch("/api/plans");
     if (pr.ok) setPlanData(await pr.json());
+    const tr = await fetch("/api/agent-templates");
+    if (tr.ok) setTemplates(((await tr.json()).templates || []).filter((t: { active: boolean }) => t.active));
   }, []);
   useEffect(() => {
     load();
@@ -154,6 +160,7 @@ export function AccountsScreen() {
       leadEdit: false,
       productEdit: true,
       testReset: false,
+      agentTemplateIds: [],
       planId: "",
       benefits: { ...DEFAULT_BENEFITS },
       adminName: "",
@@ -179,6 +186,7 @@ export function AccountsScreen() {
       leadEdit: a.leadEdit,
       productEdit: a.productEdit !== false,
       testReset: Boolean(a.testReset),
+      agentTemplateIds: a.agentTemplateIds || [],
       planId: a.planId || "",
       benefits: {
         maxWhatsapp: a.maxWhatsapp ?? 1,
@@ -216,6 +224,7 @@ export function AccountsScreen() {
         leadEdit: form.leadEdit,
         productEdit: form.productEdit,
         ...(isPartners ? { testReset: form.testReset } : {}),
+        agentTemplateIds: form.agentTemplateIds,
         planId: form.planId || null,
         ...form.benefits,
       };
@@ -529,6 +538,53 @@ export function AccountsScreen() {
             <section>
               <p className="mb-3 font-semibold text-slate-800">Benefícios</p>
               <BenefitsFields value={form.benefits} onChange={(b) => setForm({ ...form, benefits: b })} ceiling={planData?.ceiling} />
+            </section>
+
+            <section className="rounded-xl border border-slate-200 p-4">
+              <p className="mb-1 flex items-center gap-2 font-semibold text-slate-800">
+                <Bot size={16} /> Modelos de agentes
+              </p>
+              <p className="mb-3 text-sm text-slate-500">
+                Os modelos marcados entram na conta como agentes <b>desativados</b>, já configurados. O {labels.one} ajusta aos produtos dele e ativa até o
+                limite de &quot;Agentes de IA&quot; acima.
+                {isPartners && " O parceiro só consegue repassar aos clientes dele os modelos que você marcar aqui."} Desmarcar não apaga os agentes que a conta
+                já recebeu.
+              </p>
+              {!templates.length ? (
+                <p className="text-sm text-slate-400">Nenhum modelo disponível para liberar.</p>
+              ) : (
+                <>
+                  <div className="mb-2 flex gap-3 text-xs">
+                    <button type="button" className="font-semibold text-[var(--accent)] hover:underline" onClick={() => setForm({ ...form, agentTemplateIds: templates.map((t) => t.id) })}>
+                      Marcar todos
+                    </button>
+                    <button type="button" className="font-semibold text-slate-500 hover:underline" onClick={() => setForm({ ...form, agentTemplateIds: [] })}>
+                      Desmarcar todos
+                    </button>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {templates.map((t) => {
+                      const on = form.agentTemplateIds.includes(t.id);
+                      return (
+                        <label key={t.id} className={`flex cursor-pointer items-start gap-2 rounded-lg border p-3 ${on ? "border-[var(--accent)] bg-[var(--accent)]/5" : "border-slate-200"}`}>
+                          <input
+                            type="checkbox"
+                            className="mt-1"
+                            checked={on}
+                            onChange={() =>
+                              setForm({ ...form, agentTemplateIds: on ? form.agentTemplateIds.filter((x) => x !== t.id) : [...form.agentTemplateIds, t.id] })
+                            }
+                          />
+                          <span>
+                            <span className="block text-sm font-semibold text-slate-800">{t.name}</span>
+                            <span className="block text-xs text-slate-500">{t.description || t.objective}</span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </section>
 
             <section>

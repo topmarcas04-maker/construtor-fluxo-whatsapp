@@ -381,6 +381,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS wa_last_seen_at timestamptz;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS lead_edit boolean NOT NULL DEFAULT false;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS product_edit boolean NOT NULL DEFAULT true;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS test_reset boolean NOT NULL DEFAULT false;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS agent_template_ids jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS sign_messages boolean NOT NULL DEFAULT true;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS alert_phone varchar(40);
 CREATE INDEX IF NOT EXISTS messages_whatsapp_message_id_idx ON messages (whatsapp_message_id);
@@ -814,6 +815,28 @@ CREATE INDEX IF NOT EXISTS ai_agents_account_idx ON ai_agents (account_id);
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS agent_id uuid;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS agent_handoff jsonb;
 ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS routing jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS template_id uuid;
+CREATE TABLE IF NOT EXISTS agent_templates (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name varchar(80) NOT NULL,
+  description text,
+  role varchar(20) NOT NULL DEFAULT 'VENDAS',
+  role_custom varchar(60),
+  objective text,
+  active boolean NOT NULL DEFAULT true,
+  instructions text NOT NULL DEFAULT '',
+  style varchar(20) NOT NULL DEFAULT 'FRIENDLY',
+  style_custom text,
+  reply_length varchar(10) NOT NULL DEFAULT 'MEDIUM',
+  emoji_level varchar(10) NOT NULL DEFAULT 'LOW',
+  offer_video boolean NOT NULL DEFAULT true,
+  qualify jsonb,
+  permissions jsonb NOT NULL DEFAULT '{}'::jsonb,
+  routing jsonb NOT NULL DEFAULT '{}'::jsonb,
+  sort integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS agent_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

@@ -181,6 +181,8 @@ export interface AgentProfile {
   routing: AgentRouting;
   isPrimary: boolean;
   active: boolean;
+  /** Modelo de onde veio (vazio = criado na conta) */
+  templateId?: string | null;
 }
 
 const ids = (v: unknown) => (Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === "string" && x.length <= 64))].slice(0, 500) : []);
@@ -208,6 +210,7 @@ export function toProfile(row: Record<string, unknown>): AgentProfile {
     routing: normalizeRouting(row.routing),
     isPrimary: row.isPrimary === true,
     active: row.active !== false,
+    templateId: (row.templateId as string) || null,
   };
 }
 
