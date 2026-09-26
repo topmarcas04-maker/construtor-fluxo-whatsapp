@@ -41,6 +41,13 @@ export function followupValues(body: Record<string, unknown>, refs: { tagIds: Se
       moveToDisqualified: body.moveToDisqualified !== false,
       disqualifiedColumnName: String(body.disqualifiedColumnName || "").trim().slice(0, 60) || DISQUALIFIED_DEFAULT,
       addTagName: String(body.addTagName ?? "").trim().slice(0, 60),
+      replyAction: body.replyAction === "HANDOFF" ? "HANDOFF" : "CONTINUE",
+      replySameSeller: body.replySameSeller !== false,
+      replyHandoffMessage: String(body.replyHandoffMessage ?? "").trim().slice(0, 1000),
+      replyNotifySeller: body.replyNotifySeller !== false,
+      replyTagName: String(body.replyTagName ?? "").trim().slice(0, 60),
+      replyColumnId: typeof body.replyColumnId === "string" && refs.columnIds.has(body.replyColumnId) ? body.replyColumnId : null,
+      replyRescue: body.replyRescue !== false,
     },
   };
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, Sparkles, Type, Clock, CalendarClock, Ban, Tag as TagIcon, Workflow, Info } from "lucide-react";
+import { Plus, Trash2, Sparkles, Type, Clock, CalendarClock, Ban, Tag as TagIcon, Workflow, Info, UserCheck, MessagesSquare, Bell, Undo2 } from "lucide-react";
 import { Button, Field, Input, Textarea, Toggle, Badge, ErrorNote } from "@/components/ui";
 import { TAG_COLOR_CLASSES } from "@/lib/types/sdr";
 import {
@@ -101,8 +101,8 @@ export function FollowupTab() {
           <h3 className="font-semibold text-slate-900">Recontato automático</h3>
           <p className="mt-1 text-sm text-slate-600">
             Quando o cliente para de responder, o sistema volta a chamar no WhatsApp nos horários que você escolher. Se ele responder, o
-            recontato para e a conversa segue normal (IA, chatbot ou equipe). Sem resposta depois da última tentativa, o card vai para
-            &quot;Desqualificado&quot;.
+            recontato para e vale o que você configurar em &quot;Quando o cliente responder&quot; (seguir com a IA ou passar para o vendedor).
+            Sem resposta depois da última tentativa, o card vai para &quot;Desqualificado&quot;.
           </p>
         </div>
         <Toggle checked={s.enabled} onChange={(v) => set({ enabled: v })} label={s.enabled ? "Ligado" : "Desligado"} />
@@ -362,6 +362,98 @@ export function FollowupTab() {
             </p>
             <Input className="mt-2" value={s.addTagName} onChange={(e) => set({ addTagName: e.target.value })} placeholder="Vazio = sem etiqueta" />
             <p className="mt-1 text-[11px] text-slate-400">Criada automaticamente se não existir.</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Quando responder */}
+      <div>
+        <p className="mb-2 text-sm font-semibold text-slate-800">Quando o cliente responder ao recontato</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {(
+            [
+              ["CONTINUE", MessagesSquare, "Continuar a conversa", "A IA (ou o chatbot, ou a equipe) segue o atendimento de onde parou."],
+              ["HANDOFF", UserCheck, "Passar para o vendedor", "A IA para de responder e o cliente vai direto para um vendedor."],
+            ] as const
+          ).map(([k, Icon, title, hint]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => set({ replyAction: k })}
+              className={`flex gap-3 rounded-xl border p-3 text-left transition ${
+                s.replyAction === k ? "border-[var(--accent)] bg-[var(--accent)]/5 ring-2 ring-[var(--accent)]/15" : "border-slate-200 hover:border-slate-300"
+              }`}
+            >
+              <Icon size={18} className={s.replyAction === k ? "text-[var(--accent)]" : "text-slate-400"} />
+              <span>
+                <span className={`block text-sm font-semibold ${s.replyAction === k ? "text-[var(--accent)]" : "text-slate-800"}`}>{title}</span>
+                <span className="text-xs text-slate-500">{hint}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {s.replyAction === "HANDOFF" && (
+          <div className="mt-3 space-y-3 rounded-xl border border-slate-200 p-3">
+            <div className="space-y-1.5 text-sm text-slate-700">
+              <label className="flex items-center gap-2">
+                <input type="radio" checked={s.replySameSeller} onChange={() => set({ replySameSeller: true })} className="h-4 w-4 accent-[var(--accent)]" />
+                Se o lead já tinha vendedor, volta para o mesmo vendedor
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" checked={!s.replySameSeller} onChange={() => set({ replySameSeller: false })} className="h-4 w-4 accent-[var(--accent)]" />
+                Sempre escolher pela fila de rodízio / regras de distribuição
+              </label>
+            </div>
+            <Field label="Mensagem para o cliente ao transferir" hint="Use {nome} e {vendedor}. Vazio = transfere sem mandar mensagem.">
+              <Textarea rows={2} value={s.replyHandoffMessage} onChange={(e) => set({ replyHandoffMessage: e.target.value })} />
+            </Field>
+            <p className="text-[11px] text-slate-400">Sem vendedor ativo cadastrado, a conversa segue normal com a IA.</p>
+          </div>
+        )}
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-slate-200 p-3">
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <input type="checkbox" checked={s.replyNotifySeller} onChange={(e) => set({ replyNotifySeller: e.target.checked })} className="h-4 w-4 accent-[var(--accent)]" />
+              <Bell size={14} className="text-[var(--accent)]" /> Avisar o vendedor no WhatsApp
+            </label>
+            <p className="mt-1 text-[11px] text-slate-400">Manda para o vendedor do lead o nome, a mensagem do cliente e o link da conversa.</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 p-3">
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <input type="checkbox" checked={s.replyRescue} onChange={(e) => set({ replyRescue: e.target.checked })} className="h-4 w-4 accent-[var(--accent)]" />
+              <Undo2 size={14} className="text-[var(--accent)]" /> Tirar de &quot;{s.disqualifiedColumnName || "Desqualificado"}&quot;
+            </label>
+            <p className="mt-1 text-[11px] text-slate-400">Se respondeu depois de desqualificado, o card volta para a etapa em que estava e perde a etiqueta de sem resposta.</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 p-3">
+            <p className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <TagIcon size={14} /> Colocar a etiqueta
+            </p>
+            <Input className="mt-2" value={s.replyTagName} onChange={(e) => set({ replyTagName: e.target.value })} placeholder="Vazio = sem etiqueta" />
+            <p className="mt-1 text-[11px] text-slate-400">Ex.: &quot;Reativado&quot;. Criada automaticamente se não existir.</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 p-3">
+            <p className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <Workflow size={14} /> Mover o card para
+            </p>
+            <select
+              value={s.replyColumnId || ""}
+              onChange={(e) => set({ replyColumnId: e.target.value || null })}
+              className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm outline-none focus:border-[var(--accent)]"
+            >
+              <option value="">Não mover</option>
+              {data.funnels.map((f) => (
+                <optgroup key={f.id} label={f.name}>
+                  {f.columns.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
           </div>
         </div>
       </div>

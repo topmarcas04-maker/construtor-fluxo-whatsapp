@@ -5,7 +5,8 @@
  * Regra: depois da última mensagem da empresa (IA, chatbot ou equipe) sem resposta do cliente,
  * espera "afterHours" e envia a tentativa no horário escolhido. Depois da última tentativa,
  * espera "finalHours" e move o card para "Desqualificado" (e coloca a etiqueta).
- * Se o cliente responder, tudo recomeça do zero.
+ * Se o cliente responder, tudo recomeça do zero e valem as opções "reply*" (continuar ou passar para o vendedor,
+ * avisar o vendedor, etiqueta, coluna e tirar de Desqualificado).
  */
 import { fromSpDateTime, toSpParts } from "../time";
 
@@ -40,6 +41,22 @@ export interface FollowupSettings {
   moveToDisqualified: boolean;
   disqualifiedColumnName: string;
   addTagName: string;
+
+  // ---- Quando o cliente RESPONDE ao recontato ----
+  /** CONTINUE = a conversa segue normal (IA, chatbot ou equipe); HANDOFF = passa para um vendedor */
+  replyAction: "CONTINUE" | "HANDOFF";
+  /** Na transferência: se o lead já tinha vendedor, volta para ele (senão, fila/rodízio) */
+  replySameSeller: boolean;
+  /** Mensagem ao cliente na transferência. {nome} e {vendedor}. Vazio = não envia */
+  replyHandoffMessage: string;
+  /** Avisar o vendedor do lead no WhatsApp que o cliente voltou a responder */
+  replyNotifySeller: boolean;
+  /** Etiqueta colocada em quem respondeu (vazio = nenhuma) */
+  replyTagName: string;
+  /** Mover o card para esta coluna (null = não move) */
+  replyColumnId: string | null;
+  /** Se estava em "Desqualificado", volta para o funil e tira a etiqueta de sem resposta */
+  replyRescue: boolean;
 }
 
 export const DISQUALIFIED_DEFAULT = "Desqualificado";
@@ -66,7 +83,16 @@ export const DEFAULT_FOLLOWUP: FollowupSettings = {
   moveToDisqualified: true,
   disqualifiedColumnName: DISQUALIFIED_DEFAULT,
   addTagName: NO_ANSWER_TAG,
+  replyAction: "CONTINUE",
+  replySameSeller: true,
+  replyHandoffMessage: "Que bom falar com você de novo, {nome}! Vou te passar para {vendedor}, que vai continuar seu atendimento. 😊",
+  replyNotifySeller: true,
+  replyTagName: "Reativado",
+  replyColumnId: null,
+  replyRescue: true,
 };
+
+export const REACTIVATED_TAG = "Reativado";
 
 /** Completa/normaliza o que veio do banco */
 export function withDefaults(raw: Partial<FollowupSettings> | null | undefined): FollowupSettings {

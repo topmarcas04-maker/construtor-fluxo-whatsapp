@@ -666,6 +666,14 @@ async function handleIncomingMessage(accountId: string, msg: any) {
       await db.update(leads).set({ phone }).where(eq(leads.id, existingLead.id));
     }
 
+    // A última mensagem da conversa foi um recontato? Então o cliente está respondendo a ele
+    const lastMsg = await db.query.messages.findFirst({
+      where: eq(messages.conversationId, conversation.id),
+      orderBy: [desc(messages.sentAt)],
+      columns: { direction: true, sender: true },
+    });
+    const repliedFollowup = lastMsg?.direction === "OUT" && lastMsg.sender === "FOLLOWUP";
+
     const media = extracted.type !== "text" ? await downloadMedia(accountId, msg) : null;
     const sentAt = msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000) : new Date();
     const [saved] = await db.insert(messages).values({
@@ -692,7 +700,17 @@ async function handleIncomingMessage(accountId: string, msg: any) {
     }
     // Mensagem muito antiga (recuperada depois de uma queda longa): nem o chatbot nem a IA respondem
     if (Date.now() - sentAt.getTime() < AI_RECOVERY_WINDOW_MS) {
-      await routeIncoming(accountId, conversation.id, { isNew: isNewConversation, prevAt, channel: "WHATSAPP" }, Boolean(settings?.enabled));
+      let handled = false;
+      if (repliedFollowup) {
+        try {
+          handled = await onFollowupReply(accountId, conversation.id, phoneJid, extracted.text);
+        } catch (err) {
+          console.error(`[Recontato ${accountId.slice(0, 8)}] erro ao tratar a resposta:`, (err as Error)?.message || err);
+        }
+      }
+      if (!handled) {
+        await routeIncoming(accountId, conversation.id, { isNew: isNewConversation, prevAt, channel: "WHATSAPP" }, Boolean(settings?.enabled));
+      }
     }
   } catch (error) {
     console.error("[Error] handleIncomingMessage:", error);
@@ -2367,6 +2385,104 @@ async function finishFollowup(accountId: string, s: FollowupSettings, c: Followu
     await db.insert(leadTags).values({ leadId: c.leadId, tagId: tag.id }).onConflictDoNothing();
   }
   console.log(`[Recontato ${accountId.slice(0, 8)}] ${c.phoneJid}: sem resposta — desqualificado`);
+}
+
+/**
+ * O cliente respondeu ao recontato: aplica o que foi configurado (tirar de Desqualificado, etiqueta,
+ * coluna, avisar o vendedor e, se escolhido, passar para o vendedor).
+ * Devolve true quando passou para o vendedor (aí a IA e o chatbot não respondem).
+ */
+async function onFollowupReply(accountId: string, conversationId: string, phoneJid: string, text: string) {
+  const row = await db.query.followupSettings.findFirst({ where: eq(followupSettings.id, accountId) });
+  if (!row) return false;
+  const s = withDefaults(row.config as Partial<FollowupSettings>);
+  const lead = await db.query.leads.findFirst({ where: eq(leads.conversationId, conversationId) });
+  if (!lead || lead.closed) return false;
+  const conv = await db.query.conversations.findFirst({ where: eq(conversations.id, conversationId) });
+  const leadName = (lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conv?.leadName) || null;
+
+  const set: Record<string, unknown> = {
+    fuCount: 0,
+    fuLastAt: null,
+    lastAction: "Respondeu o recontato",
+    lastActionAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  // Estava em "Desqualificado": volta para a etapa em que estava e tira a etiqueta de sem resposta
+  if (s.replyRescue) {
+    if (lead.columnId) {
+      const col = await db.query.funnelColumns.findFirst({ where: eq(funnelColumns.id, lead.columnId) });
+      const dq = (s.disqualifiedColumnName || "").trim().toLowerCase();
+      if (col && dq && col.name.trim().toLowerCase() === dq) set.columnId = null;
+    }
+    const noAnswer = s.addTagName.trim();
+    if (noAnswer) {
+      const tag = await db.query.tags.findFirst({ where: and(eq(tags.accountId, accountId), sql`lower(${tags.name}) = lower(${noAnswer})`) });
+      if (tag) await db.delete(leadTags).where(and(eq(leadTags.leadId, lead.id), eq(leadTags.tagId, tag.id)));
+    }
+  }
+  await db.update(leads).set(set).where(eq(leads.id, lead.id));
+
+  if (s.replyColumnId) await moveLeadToColumn(accountId, lead.id, s.replyColumnId);
+
+  const tagName = s.replyTagName.trim();
+  if (tagName) {
+    let tag = await db.query.tags.findFirst({ where: and(eq(tags.accountId, accountId), sql`lower(${tags.name}) = lower(${tagName})`) });
+    if (!tag) [tag] = await db.insert(tags).values({ accountId, name: tagName.slice(0, 60), color: "green" }).returning();
+    await db.insert(leadTags).values({ leadId: lead.id, tagId: tag.id }).onConflictDoNothing();
+  }
+
+  // Vendedor do lead (ou um novo, pela fila, quando é para transferir)
+  let seller = lead.sellerId ? await db.query.sellers.findFirst({ where: eq(sellers.id, lead.sellerId) }) : null;
+  if (seller && !seller.active) seller = null;
+  let handed = false;
+  if (s.replyAction === "HANDOFF") {
+    if (!seller || !s.replySameSeller) {
+      const rules = await db.query.distributionRules.findMany({
+        where: eq(schema.distributionRules.accountId, accountId),
+        with: { seller: true },
+      });
+      const id = await assignSeller(accountId, rules, lead.city, lead.saleType);
+      seller = id ? (await db.query.sellers.findFirst({ where: eq(sellers.id, id) })) || null : seller;
+    }
+    if (seller) {
+      await db
+        .update(leads)
+        .set({ sellerId: seller.id, aiPaused: true, botId: null, botStep: null, botTries: 0, lastAction: "Recontato: passou para o vendedor", updatedAt: new Date() })
+        .where(eq(leads.id, lead.id));
+      handed = true;
+      const template = s.replyHandoffMessage.trim();
+      if (template) {
+        await pause(1500);
+        const msg = fillTemplate(fillName(template, leadName), { vendedor: seller.name });
+        await sendText(accountId, phoneJid, msg, "AI");
+      }
+    } else {
+      console.warn(`[Recontato ${accountId.slice(0, 8)}] ${phoneJid}: respondeu, mas não há vendedor ativo; a conversa segue normal`);
+    }
+  }
+
+  if (seller && s.replyNotifySeller) {
+    const jid = sellerJid(seller.phone);
+    if (jid) {
+      const leadPhone = lead.phone || (phoneJid.endsWith("@s.whatsapp.net") ? phoneJid.split("@")[0] : null);
+      const lines = [
+        handed ? `🔔 *Lead para você* (respondeu o recontato)` : `🔁 *Cliente voltou a responder* (recontato)`,
+        `*Cliente:* ${leadName || "sem nome"}`,
+        lead.city ? `*Cidade:* ${lead.city}` : null,
+        ...Object.values((lead.qualifyData || {}) as QualifyData)
+          .filter((x) => x.value)
+          .map((x) => `*${x.label}:* ${x.value}`),
+        text ? `*Mensagem:* ${text.slice(0, 300)}` : null,
+        leadPhone ? `\nFalar com o cliente: https://wa.me/${leadPhone}` : `\nAbra o painel em Leads para continuar.`,
+      ].filter(Boolean);
+      const r = await sendText(accountId, jid, lines.join("\n"), "AI");
+      if ("error" in r) console.warn("[Recontato] Não consegui avisar o vendedor:", r.error);
+    }
+  }
+  console.log(`[Recontato ${accountId.slice(0, 8)}] ${phoneJid}: respondeu${handed ? " — passou para o vendedor" : ""}`);
+  return handed;
 }
 
 // ============================================================================
