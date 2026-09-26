@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Bot,
   LayoutDashboard,
   MessageCircle,
   Users,
@@ -32,6 +33,7 @@ const ICONS: Record<ModuleKey, LucideIcon> = {
   whatsapp: MessageCircle,
   "redes-sociais": AtSign,
   leads: Users,
+  agentes: Bot,
   agenda: CalendarDays,
   produtos: Package,
   chatbot: Workflow,

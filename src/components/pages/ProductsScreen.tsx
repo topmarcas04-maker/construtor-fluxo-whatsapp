@@ -39,7 +39,7 @@ function ActionPicker({
   onChange: (ids: string[], primary: string | null) => void;
 }) {
   if (!actions.length) {
-    return <p className="text-xs text-slate-500">Nenhuma ação cadastrada. Crie em Configurações → Ações da IA.</p>;
+    return <p className="text-xs text-slate-500">Nenhuma ação cadastrada. Crie em Configurações → Ações do Agente.</p>;
   }
   return (
     <div className="flex flex-wrap gap-2">
@@ -1231,7 +1231,7 @@ export function ProductsScreen() {
 
             <div className="rounded-xl border border-violet-100 bg-violet-50/40 p-4">
               <p className="mb-1 flex items-center gap-2 text-sm font-semibold text-slate-800">
-                <Zap size={15} className="text-violet-600" /> Ações da IA para este {form.kind === "PLAN" ? "plano" : form.kind === "SERVICE" ? "serviço" : "produto"}
+                <Zap size={15} className="text-violet-600" /> Ações do Agente para este {form.kind === "PLAN" ? "plano" : form.kind === "SERVICE" ? "serviço" : "produto"}
               </p>
               <p className="mb-3 text-xs text-slate-500">
                 O que a IA conduz quando o cliente se interessa: clique para marcar e use a ★ para a principal (oferecida primeiro).
@@ -1303,7 +1303,7 @@ export function ProductsScreen() {
                 </Select>
               </Field>
             )}
-            <p className="text-sm font-medium text-slate-700">Ações da IA</p>
+            <p className="text-sm font-medium text-slate-700">Ações do Agente</p>
             <p className="-mt-3 text-sm text-slate-600">
               Valem para todos os produtos da categoria <b>{catActions.cat.name}</b> que não tiverem ações próprias.
             </p>
@@ -1381,7 +1381,7 @@ export function ProductDetail({ p, category, actionNames }: { p: Product; catego
         {actionNames && actionNames.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="flex items-center gap-1 text-xs font-semibold text-violet-700">
-              <Zap size={12} /> Ações da IA:
+              <Zap size={12} /> Ações do Agente:
             </span>
             {actionNames.map((n) => (
               <span key={n} className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700">

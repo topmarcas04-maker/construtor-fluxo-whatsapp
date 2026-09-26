@@ -5,6 +5,7 @@ import { db } from "@/db/client";
 import { conversations, leads, messages } from "@/db/schema";
 import { requireUser, sellerScope } from "@/lib/auth/server";
 import { allowedSlots, slotLabels } from "@/lib/whatsapp/numbers";
+import { ensureAgents } from "@/lib/agents/shared";
 
 /**
  * GET /api/sdr/leads
@@ -54,6 +55,10 @@ export async function GET() {
     // Conta com mais de um WhatsApp: mostra por qual número está cada conversa
     const multiWa = (await allowedSlots(auth.accountId)) > 1;
     const labels = multiWa ? await slotLabels(auth.accountId) : {};
+    // Nome do agente que atende cada lead (sem agente definido = o principal)
+    const agents = await ensureAgents(db, auth.accountId);
+    const primaryName = agents.find((a) => a.isPrimary)?.name || null;
+    const agentName = (id: string | null) => agents.find((a) => a.id === id)?.name || primaryName;
     const waLabel = (slot: number | null) => (multiWa ? labels[slot || 1] || `WhatsApp ${slot || 1}` : null);
 
     const shaped = all
@@ -83,6 +88,7 @@ export async function GET() {
         interest: lead.interest,
         saleType: lead.saleType,
         note: lead.note,
+        agentName: agentName(lead.agentId),
         conversation: {
           phoneJid: lead.conversation.phoneJid,
           channel: lead.conversation.channel,

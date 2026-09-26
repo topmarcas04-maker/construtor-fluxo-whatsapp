@@ -137,6 +137,8 @@ export const accounts = pgTable(
     planId: uuid("plan_id"),
     /** Quantos números de WhatsApp a conta pode conectar (1 a 3) */
     maxWhatsapp: integer("max_whatsapp").notNull().default(1),
+    /** Quantos Agentes de IA a conta pode ter (contando o principal) */
+    maxAgents: integer("max_agents").notNull().default(1),
     /** Calls de acompanhamento por mês */
     callsPerMonth: integer("calls_per_month").notNull().default(0),
     /** Botão de suporte pelo WhatsApp */
@@ -387,6 +389,8 @@ export const leads = pgTable(
     botLastId: uuid("bot_last_id"),
     /** Recontato automático: quantas tentativas já foram e quando foi a última */
     fuCount: integer("fu_count").notNull().default(0),
+    /** Agente de IA que está atendendo este lead (vazio = o do WhatsApp ou o principal) */
+    agentId: uuid("agent_id"),
     fuLastAt: timestamp("fu_last_at", { withTimezone: true }),
     /** Quando o cliente informou os dados da qualificação (libera preço e detalhes para a IA) */
     qualifiedAt: timestamp("qualified_at", { withTimezone: true }),
@@ -483,6 +487,45 @@ export const quickReplies = pgTable("quick_replies", {
 });
 
 /** Configuração da IA de cada conta (id = id da conta) */
+/**
+ * Agentes de IA da conta (ver lib/agents/common.ts). O principal nasce da IA que a conta já tinha
+ * e fica sincronizado com ai_settings (instruções, estilo, qualificação, vídeo).
+ */
+export const aiAgents = pgTable(
+  "ai_agents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 80 }).notNull(),
+    description: text("description"),
+    /** RECEPCAO | SDR | VENDAS | AGENDAMENTO | FINANCEIRO | POS_VENDA | SUPORTE | COBRANCA | CUSTOM */
+    role: varchar("role", { length: 20 }).notNull().default("VENDAS"),
+    roleCustom: varchar("role_custom", { length: 60 }),
+    objective: text("objective"),
+    active: boolean("active").notNull().default(true),
+    isPrimary: boolean("is_primary").notNull().default(false),
+    instructions: text("instructions").notNull().default(""),
+    style: varchar("style", { length: 20 }).notNull().default("FRIENDLY"),
+    styleCustom: text("style_custom"),
+    replyLength: varchar("reply_length", { length: 10 }).notNull().default("MEDIUM"),
+    emojiLevel: varchar("emoji_level", { length: 10 }).notNull().default("LOW"),
+    offerVideo: boolean("offer_video").notNull().default(true),
+    qualify: jsonb("qualify"),
+    /** Produtos e categorias que o agente conhece (vazio = todos) */
+    productIds: jsonb("product_ids").$type<string[]>().notNull().default([]),
+    categoryIds: jsonb("category_ids").$type<string[]>().notNull().default([]),
+    /** Ações do agente (vazio = todas as ativas) */
+    actionIds: jsonb("action_ids").$type<string[]>().notNull().default([]),
+    permissions: jsonb("permissions").notNull().default({}),
+    sort: integer("sort").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("ai_agents_account_idx").on(table.accountId)]
+);
+
 export const aiSettings = pgTable("ai_settings", {
   id: varchar("id", { length: 64 }).primaryKey(),
   systemPrompt: text("system_prompt").notNull().default(""),
@@ -612,6 +655,7 @@ export const plans = pgTable(
     price: varchar("price", { length: 60 }),
     modules: jsonb("modules").$type<string[]>().notNull().default([]),
     maxWhatsapp: integer("max_whatsapp").notNull().default(1),
+    maxAgents: integer("max_agents").notNull().default(1),
     callsPerMonth: integer("calls_per_month").notNull().default(0),
     supportAccess: boolean("support_access").notNull().default(false),
     premiumAccess: boolean("premium_access").notNull().default(false),

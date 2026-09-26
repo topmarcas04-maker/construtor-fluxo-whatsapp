@@ -486,9 +486,9 @@ function AiTab() {
             <Bot size={26} />
           </span>
           <div>
-            <p className="font-semibold text-slate-900">Atendimento automático com IA</p>
+            <p className="font-semibold text-slate-900">Agente ativo (atendimento automático)</p>
             <p className="text-sm text-slate-600">
-              A IA responde cada nova mensagem, qualifica o lead, marca horários na agenda e passa para um vendedor na hora certa.
+              Os Agentes de IA respondem cada nova mensagem, qualificam o lead, marcam horários na agenda e passam para um vendedor na hora certa.
             </p>
           </div>
         </div>
@@ -544,8 +544,8 @@ function AiTab() {
       <QualifyCard q={s.qualify} onChange={(qualify) => setS({ ...s, qualify })} />
 
       <Field
-        label="Como a IA deve atender (instruções)"
-        hint="Explique como a empresa funciona, o jeito de falar, o que perguntar e quando passar para um vendedor. Preços e condições que a IA pode informar também entram aqui."
+        label="Instruções do Agente Principal"
+        hint="Explique como a empresa funciona, o jeito de falar, o que perguntar e quando passar para um vendedor. Preços e condições que o agente pode informar também entram aqui. O estilo, a qualificação e estas instruções são do Agente Principal; para criar outros agentes (pós-venda, financeiro...), use o menu Agentes de IA."
       >
         <Textarea rows={12} value={s.systemPrompt} onChange={(e) => setS({ ...s, systemPrompt: e.target.value })} />
       </Field>
@@ -1194,8 +1194,8 @@ export function SettingsScreen() {
           value={tab}
           onChange={setTab}
           tabs={[
-            { key: "ia", label: "Atendimento IA" },
-            { key: "acoes", label: "Ações da IA" },
+            { key: "ia", label: "Agentes de IA" },
+            { key: "acoes", label: "Ações do Agente" },
             { key: "recontato", label: "Recontato" },
             { key: "whatsapp", label: "WhatsApp" },
             { key: "vendedores", label: "Vendedores" },

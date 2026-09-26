@@ -2,25 +2,26 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/db/client";
-import { funnels, products, sellers, waNumbers } from "@/db/schema";
+import { funnels, sellers, waNumbers } from "@/db/schema";
+import { ensureAgents } from "@/lib/agents/shared";
 import { requireUser } from "@/lib/auth/server";
 import { normalizeWaConfig, type WaNumberConfig } from "@/lib/whatsapp/config";
 import { allowedSlots, slotFrom } from "@/lib/whatsapp/numbers";
 
 async function options(accountId: string) {
-  const [prods, sells, funs] = await Promise.all([
-    db
-      .select({ id: products.id, name: products.name, active: products.active })
-      .from(products)
-      .where(eq(products.accountId, accountId))
-      .orderBy(asc(products.sort), asc(products.name)),
+  const [agents, sells, funs] = await Promise.all([
+    ensureAgents(db, accountId),
     db.select({ id: sellers.id, name: sellers.name, active: sellers.active }).from(sellers).where(eq(sellers.accountId, accountId)).orderBy(asc(sellers.name)),
     db.select({ id: funnels.id, name: funnels.name, isDefault: funnels.isDefault }).from(funnels).where(eq(funnels.accountId, accountId)),
   ]);
-  return { products: prods, sellers: sells, funnels: funs };
+  return {
+    agents: agents.map((a) => ({ id: a.id, name: a.name, active: a.active, isPrimary: a.isPrimary })),
+    sellers: sells,
+    funnels: funs,
+  };
 }
 
-/** Regras de cada WhatsApp da conta + listas para escolher (produtos, vendedores, funis) */
+/** Regras de cada WhatsApp da conta + listas para escolher (agentes, vendedores, funis) */
 export async function GET() {
   const auth = await requireUser("whatsapp");
   if (auth.error) return auth.error;
@@ -41,14 +42,13 @@ export async function PUT(req: Request) {
   // Só ids desta conta
   const opt = await options(auth.accountId);
   const has = (list: { id: string }[]) => new Set(list.map((x) => x.id));
-  const pIds = has(opt.products);
   const sIds = has(opt.sellers);
   const funnel = opt.funnels.find((f) => f.id === raw.funnelId);
+  const agent = opt.agents.find((a) => a.id === raw.agentId);
   const config: WaNumberConfig = {
-    productIds: raw.productIds.filter((id) => pIds.has(id)),
+    agentId: agent && !agent.isPrimary ? agent.id : null,
     sellerIds: raw.sellerIds.filter((id) => sIds.has(id)),
     funnelId: funnel && !funnel.isDefault ? funnel.id : null,
-    aiInstructions: raw.aiInstructions,
   };
   const found = await db.query.waNumbers.findFirst({ where: and(eq(waNumbers.accountId, auth.accountId), eq(waNumbers.slot, slot)) });
   if (found) await db.update(waNumbers).set({ config }).where(eq(waNumbers.id, found.id));

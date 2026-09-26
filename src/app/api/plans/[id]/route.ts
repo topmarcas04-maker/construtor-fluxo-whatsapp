@@ -33,6 +33,7 @@ export async function PATCH(req: NextRequest, c: { params: Promise<{ id: string 
       .set({
         modules: v.modules,
         maxWhatsapp: v.maxWhatsapp,
+        maxAgents: v.maxAgents,
         callsPerMonth: v.callsPerMonth,
         supportAccess: v.supportAccess,
         premiumAccess: v.premiumAccess,

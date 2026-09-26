@@ -105,6 +105,8 @@ import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQu
 import { sellerPool, chooseSeller, type RotationState } from "../src/lib/ai/distribution";
 import { loadCatalogFor } from "../src/lib/ai/catalog";
 import { normalizeWaConfig, type WaNumberConfig } from "../src/lib/whatsapp/config";
+import { ensureAgents, pickAgent } from "../src/lib/agents/shared";
+import { agentSystemPrompt, restrictCatalogItem, restrictDecision } from "../src/lib/agents/common";
 import { storageReady, getObject, signedUrl } from "../src/lib/storage/s3";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
@@ -1378,8 +1380,13 @@ async function runAi(accountId: string, conversationId: string, force = false) {
   const lead = await db.query.leads.findFirst({ where: eq(leads.conversationId, conversationId) });
   if (!conversation || !lead) return;
   if (lead.aiPaused || lead.sellerId || lead.stage === "SALE") return;
-  // Regras do WhatsApp em que a conversa está (produtos e orientação próprios)
+  // Regras do WhatsApp em que a conversa está (agente, vendedores, funil)
   const waCfg = conversation.channel === "WHATSAPP" ? await numberConfig(accountId, conversation.waSlot) : normalizeWaConfig(null);
+  // Agente de IA que atende: o do lead → o do WhatsApp → o principal
+  const agent = pickAgent(await ensureAgents(db, accountId), lead.agentId, waCfg.agentId);
+  if (!agent) return;
+  if (lead.agentId !== agent.id) await db.update(leads).set({ agentId: agent.id }).where(eq(leads.id, lead.id));
+  const perms = agent.permissions;
 
   const recent = await db.query.messages.findMany({
     where: eq(messages.conversationId, conversationId),
@@ -1418,12 +1425,15 @@ async function runAi(accountId: string, conversationId: string, force = false) {
 
   // Catálogo: produtos ativos da conta (códigos curtos P1, P2... para a IA)
   // Ações (procedimentos) ativas da conta
-  const actions = (await ensureActions(db, accountId)).filter((a) => a.active);
-  const catalog = settings.catalogEnabled ? await loadCatalog(accountId, actions, waCfg.productIds) : [];
+  const actions = (await ensureActions(db, accountId)).filter((a) => a.active && (!agent.actionIds.length || agent.actionIds.includes(a.id)));
+  const catalog =
+    settings.catalogEnabled && perms.catalog ? await loadCatalog(accountId, actions, { productIds: agent.productIds, categoryIds: agent.categoryIds }) : [];
+  // O que o agente não pode informar (preço, parcelamento) nem chega à IA
+  for (const c of catalog) c.ai = restrictCatalogItem(c.ai, perms);
   // Sem bucket configurado a IA não oferece vídeo
   if (!storageReady()) for (const c of catalog) c.ai.hasVideo = false;
   // Qualificação "Antes de informar": até o cliente dizer nome/cidade, preço e detalhes nem chegam à IA
-  const qualify = normalizeQualify(settings.qualify);
+  const qualify = normalizeQualify(agent.qualify ?? settings.qualify);
   const leadTexts = history.filter((m) => m.direction === "IN").map((m) => m.transcript || m.body || "");
   const pending = qualifyPending(qualify, { qualifiedAt: lead.qualifiedAt, leadMessages: leadTexts.length });
   // Colunas com regra para a IA (ex.: "Ligação") de todos os funis; a do funil do lead tem preferência
@@ -1435,15 +1445,13 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     .filter((c, _i, arr) => c.funnelId === leadFunnelId || !arr.some((o) => o.funnelId === leadFunnelId && o.name.trim().toLowerCase() === c.name.trim().toLowerCase()));
 
   const agentInput = (locked: boolean): Parameters<typeof runSdrAgent>[0] => ({
-      systemPrompt:
-        (settings.systemPrompt || "Você é a atendente virtual da empresa.") +
-        (waCfg.aiInstructions ? `\n\nOrientação para este número de WhatsApp: ${waCfg.aiInstructions}` : ""),
-      style: { style: settings.style, styleCustom: settings.styleCustom, replyLength: settings.replyLength, emojiLevel: settings.emojiLevel },
-      offerVideo: settings.offerVideo,
+      systemPrompt: agentSystemPrompt(agent, settings.systemPrompt || "Você é a atendente virtual da empresa."),
+      style: { style: agent.style, styleCustom: agent.styleCustom, replyLength: agent.replyLength, emojiLevel: agent.emojiLevel },
+      offerVideo: agent.offerVideo && perms.videos,
       sellerHours: sellerAvailability(normalizeSellerHours(settings.sellerHours)),
       qualify,
       qualifyPending: locked,
-      handoffAuto: Boolean((settings.handoffMessage ?? "").trim()),
+      handoffAuto: perms.handoffSeller && Boolean((settings.handoffMessage ?? "").trim()),
       lead: {
         name: lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conversation.leadName,
         city: lead.city,
@@ -1463,7 +1471,7 @@ async function runAi(accountId: string, conversationId: string, force = false) {
       tags: allTags.map((t) => t.name),
       regions: [...new Set(rules.filter((r) => r.active && r.region).map((r) => r.region as string))],
       scheduling: {
-        enabled: settings.schedulingEnabled,
+        enabled: settings.schedulingEnabled && perms.schedule,
         businessHours: settings.businessHours,
         busy: busyRows.map((b) => `${formatSpDate(b.startsAt).slice(0, 5)} às ${formatSpTime(b.startsAt)}`),
         current: currentAppt
@@ -1548,6 +1556,9 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     decision.handoffReason = decision.handoffReason || "Dados da qualificação completos";
   }
 
+  // Só o que este agente tem permissão de fazer (fotos, vídeo, agenda, funil, etiquetas, vendedor)
+  restrictDecision(decision, perms);
+
   await applyDecision(accountId, lead.id, conversationId, decision, allTags, ruleColumns, catalog, funnelList);
   if (decision.appointment && settings.schedulingEnabled) {
     const sched = action?.kind === "SCHEDULE" ? action : null;
@@ -1599,7 +1610,7 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     const item = catalog.find((c) => c.ai.code === ref.code);
     if (!item) continue;
     await pause(900);
-    const r = await sendProductPhoto(accountId, conversation.phoneJid, item.id, "AI", null, false, { label: ref.label, hidePrice: !unlocked || onlyHandoff(qualify) });
+    const r = await sendProductPhoto(accountId, conversation.phoneJid, item.id, "AI", null, false, { label: ref.label, hidePrice: !unlocked || onlyHandoff(qualify) || !perms.price });
     if ("error" in r) console.warn(`[IA ${accountId.slice(0, 8)}] foto do produto ${ref.code}: ${r.error}`);
   }
 
@@ -1617,7 +1628,7 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     await handoffToSeller(accountId, lead.id, conversation.phoneJid, conversation.leadName, decision, settings, rules);
   }
   console.log(
-    `[IA ${accountId.slice(0, 8)}] ${conversation.phoneJid} — nota ${decision.score}` +
+    `[IA ${accountId.slice(0, 8)}] ${conversation.phoneJid} (${agent.name}) — nota ${decision.score}` +
       `${decision.appointment ? " — agendou" : ""}${decision.handoff ? " — transferido" : ""}`
   );
 }
@@ -1680,7 +1691,8 @@ async function recordAction(
   await db.update(leads).set(set).where(eq(leads.id, leadId));
 }
 
-const loadCatalog = (accountId: string, actions: AiAction[] = [], onlyIds: string[] = []) => loadCatalogFor(db, accountId, actions, onlyIds);
+const loadCatalog = (accountId: string, actions: AiAction[] = [], only?: { productIds?: string[]; categoryIds?: string[] }) =>
+  loadCatalogFor(db, accountId, actions, only);
 
 /** Envia a primeira foto do produto com legenda "Nome — preço" (+ descrição curta) */
 async function sendProductPhoto(

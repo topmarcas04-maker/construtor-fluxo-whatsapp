@@ -3,3 +3,6 @@ node_modules
 .env
 .env.local
 auth_info_baileys
+
+# Backups do banco (scripts/backup-db.mjs)
+backups/

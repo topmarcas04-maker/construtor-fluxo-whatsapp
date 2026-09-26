@@ -52,7 +52,7 @@ export function accountValues(
     if (planId && !(opts.planIds || []).includes(planId)) return { error: "Plano inválido" } as const;
     values.planId = planId;
   }
-  if (["maxWhatsapp", "callsPerMonth", "supportAccess", "premiumAccess"].some((k) => body[k] !== undefined)) {
+  if (["maxWhatsapp", "maxAgents", "callsPerMonth", "supportAccess", "premiumAccess"].some((k) => body[k] !== undefined)) {
     Object.assign(values, normalizeBenefits(body as never, opts.ceiling));
   }
   return { values } as const;

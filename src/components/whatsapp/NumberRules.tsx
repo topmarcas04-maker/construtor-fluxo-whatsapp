@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, Package, Users, Workflow, Sparkles, Loader2 } from "lucide-react";
-import { Button, Textarea } from "@/components/ui";
+import { ChevronDown, Bot, Users, Workflow, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui";
 import { hasOwnRules, type WaNumberConfig } from "@/lib/whatsapp/config";
 
 export interface RulesOptions {
-  products: { id: string; name: string; active: boolean }[];
+  agents: { id: string; name: string; active: boolean; isPrimary: boolean }[];
   sellers: { id: string; name: string; active: boolean }[];
   funnels: { id: string; name: string; isDefault: boolean }[];
 }
@@ -58,18 +58,19 @@ export function NumberRules({
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  const toggle = (key: "productIds" | "sellerIds", id: string) => {
+  const toggle = (key: "sellerIds", id: string) => {
     setMsg(null);
     setC((x) => ({ ...x, [key]: x[key].includes(id) ? x[key].filter((v) => v !== id) : [...x[key], id] }));
   };
 
   const funnelName = options.funnels.find((f) => f.id === c.funnelId)?.name;
+  const agentName = options.agents.find((a) => a.id === c.agentId)?.name;
+  const primaryName = options.agents.find((a) => a.isPrimary)?.name || "Agente principal";
   const summary = hasOwnRules(c)
     ? [
-        c.productIds.length ? `${c.productIds.length} produto${c.productIds.length > 1 ? "s" : ""}` : null,
+        agentName ? `agente ${agentName}` : null,
         c.sellerIds.length ? `${c.sellerIds.length} vendedor${c.sellerIds.length > 1 ? "es" : ""}` : null,
         funnelName ? `funil ${funnelName}` : null,
-        c.aiInstructions ? "orientação da IA" : null,
       ]
         .filter(Boolean)
         .join(" · ")
@@ -104,10 +105,27 @@ export function NumberRules({
         <div className="space-y-4 border-t border-slate-100 px-4 py-4">
           <div>
             <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              <Package size={13} /> Produtos que a IA oferece aqui
+              <Bot size={13} /> Agente de IA que atende aqui
             </p>
-            <Chips items={options.products} selected={c.productIds} onToggle={(id) => toggle("productIds", id)} />
-            <p className="mt-1 text-[11px] text-slate-400">Nenhum marcado = todos os produtos da conta.</p>
+            <select
+              value={c.agentId || ""}
+              onChange={(e) => {
+                setMsg(null);
+                setC((x) => ({ ...x, agentId: e.target.value || null }));
+              }}
+              className="w-full max-w-sm rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm outline-none focus:border-[var(--accent)]"
+            >
+              <option value="">{primaryName} (principal)</option>
+              {options.agents
+                .filter((a) => !a.isPrimary)
+                .map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                    {a.active ? "" : " (desativado)"}
+                  </option>
+                ))}
+            </select>
+            <p className="mt-1 text-[11px] text-slate-400">Os produtos, as instruções e as permissões ficam no cadastro do agente (menu Agentes de IA).</p>
           </div>
           <div>
             <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -139,22 +157,6 @@ export function NumberRules({
                   </option>
                 ))}
             </select>
-          </div>
-          <div>
-            <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              <Sparkles size={13} /> Orientação extra para a IA neste número
-            </p>
-            <Textarea
-              rows={3}
-              value={c.aiInstructions}
-              maxLength={1500}
-              onChange={(e) => {
-                setMsg(null);
-                setC((x) => ({ ...x, aiInstructions: e.target.value }));
-              }}
-              placeholder='Ex.: "Este número é do pós-venda: ajude com revisão, peças e garantia."'
-            />
-            <p className="mt-1 text-[11px] text-slate-400">Soma com as instruções gerais da IA (Configurações → Atendimento IA).</p>
           </div>
           <div className="flex items-center justify-end gap-3">
             {msg && <span className={`text-sm font-semibold ${msg === "Salvo!" ? "text-emerald-600" : "text-red-600"}`}>{msg}</span>}

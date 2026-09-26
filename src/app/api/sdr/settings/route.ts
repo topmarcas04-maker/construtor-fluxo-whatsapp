@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { accounts, aiSettings } from "@/db/schema";
 import { requireUser } from "@/lib/auth/server";
+import { syncSettingsToPrimary } from "@/lib/agents/shared";
 import { getAccount, resolveAccountAiKey, resolveAccountVoiceKey } from "@/lib/tenancy/server";
 import { decryptSecret, encryptSecret, maskKey } from "@/lib/tenancy/secret";
 
@@ -176,5 +177,10 @@ export async function PUT(req: NextRequest) {
     set.reminderMinutesBefore = Math.max(0, Math.min(1440, Number(body.reminderMinutesBefore) || 0));
   }
   await db.update(aiSettings).set(set).where(eq(aiSettings.id, auth.accountId));
+  // Instruções, estilo e qualificação desta tela são as do Agente Principal
+  if (["systemPrompt", "style", "styleCustom", "replyLength", "emojiLevel", "offerVideo", "qualify"].some((k) => k in set)) {
+    const fresh = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, auth.accountId) });
+    if (fresh) await syncSettingsToPrimary(db, auth.accountId, fresh);
+  }
   return NextResponse.json(await payload(auth.accountId));
 }

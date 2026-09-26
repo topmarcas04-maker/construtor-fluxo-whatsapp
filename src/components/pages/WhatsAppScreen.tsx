@@ -297,7 +297,7 @@ export function WhatsAppScreen() {
               <Bot size={22} />
             </span>
             <div>
-              <p className="font-semibold text-slate-900">Atendente com IA</p>
+              <p className="font-semibold text-slate-900">Agentes de IA</p>
               <p className="text-sm text-slate-500">Responde, qualifica e agenda sozinha</p>
             </div>
           </div>
@@ -331,7 +331,7 @@ export function WhatsAppScreen() {
           </ul>
           <p className="mt-5 flex items-start gap-2 rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
             <Smartphone size={14} className="mt-0.5 shrink-0" />
-            Liga/desliga, chave da IA e o jeito de falar ficam em Configurações → Atendimento IA.
+            Liga/desliga, chave da IA e o jeito de falar ficam em Configurações → Agentes de IA.
           </p>
         </Card>
       </div>

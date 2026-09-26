@@ -13,14 +13,18 @@ import { ensureActions } from "@/lib/actions/shared";
 import { ensureFunnels, ensureColumns } from "@/lib/funnel/shared";
 import { storageReady } from "@/lib/storage/s3";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "@/lib/ai/hours";
+import { ensureAgents } from "@/lib/agents/shared";
+import { agentSystemPrompt, restrictCatalogItem, restrictDecision, toProfile } from "@/lib/agents/common";
 import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff } from "@/lib/ai/qualify";
 
 /**
  * POST — conversa de teste com a IA (nada é salvo nem enviado).
- * Body: { messages: [{ from: "lead" | "ai", text }], draft?: { systemPrompt, style, styleCustom, replyLength, emojiLevel, replySpeed, model, offerVideo } }
+ * Body: { messages: [{ from: "lead" | "ai", text }], draft?: { systemPrompt, style, styleCustom, replyLength, emojiLevel, replySpeed, model, offerVideo },
+ *         agent?: { id?, name, role, instructions, style, qualify, productIds, categoryIds, actionIds, permissions... } }
+ * Sem "agent", testa o Agente Principal com as instruções da tela de Configurações.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireUser("configuracoes");
+  const auth = await requireUser(["configuracoes", "agentes"]);
   if (auth.error) return auth.error;
   const body = await req.json();
   const msgs = (Array.isArray(body.messages) ? body.messages : []).slice(-30) as { from: string; text: string }[];
@@ -31,7 +35,6 @@ export async function POST(req: NextRequest) {
   const key = await resolveAccountAiKey(auth.accountId);
   if (!key.apiKey) return NextResponse.json({ error: "Esta conta está sem chave de IA" }, { status: 400 });
   const draft = (body.draft || {}) as Record<string, string | undefined>;
-  const offerVideo = typeof body.draft?.offerVideo === "boolean" ? (body.draft.offerVideo as boolean) : settings.offerVideo;
 
   const [tagRows, rules, allActions, funnelList, account] = await Promise.all([
     db.select({ name: tags.name }).from(tags).where(eq(tags.accountId, auth.accountId)),
@@ -40,8 +43,20 @@ export async function POST(req: NextRequest) {
     ensureFunnels(db, auth.accountId),
     getAccount(auth.accountId),
   ]);
-  const actions = allActions.filter((a) => a.active);
-  const catalog = settings.catalogEnabled ? await loadCatalogFor(db, auth.accountId, actions) : [];
+  // Agente testado: o que veio da tela de Agentes (rascunho) ou o principal
+  const agents = await ensureAgents(db, auth.accountId);
+  const primary = agents.find((a) => a.isPrimary) || agents[0];
+  const fromAgentScreen = Boolean(body.agent && typeof body.agent === "object");
+  const agent = fromAgentScreen
+    ? toProfile({ ...(agents.find((a) => a.id === body.agent.id) || primary || {}), ...body.agent, id: body.agent.id || "rascunho" })
+    : primary;
+  const perms = agent.permissions;
+  const actions = allActions.filter((a) => a.active && (!agent.actionIds.length || agent.actionIds.includes(a.id)));
+  const catalog =
+    settings.catalogEnabled && perms.catalog
+      ? await loadCatalogFor(db, auth.accountId, actions, { productIds: agent.productIds, categoryIds: agent.categoryIds })
+      : [];
+  for (const c of catalog) c.ai = restrictCatalogItem(c.ai, perms);
   if (!storageReady()) for (const c of catalog) c.ai.hasVideo = false;
   const columns = (await Promise.all(funnelList.map((f) => ensureColumns(db, auth.accountId, f.id)))).flat();
   const ruleColumns = columns.filter((c) => c.kind === "CUSTOM" && c.aiRule?.trim());
@@ -77,29 +92,33 @@ export async function POST(req: NextRequest) {
 
   try {
     // Qualificação "Antes de informar": o teste guarda se o cliente já informou (body.qualified)
-    const qualify = normalizeQualify(body.draft?.qualify ?? settings.qualify);
+    const offerVideo = (fromAgentScreen ? agent.offerVideo : typeof body.draft?.offerVideo === "boolean" ? (body.draft.offerVideo as boolean) : settings.offerVideo) && perms.videos;
+    const qualify = normalizeQualify(fromAgentScreen ? agent.qualify : (body.draft?.qualify ?? settings.qualify));
+    const basePrompt = (draft.systemPrompt ?? settings.systemPrompt) || `Você é a atendente virtual da ${account?.name || "empresa"}.`;
     const leadTexts = msgs.filter((m) => m.from === "lead").map((m) => String(m.text || ""));
     const pending = qualifyPending(qualify, { qualifiedAt: body.qualified ? new Date() : null, leadMessages: leadTexts.length });
     const input = (locked: boolean): Parameters<typeof runSdrAgent>[0] => ({
-        systemPrompt: (draft.systemPrompt ?? settings.systemPrompt) || `Você é a atendente virtual da ${account?.name || "empresa"}.`,
-        style: {
-          style: draft.style ?? settings.style,
-          styleCustom: draft.styleCustom ?? settings.styleCustom,
-          replyLength: draft.replyLength ?? settings.replyLength,
-          emojiLevel: draft.emojiLevel ?? settings.emojiLevel,
-        },
+        systemPrompt: agentSystemPrompt(fromAgentScreen ? agent : { ...agent, instructions: basePrompt }, basePrompt),
+        style: fromAgentScreen
+          ? { style: agent.style, styleCustom: agent.styleCustom, replyLength: agent.replyLength, emojiLevel: agent.emojiLevel }
+          : {
+              style: draft.style ?? settings.style,
+              styleCustom: draft.styleCustom ?? settings.styleCustom,
+              replyLength: draft.replyLength ?? settings.replyLength,
+              emojiLevel: draft.emojiLevel ?? settings.emojiLevel,
+            },
         lead: { name: null, city: null, interest: null, saleType: "ANY", stage: "FIRST_CONTACT", score: null, summary: null },
         channel: "WHATSAPP",
         history: msgs.map((m) => ({ direction: m.from === "lead" ? "IN" : "OUT", body: String(m.text || "").slice(0, 2000), sender: m.from === "lead" ? "LEAD" : "AI" })),
         tags: tagRows.map((t) => t.name),
         regions: [...new Set(rules.filter((r) => r.active && r.region).map((r) => r.region as string))],
-        scheduling: { enabled: settings.schedulingEnabled, businessHours: settings.businessHours, busy: busyRows.map((b) => `${formatSpDate(b.startsAt).slice(0, 5)} às ${formatSpTime(b.startsAt)}`), current: null },
+        scheduling: { enabled: settings.schedulingEnabled && perms.schedule, businessHours: settings.businessHours, busy: busyRows.map((b) => `${formatSpDate(b.startsAt).slice(0, 5)} às ${formatSpTime(b.startsAt)}`), current: null },
         catalog: catalog.map((c) => (locked ? maskCatalogItem(c.ai) : c.ai)),
         offerVideo,
         sellerHours: sellerAvailability(normalizeSellerHours(body.draft?.sellerHours ?? settings.sellerHours)),
         qualify,
         qualifyPending: locked,
-        handoffAuto: Boolean(String(draft.handoffMessage ?? settings.handoffMessage ?? "").trim()),
+        handoffAuto: perms.handoffSeller && Boolean(String(draft.handoffMessage ?? settings.handoffMessage ?? "").trim()),
         actions: actions.map((a) => ({ name: a.name, kind: a.kind, instructions: a.instructions })),
         columns: ruleColumns.map((c) => ({ name: c.name, rule: c.aiRule!.trim() })),
     });
@@ -125,6 +144,7 @@ export async function POST(req: NextRequest) {
     // Transferência automática quando os dados obrigatórios chegaram (igual ao atendimento real)
     const missingReq = missingForHandoff(qualify, { name: d.name, city: d.city, data: mergeQualifyData(qualify, null, d.data), leadTexts });
     if (missingReq && missingReq.length === 0) d.handoff = true;
+    restrictDecision(d, perms);
     const unlocked = !pending || qualified;
     const parts = d.reply.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).slice(0, 3);
     // Fotos e vídeo como o cliente receberia (mesma foto e legenda do WhatsApp)
@@ -144,7 +164,7 @@ export async function POST(req: NextRequest) {
       const product = prodRows.find((p) => p.id === catalog.find((c) => c.ai.code === ref.code)?.id);
       if (!product) continue;
       const img = pickProductImage(imgRows.filter((i) => i.productId === product.id), { label: ref.label });
-      media.push({ kind: img ? "image" : "text", url: img ? `/api/products/image/${img.id}` : null, caption: productCaption(product, img, false, !unlocked || onlyHandoff(qualify)) });
+      media.push({ kind: img ? "image" : "text", url: img ? `/api/products/image/${img.id}` : null, caption: productCaption(product, img, false, !unlocked || onlyHandoff(qualify) || !perms.price) });
     }
     const videoItem = d.videoCode && unlocked ? catalog.find((c) => c.ai.code === d.videoCode && c.ai.hasVideo) : null;
     const videoProduct = videoItem ? prodRows.find((p) => p.id === videoItem.id) : null;
@@ -158,6 +178,7 @@ export async function POST(req: NextRequest) {
       video: d.videoCode ? catalog.find((c) => c.ai.code === d.videoCode && c.ai.hasVideo)?.ai.name || null : null,
       media,
       qualified,
+      agent: agent.name,
       speed: typeof draft.replySpeed === "string" ? draft.replySpeed : settings.replySpeed,
       action: d.actionName || null,
       handoff: d.handoff,

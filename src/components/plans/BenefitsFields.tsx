@@ -1,7 +1,7 @@
 "use client";
 
 import { Input, Toggle } from "@/components/ui";
-import { MAX_WHATSAPP_LIMIT, type PlanBenefits } from "@/lib/plans/shared";
+import { MAX_AGENTS_LIMIT, MAX_WHATSAPP_LIMIT, type PlanBenefits } from "@/lib/plans/shared";
 
 /** Campos de benefícios (usados no plano e na conta) */
 export function BenefitsFields({
@@ -34,6 +34,22 @@ export function BenefitsFields({
           ))}
         </div>
         <p className="mt-1 text-xs text-slate-400">Quantos números a conta pode conectar ao mesmo tempo.</p>
+      </div>
+      <div>
+        <p className="mb-1.5 text-sm font-semibold text-slate-800">Agentes de IA</p>
+        <Input
+          type="number"
+          min={1}
+          max={ceiling?.maxAgents ?? MAX_AGENTS_LIMIT}
+          value={String(value.maxAgents ?? 1)}
+          onChange={(e) =>
+            onChange({ ...value, maxAgents: Math.max(1, Math.min(ceiling?.maxAgents ?? MAX_AGENTS_LIMIT, Number(e.target.value) || 1)) })
+          }
+          className="max-w-[120px]"
+        />
+        <p className="mt-1 text-xs text-slate-400">
+          Quantos agentes a conta pode criar, contando o principal (até {ceiling?.maxAgents ?? MAX_AGENTS_LIMIT}).
+        </p>
       </div>
       <div>
         <p className="mb-1.5 text-sm font-semibold text-slate-800">Calls de acompanhamento por mês</p>

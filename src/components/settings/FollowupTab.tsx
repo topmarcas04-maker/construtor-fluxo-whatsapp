@@ -263,7 +263,7 @@ export function FollowupTab() {
           </p>
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={s.includeTeam} onChange={(e) => set({ includeTeam: e.target.checked })} className="h-4 w-4 accent-[var(--accent)]" />
-            Incluir leads que estão com a equipe (IA pausada ou chatbot passou para a equipe)
+            Incluir leads que estão com a equipe (agente pausado ou chatbot passou para a equipe)
           </label>
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={s.includeWithSeller} onChange={(e) => set({ includeWithSeller: e.target.checked })} className="h-4 w-4 accent-[var(--accent)]" />

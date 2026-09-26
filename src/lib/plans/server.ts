@@ -15,10 +15,11 @@ export function childTypeOf(type: string): AccountType | null {
 }
 
 /** Benefícios efetivos da conta (o Master tem tudo) */
-export function accountBenefits(a: Pick<AccountRow, "type" | "maxWhatsapp" | "callsPerMonth" | "supportAccess" | "premiumAccess">): PlanBenefits {
+export function accountBenefits(a: Pick<AccountRow, "type" | "maxWhatsapp" | "maxAgents" | "callsPerMonth" | "supportAccess" | "premiumAccess">): PlanBenefits {
   if (a.type === "MASTER") return MASTER_BENEFITS;
   return {
     maxWhatsapp: a.maxWhatsapp ?? 1,
+    maxAgents: a.maxAgents ?? 1,
     callsPerMonth: a.callsPerMonth ?? 0,
     supportAccess: Boolean(a.supportAccess),
     premiumAccess: Boolean(a.premiumAccess),

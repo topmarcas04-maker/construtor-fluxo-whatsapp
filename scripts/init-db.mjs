@@ -783,6 +783,44 @@ ALTER TABLE wa_numbers ADD COLUMN IF NOT EXISTS config jsonb NOT NULL DEFAULT '{
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS wa_slot integer;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS wa_label varchar(60);
 
+-- Agentes de IA (cada conta pode ter vários; o principal nasce da IA que a conta já tinha)
+CREATE TABLE IF NOT EXISTS ai_agents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name varchar(80) NOT NULL,
+  description text,
+  role varchar(20) NOT NULL DEFAULT 'VENDAS',
+  role_custom varchar(60),
+  objective text,
+  active boolean NOT NULL DEFAULT true,
+  is_primary boolean NOT NULL DEFAULT false,
+  instructions text NOT NULL DEFAULT '',
+  style varchar(20) NOT NULL DEFAULT 'FRIENDLY',
+  style_custom text,
+  reply_length varchar(10) NOT NULL DEFAULT 'MEDIUM',
+  emoji_level varchar(10) NOT NULL DEFAULT 'LOW',
+  offer_video boolean NOT NULL DEFAULT true,
+  qualify jsonb,
+  product_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  category_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  action_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  permissions jsonb NOT NULL DEFAULT '{}'::jsonb,
+  sort integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ai_agents_account_idx ON ai_agents (account_id);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS agent_id uuid;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS max_agents integer NOT NULL DEFAULT 1;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_agents integer NOT NULL DEFAULT 1;
+-- Cada conta com IA configurada ganha o "Agente Comercial" (principal) com as configurações de hoje
+INSERT INTO ai_agents (account_id, name, role, objective, is_primary, instructions, style, style_custom, reply_length, emoji_level, offer_video, qualify)
+SELECT a.id, 'Agente Comercial', 'VENDAS', 'Atender, qualificar e entregar o cliente pronto para o vendedor.', true,
+       s.system_prompt, s.style, s.style_custom, s.reply_length, s.emoji_level, s.offer_video, s.qualify
+FROM ai_settings s
+JOIN accounts a ON a.id::text = s.id
+WHERE NOT EXISTS (SELECT 1 FROM ai_agents g WHERE g.account_id = a.id);
+
 -- Migrações que rodam uma única vez
 CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());
 DO $$ BEGIN
@@ -791,6 +829,12 @@ DO $$ BEGIN
     UPDATE accounts SET modules = modules || '["produtos"]'::jsonb
       WHERE type <> 'MASTER' AND modules ? 'leads' AND NOT modules ? 'produtos';
     INSERT INTO app_migrations (key) VALUES ('grant-produtos-v1');
+  END IF;
+  -- Menu novo "Agentes de IA": libera para quem já tinha Configurações
+  IF NOT EXISTS (SELECT 1 FROM app_migrations WHERE key = 'grant-agentes-v1') THEN
+    UPDATE accounts SET modules = modules || '["agentes"]'::jsonb
+      WHERE type <> 'MASTER' AND modules ? 'configuracoes' AND NOT modules ? 'agentes';
+    INSERT INTO app_migrations (key) VALUES ('grant-agentes-v1');
   END IF;
   -- Conversas que já existiam começam como lidas
   IF NOT EXISTS (SELECT 1 FROM app_migrations WHERE key = 'read-count-v1') THEN

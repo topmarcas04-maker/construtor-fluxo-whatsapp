@@ -39,6 +39,7 @@ interface Account {
   productEdit?: boolean;
   planId?: string | null;
   maxWhatsapp?: number;
+  maxAgents?: number;
   callsPerMonth?: number;
   supportAccess?: boolean;
   premiumAccess?: boolean;
@@ -177,6 +178,7 @@ export function AccountsScreen() {
       planId: a.planId || "",
       benefits: {
         maxWhatsapp: a.maxWhatsapp ?? 1,
+        maxAgents: a.maxAgents ?? 1,
         callsPerMonth: a.callsPerMonth ?? 0,
         supportAccess: Boolean(a.supportAccess),
         premiumAccess: Boolean(a.premiumAccess),
@@ -341,6 +343,7 @@ export function AccountsScreen() {
                         )}
                         {benefitsText({
                           maxWhatsapp: a.maxWhatsapp ?? 1,
+                          maxAgents: a.maxAgents ?? 1,
                           callsPerMonth: a.callsPerMonth ?? 0,
                           supportAccess: Boolean(a.supportAccess),
                           premiumAccess: Boolean(a.premiumAccess),
@@ -492,6 +495,7 @@ export function AccountsScreen() {
                           modules: plan.modules.filter((k) => grantable.some((g) => g.key === k)),
                           benefits: {
                             maxWhatsapp: plan.maxWhatsapp,
+                            maxAgents: plan.maxAgents ?? 1,
                             callsPerMonth: plan.callsPerMonth,
                             supportAccess: plan.supportAccess,
                             premiumAccess: plan.premiumAccess,
@@ -589,7 +593,7 @@ export function AccountsScreen() {
                     </span>
                     <span className="mt-1 block text-xs text-slate-500">
                       {opt === "PARENT" && "Usa a sua integração de IA (o consumo sai da sua chave)."}
-                      {opt === "OWN" && `O ${labels.one} cadastra a própria chave em Configurações → Atendimento IA.`}
+                      {opt === "OWN" && `O ${labels.one} cadastra a própria chave em Configurações → Agentes de IA.`}
                       {opt === "NONE" && "Atendimento só manual, sem IA."}
                     </span>
                   </label>

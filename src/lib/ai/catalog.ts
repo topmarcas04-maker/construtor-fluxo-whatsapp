@@ -2,7 +2,7 @@
  * Catálogo que a IA recebe (produtos ativos, cores ligadas, parcelas, ações). Sem imports "@/":
  * usado pelo motor e pela tela de teste da IA.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../db/schema";
 import { products, productCategories, productImages } from "../../db/schema";
@@ -34,8 +34,18 @@ export function productActionNames(
 
 const CATALOG_LIMIT = 80;
 
-/** onlyIds: só estes produtos (ex.: os liberados para um WhatsApp da conta); vazio = todos */
-export async function loadCatalogFor(db: Db, accountId: string, actions: AiAction[] = [], onlyIds: string[] = []) {
+/** only: só estes produtos e/ou categorias (ex.: os que um Agente de IA conhece); tudo vazio = todos */
+export async function loadCatalogFor(db: Db, accountId: string, actions: AiAction[] = [], only?: { productIds?: string[]; categoryIds?: string[] }) {
+  const pIds = only?.productIds || [];
+  const cIds = only?.categoryIds || [];
+  const onlyCond =
+    pIds.length && cIds.length
+      ? or(inArray(products.id, pIds), inArray(products.categoryId, cIds))
+      : pIds.length
+        ? inArray(products.id, pIds)
+        : cIds.length
+          ? inArray(products.categoryId, cIds)
+          : undefined;
   const rows = await db
     .select({
       id: products.id,
@@ -62,7 +72,7 @@ export async function loadCatalogFor(db: Db, accountId: string, actions: AiActio
     })
     .from(products)
     .leftJoin(productCategories, eq(productCategories.id, products.categoryId))
-    .where(and(eq(products.accountId, accountId), eq(products.active, true), onlyIds.length ? inArray(products.id, onlyIds) : undefined))
+    .where(and(eq(products.accountId, accountId), eq(products.active, true), onlyCond))
     .orderBy(products.sort, products.name)
     .limit(CATALOG_LIMIT);
   if (!rows.length) return [];

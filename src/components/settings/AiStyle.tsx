@@ -33,7 +33,16 @@ function Seg<T extends string>({ value, options, onChange }: { value: T; options
 }
 
 /** Estilo de conversa (jeito de falar) + ritmo das respostas */
-export function StyleCard({ v, onChange }: { v: StyleValues; onChange: (patch: Partial<StyleValues>) => void }) {
+export function StyleCard({
+  v,
+  onChange,
+  hideSpeed,
+}: {
+  v: StyleValues;
+  onChange: (patch: Partial<StyleValues>) => void;
+  /** Esconde o "Tempo para responder" (que vale para a conta toda, não para cada agente) */
+  hideSpeed?: boolean;
+}) {
   const speed = SPEED_OPTIONS.find((o) => o.key === v.replySpeed) || SPEED_OPTIONS[1];
   return (
     <div className="rounded-xl border border-slate-200 p-5">
@@ -83,6 +92,7 @@ export function StyleCard({ v, onChange }: { v: StyleValues; onChange: (patch: P
         </div>
       </div>
 
+      {!hideSpeed && (
       <div className="mt-5 border-t border-slate-100 pt-4">
         <p className="mb-1.5 flex items-center gap-2 text-sm font-semibold text-slate-800">
           <Timer size={15} /> Tempo para responder
@@ -92,6 +102,7 @@ export function StyleCard({ v, onChange }: { v: StyleValues; onChange: (patch: P
           {speed.hint} Se o cliente mandar outra mensagem nesse meio-tempo, a IA espera e responde tudo junto.
         </p>
       </div>
+      )}
     </div>
   );
 }
@@ -122,7 +133,16 @@ function WaText({ text }: { text: string }) {
 }
 
 /** Conversa de teste com a IA usando o que está na tela (mesmo sem salvar), no visual do WhatsApp */
-export function AiTester({ draft, disabled }: { draft: Record<string, unknown>; disabled?: string | null }) {
+export function AiTester({
+  draft,
+  disabled,
+  agent,
+}: {
+  draft: Record<string, unknown>;
+  disabled?: string | null;
+  /** Rascunho do Agente de IA (tela Agentes); sem isso testa o Agente Principal */
+  agent?: Record<string, unknown> | null;
+}) {
   const [lines, setLines] = useState<Line[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -166,7 +186,7 @@ export function AiTester({ draft, disabled }: { draft: Record<string, unknown>; 
       const res = await fetch("/api/sdr/settings/ai-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history, draft, qualified: qualified.current }),
+        body: JSON.stringify({ messages: history, draft, agent: agent || undefined, qualified: qualified.current }),
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "A IA não respondeu");
@@ -233,7 +253,7 @@ export function AiTester({ draft, disabled }: { draft: Record<string, unknown>; 
       <div className="flex flex-wrap items-center justify-between gap-3 bg-[#075e54] px-4 py-3 text-white">
         <div>
           <p className="flex items-center gap-2 font-semibold">
-            <MessageCircleMore size={17} /> Testar a IA
+            <MessageCircleMore size={17} /> Testar Agente
           </p>
           <p className="text-xs text-white/75">
             Converse como se fosse o cliente. Usa o que está na tela (mesmo sem salvar). Nada é enviado nem salvo.

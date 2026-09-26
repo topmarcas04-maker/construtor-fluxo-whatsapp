@@ -127,7 +127,7 @@ export function ActionsTab() {
     <div className="space-y-5 p-4 md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="max-w-2xl">
-          <p className="font-semibold text-slate-900">Ações da IA</p>
+          <p className="font-semibold text-slate-900">Ações do Agente</p>
           <p className="text-sm text-slate-600">
             São os procedimentos que a IA conduz com o cliente: agendar reunião ou test-drive, reservar, explicar o financiamento,
             pedir ligação, passar para vendedor. Depois, em <b>Produtos</b>, escolha quais ações valem para cada produto ou categoria.

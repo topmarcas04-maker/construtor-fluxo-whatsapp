@@ -65,6 +65,8 @@ export interface Lead {
     /** Nome desse WhatsApp, quando a conta tem mais de um */
     waLabel?: string | null;
   };
+  /** Agente de IA que está atendendo (nome) */
+  agentName?: string | null;
   lastMessage: LastMessage | null;
   /** Mensagens do cliente ainda não lidas pela equipe */
   unread?: number;

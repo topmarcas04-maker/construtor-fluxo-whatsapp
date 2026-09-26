@@ -95,13 +95,13 @@ function StatusChip({ lead }: { lead: Lead }) {
   if (lead.aiPaused) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-        <PauseCircle size={11} /> IA pausada
+        <PauseCircle size={11} /> Agente pausado
       </span>
     );
   }
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700">
-      <Bot size={11} /> IA atendendo
+      <Bot size={11} /> {lead.agentName ? `Agente: ${lead.agentName}` : "Agente atendendo"}
     </span>
   );
 }
@@ -478,7 +478,7 @@ export function ConversationsView({
                 selectedLead.aiPaused ? "bg-slate-100 text-slate-500" : "bg-violet-50 text-violet-700"
               }`}
             >
-              {selectedLead.aiPaused ? "IA pausada" : "IA ativa"}
+              {selectedLead.aiPaused ? "Agente pausado" : `Agente atendendo${selectedLead.agentName ? `: ${selectedLead.agentName}` : ""}`}
             </span>
             <div className="hidden flex-wrap items-center gap-2 md:flex">
               <button
@@ -503,15 +503,15 @@ export function ConversationsView({
                   className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-sm font-medium text-violet-700 hover:bg-violet-100"
                   title="A IA volta a responder este lead"
                 >
-                  <PlayCircle size={16} /> Ativar IA
+                  <PlayCircle size={16} /> Ativar agente
                 </button>
               ) : (
                 <button
                   onClick={() => patchLead({ aiPaused: true })}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                  title="Você assume a conversa e a IA para de responder"
+                  title="Você assume a conversa e o agente para de responder"
                 >
-                  <PauseCircle size={16} /> Pausar IA
+                  <PauseCircle size={16} /> Pausar agente
                 </button>
               )}
             </div>
@@ -605,7 +605,7 @@ export function ConversationsView({
           <div className="border-t border-slate-200 bg-white px-3 py-2.5 md:px-6 md:py-3">
             {sendError && <p className="mb-2 text-sm text-red-600">{sendError}</p>}
             {!selectedLead.aiPaused && !selectedLead.seller && (
-              <p className="mb-2 hidden text-xs text-slate-400 md:block">Se você enviar uma mensagem, a IA pausa e você assume a conversa.</p>
+              <p className="mb-2 hidden text-xs text-slate-400 md:block">Se você enviar uma mensagem, o agente pausa e você assume a conversa.</p>
             )}
             <Composer
               quickReplies={quickReplies}
@@ -635,7 +635,7 @@ export function ConversationsView({
                     <span className="grid h-9 w-9 place-items-center rounded-full bg-violet-50 text-violet-600">
                       {selectedLead.aiPaused ? <PlayCircle size={18} /> : <PauseCircle size={18} />}
                     </span>
-                    {selectedLead.aiPaused ? "Ativar IA" : "Pausar IA"}
+                    {selectedLead.aiPaused ? "Ativar agente" : "Pausar agente"}
                   </button>
                 </>
               )}
