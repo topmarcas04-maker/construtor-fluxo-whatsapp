@@ -46,6 +46,7 @@ import {
   funnels,
   chatbots,
   followupSettings,
+  waNumbers,
   broadcasts,
   broadcastRecipients,
   driveFiles,
@@ -103,6 +104,7 @@ import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from ".
 import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff, type QualifyData } from "../src/lib/ai/qualify";
 import { sellerPool, chooseSeller, type RotationState } from "../src/lib/ai/distribution";
 import { loadCatalogFor } from "../src/lib/ai/catalog";
+import { normalizeWaConfig, type WaNumberConfig } from "../src/lib/whatsapp/config";
 import { storageReady, getObject, signedUrl } from "../src/lib/storage/s3";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
@@ -137,6 +139,8 @@ type Sock = ReturnType<typeof makeWASocket>;
 
 interface Session {
   accountId: string;
+  /** Qual WhatsApp da conta: 1 (principal), 2 ou 3 */
+  slot: number;
   sock: Sock | null;
   state: "starting" | "qr" | "connected" | "idle";
   phone: string | null;
@@ -148,18 +152,75 @@ interface Session {
 }
 
 const sessions = new Map<string, Session>();
+/** Chave da sessão: o WhatsApp 1 usa só o id da conta (como sempre foi); o 2 e o 3 ganham "#2"/"#3" */
+const skey = (accountId: string, slot = 1) => (slot > 1 ? `${accountId}#${slot}` : accountId);
+/** Chave no wa_auth: o 1 continua igual; o 2 e o 3 com prefixo "s2:"/"s3:" */
+const authKey = (slot: number, key: string) => (slot > 1 ? `s${slot}:${key}` : key);
+const MAX_SLOTS = 3;
+/** Quantos WhatsApps a conta pode ter (o Master pode os 3) */
+const slotsOf = (a: { type: string; maxWhatsapp: number | null }) => (a.type === "MASTER" ? MAX_SLOTS : Math.max(1, Math.min(MAX_SLOTS, a.maxWhatsapp || 1)));
+
+/** Sessão conectada da conta: prefere o número pedido; senão o primeiro conectado (1, 2, 3) */
+function connectedSession(accountId: string, slot?: number | null) {
+  if (slot) {
+    const s = sessions.get(skey(accountId, slot));
+    if (s?.sock && s.state === "connected") return s;
+  }
+  for (let n = 1; n <= MAX_SLOTS; n++) {
+    const s = sessions.get(skey(accountId, n));
+    if (s?.sock && s.state === "connected") return s;
+  }
+  return undefined;
+}
+
+/** Regras próprias de cada WhatsApp da conta (produtos, vendedores, funil, orientação da IA) — cache de 30s */
+const waCfgCache = new Map<string, { at: number; cfg: WaNumberConfig }>();
+async function numberConfig(accountId: string, slot: number | null | undefined) {
+  const n = slot || 1;
+  const k = skey(accountId, n);
+  const hit = waCfgCache.get(k);
+  if (hit && Date.now() - hit.at < 30e3) return hit.cfg;
+  const row = await db.query.waNumbers.findFirst({ where: and(eq(waNumbers.accountId, accountId), eq(waNumbers.slot, n)), columns: { config: true } });
+  const cfg = normalizeWaConfig(row?.config);
+  waCfgCache.set(k, { at: Date.now(), cfg });
+  return cfg;
+}
+
+/** Regras do WhatsApp em que a conversa com este contato está */
+async function configForJid(accountId: string, phoneJid: string) {
+  const conv = await db.query.conversations.findFirst({
+    where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
+    columns: { waSlot: true, channel: true },
+  });
+  if (conv && conv.channel !== "WHATSAPP") return normalizeWaConfig(null);
+  return numberConfig(accountId, conv?.waSlot);
+}
+
+/** Por qual WhatsApp falar com este contato: o número em que a conversa está */
+async function sessionFor(accountId: string, phoneJid: string) {
+  const conv = await db.query.conversations.findFirst({
+    where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
+    columns: { waSlot: true },
+  });
+  const own = sessions.get(skey(accountId, conv?.waSlot || 1));
+  // O número da conversa está em uso (conectado ou reconectando): só ele, para o cliente não receber de outro número
+  if (own && own.state !== "idle") return own.sock && own.state === "connected" ? own : undefined;
+  return connectedSession(accountId);
+}
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ============================================================================
 // SESSÃO DO WHATSAPP GUARDADA NO BANCO
 // ============================================================================
 
-async function readAuth(accountId: string, key: string) {
+async function readAuth(accountId: string, key: string, slot = 1) {
+  key = authKey(slot, key);
   const row = await db.query.waAuth.findFirst({ where: and(eq(waAuth.accountId, accountId), eq(waAuth.key, key)) });
   return row ? JSON.parse(row.value, BufferJSON.reviver) : null;
 }
 
-async function writeAuth(accountId: string, key: string, value: unknown) {
+async function writeAuth(accountId: string, key: string, value: unknown, slot = 1) {
+  key = authKey(slot, key);
   const json = JSON.stringify(value, BufferJSON.replacer);
   await db
     .insert(waAuth)
@@ -167,16 +228,18 @@ async function writeAuth(accountId: string, key: string, value: unknown) {
     .onConflictDoUpdate({ target: [waAuth.accountId, waAuth.key], set: { value: json } });
 }
 
-async function removeAuth(accountId: string, key: string) {
+async function removeAuth(accountId: string, key: string, slot = 1) {
+  key = authKey(slot, key);
   await db.delete(waAuth).where(and(eq(waAuth.accountId, accountId), eq(waAuth.key, key)));
 }
 
-async function clearAuth(accountId: string) {
-  await db.delete(waAuth).where(eq(waAuth.accountId, accountId));
+async function clearAuth(accountId: string, slot = 1) {
+  const mine = slot > 1 ? sql`${waAuth.key} LIKE ${`s${slot}:%`}` : sql`${waAuth.key} !~ '^s[0-9]:'`;
+  await db.delete(waAuth).where(and(eq(waAuth.accountId, accountId), mine));
 }
 
-async function useDbAuthState(accountId: string): Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }> {
-  const creds = (await readAuth(accountId, "creds")) || initAuthCreds();
+async function useDbAuthState(accountId: string, slot = 1): Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }> {
+  const creds = (await readAuth(accountId, "creds", slot)) || initAuthCreds();
   return {
     state: {
       creds,
@@ -185,7 +248,7 @@ async function useDbAuthState(accountId: string): Promise<{ state: Authenticatio
           const data: { [id: string]: SignalDataTypeMap[T] } = {};
           await Promise.all(
             ids.map(async (id) => {
-              let value = await readAuth(accountId, `${type}-${id}`);
+              let value = await readAuth(accountId, `${type}-${id}`, slot);
               if (type === "app-state-sync-key" && value) {
                 value = proto.Message.AppStateSyncKeyData.fromObject(value);
               }
@@ -200,19 +263,19 @@ async function useDbAuthState(accountId: string): Promise<{ state: Authenticatio
             for (const id in data[category]) {
               const value = data[category][id];
               const key = `${category}-${id}`;
-              tasks.push(value ? writeAuth(accountId, key, value) : removeAuth(accountId, key));
+              tasks.push(value ? writeAuth(accountId, key, value, slot) : removeAuth(accountId, key, slot));
             }
           }
           await Promise.all(tasks);
         },
       },
     },
-    saveCreds: () => writeAuth(accountId, "creds", creds),
+    saveCreds: () => writeAuth(accountId, "creds", creds, slot),
   };
 }
 
-async function hasSavedLogin(accountId: string) {
-  const creds = await readAuth(accountId, "creds");
+async function hasSavedLogin(accountId: string, slot = 1) {
+  const creds = await readAuth(accountId, "creds", slot);
   return Boolean(creds?.registered || creds?.me?.id);
 }
 
@@ -220,8 +283,15 @@ async function hasSavedLogin(accountId: string) {
 // SITUAÇÃO DO WHATSAPP (gravada no banco para o painel mostrar avisos)
 // ============================================================================
 
-async function setWaState(accountId: string, state: string, phone: string | null) {
+async function setWaState(accountId: string, state: string, phone: string | null, slot = 1) {
   try {
+    if (slot > 1) {
+      const set: Record<string, unknown> = { state, stateAt: new Date() };
+      if (phone) set.phone = phone;
+      if (state === "connected") set.lastSeenAt = new Date();
+      await db.update(waNumbers).set(set).where(and(eq(waNumbers.accountId, accountId), eq(waNumbers.slot, slot)));
+      return;
+    }
     const set: Record<string, unknown> = { waState: state, waStateAt: new Date() };
     if (phone) set.waPhone = phone;
     if (state === "connected") set.waLastSeenAt = new Date();
@@ -231,11 +301,19 @@ async function setWaState(accountId: string, state: string, phone: string | null
   }
 }
 
-async function touchLastSeen(accountId: string) {
+async function touchLastSeen(accountId: string, slot = 1) {
+  if (slot > 1) {
+    await db.update(waNumbers).set({ lastSeenAt: new Date() }).where(and(eq(waNumbers.accountId, accountId), eq(waNumbers.slot, slot))).catch(() => {});
+    return;
+  }
   await db.update(accounts).set({ waLastSeenAt: new Date() }).where(eq(accounts.id, accountId)).catch(() => {});
 }
 
-async function getLastSeen(accountId: string) {
+async function getLastSeen(accountId: string, slot = 1) {
+  if (slot > 1) {
+    const n = await db.query.waNumbers.findFirst({ where: and(eq(waNumbers.accountId, accountId), eq(waNumbers.slot, slot)), columns: { lastSeenAt: true } });
+    return n?.lastSeenAt || null;
+  }
   const a = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId), columns: { waLastSeenAt: true } });
   return a?.waLastSeenAt || null;
 }
@@ -244,9 +322,9 @@ async function getLastSeen(accountId: string) {
 const alertSent = new Set<string>();
 
 /** Avisa por WhatsApp que o número de uma conta caiu, usando o WhatsApp da conta acima (parceiro/master) */
-async function sendDisconnectAlert(accountId: string, loggedOut: boolean) {
-  if (alertSent.has(accountId)) return;
-  alertSent.add(accountId);
+async function sendDisconnectAlert(accountId: string, loggedOut: boolean, slot = 1) {
+  if (alertSent.has(skey(accountId, slot))) return;
+  alertSent.add(skey(accountId, slot));
   try {
     const acc = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
     if (!acc) return;
@@ -256,8 +334,8 @@ async function sendDisconnectAlert(accountId: string, loggedOut: boolean) {
     let senderId: string | null = acc.parentId;
     let senderSession: Session | undefined;
     for (let i = 0; senderId && i < 6; i++) {
-      const sess = sessions.get(senderId);
-      if (sess?.state === "connected") {
+      const sess = connectedSession(senderId);
+      if (sess) {
         senderSession = sess;
         break;
       }
@@ -269,9 +347,10 @@ async function sendDisconnectAlert(accountId: string, loggedOut: boolean) {
       return;
     }
     const jid = `${target.length <= 11 ? "55" + target : target}@s.whatsapp.net`;
+    const which = slot > 1 ? ` (WhatsApp ${slot})` : "";
     const text = loggedOut
-      ? `⚠️ *${acc.name}*: o WhatsApp foi desconectado do sistema (saiu pelo celular). A IA e os lembretes pararam. Entre no painel → WhatsApp → Gerar QR Code e leia com o celular da empresa.`
-      : `⚠️ *${acc.name}*: o WhatsApp está sem conexão com o sistema há alguns minutos. Verifique se o celular da empresa está ligado e com internet. Se não voltar sozinho, entre no painel → WhatsApp.`;
+      ? `⚠️ *${acc.name}*${which}: o WhatsApp foi desconectado do sistema (saiu pelo celular). A IA e os lembretes pararam. Entre no painel → WhatsApp → Gerar QR Code e leia com o celular da empresa.`
+      : `⚠️ *${acc.name}*${which}: o WhatsApp está sem conexão com o sistema há alguns minutos. Verifique se o celular da empresa está ligado e com internet. Se não voltar sozinho, entre no painel → WhatsApp.`;
     const r = await senderSession.sock.sendMessage(jid, { text });
     if (r?.key?.id) rememberSent(r.key.id);
     console.log(`[Alerta] enviado para ${target} sobre ${acc.name}`);
@@ -284,17 +363,18 @@ async function sendDisconnectAlert(accountId: string, loggedOut: boolean) {
 // CONEXÕES (UMA POR CONTA)
 // ============================================================================
 
-function getSession(accountId: string): Session {
-  let s = sessions.get(accountId);
+function getSession(accountId: string, slot = 1): Session {
+  let s = sessions.get(skey(accountId, slot));
   if (!s) {
-    s = { accountId, sock: null, state: "idle", phone: null, qr: null, qrCount: 0, stopping: false, downSince: null };
-    sessions.set(accountId, s);
+    s = { accountId, slot, sock: null, state: "idle", phone: null, qr: null, qrCount: 0, stopping: false, downSince: null };
+    sessions.set(skey(accountId, slot), s);
   }
   return s;
 }
 
-async function startSession(accountId: string) {
-  const s = getSession(accountId);
+async function startSession(accountId: string, slot = 1) {
+  const s = getSession(accountId, slot);
+  const tag = `${accountId.slice(0, 8)}${slot > 1 ? "#" + slot : ""}`;
   if (s.sock && s.state !== "idle") return s;
   s.stopping = false;
   s.state = "starting";
@@ -303,11 +383,11 @@ async function startSession(accountId: string) {
   if (SELFTEST) {
     s.sock = {
       sendMessage: async (jid: string, content: any) => {
-        console.log(`[SELFTEST ${accountId.slice(0, 8)}] -> ${jid}: ${content?.text ?? (content?.image ? `[foto ${content.image.length}b] ${content.caption || ""}` : "[mídia]")}`);
+        console.log(`[SELFTEST ${tag}] -> ${jid}: ${content?.text ?? (content?.image ? `[foto ${content.image.length}b] ${content.caption || ""}` : "[mídia]")}`);
         return { key: { id: "TEST" + Math.random().toString(36).slice(2) } };
       },
       sendPresenceUpdate: async (kind: string, jid: string) => {
-        console.log(`[SELFTEST ${accountId.slice(0, 8)}] presença ${kind} -> ${jid}`);
+        console.log(`[SELFTEST ${tag}] presença ${kind} -> ${jid}`);
       },
       groupFetchAllParticipating: async () => ({
         "120363000000000001@g.us": { id: "120363000000000001@g.us", subject: "Equipe Resplen", participants: [1, 2, 3] },
@@ -319,12 +399,12 @@ async function startSession(accountId: string) {
       logout: async () => {},
     } as unknown as Sock;
     s.state = "connected";
-    s.phone = "55000" + accountId.replace(/\D/g, "").slice(0, 8);
-    await setWaState(accountId, "connected", s.phone);
+    s.phone = "55000" + accountId.replace(/\D/g, "").slice(0, 7) + slot;
+    await setWaState(accountId, "connected", s.phone, slot);
     return s;
   }
 
-  const { state, saveCreds } = await useDbAuthState(accountId);
+  const { state, saveCreds } = await useDbAuthState(accountId, slot);
   const sock = makeWASocket({ auth: state, browser: Browsers.ubuntu("Chrome"), markOnlineOnConnect: false });
   s.sock = sock;
 
@@ -338,7 +418,7 @@ async function startSession(accountId: string) {
       s.qr = qr;
       s.state = "qr";
       s.qrCount++;
-      console.log(`[WhatsApp ${accountId.slice(0, 8)}] QR Code gerado (${s.qrCount})`);
+      console.log(`[WhatsApp ${tag}] QR Code gerado (${s.qrCount})`);
     }
     if (connection === "open") {
       s.state = "connected";
@@ -346,49 +426,49 @@ async function startSession(accountId: string) {
       s.qrCount = 0;
       s.phone = sock.user?.id?.split(":")[0] || null;
       s.downSince = null;
-      console.log(`✅ [WhatsApp ${accountId.slice(0, 8)}] conectado: ${s.phone}`);
-      await setWaState(accountId, "connected", s.phone);
-      alertSent.delete(accountId);
+      console.log(`✅ [WhatsApp ${tag}] conectado: ${s.phone}`);
+      await setWaState(accountId, "connected", s.phone, slot);
+      alertSent.delete(skey(accountId, slot));
     }
     if (connection === "close") {
       const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const wasConnected = s.state === "connected";
       s.sock = null;
       s.phone = null;
-      if (wasConnected) await touchLastSeen(accountId);
+      if (wasConnected) await touchLastSeen(accountId, slot);
       if (s.stopping) {
         s.state = "idle";
         return;
       }
       if (code === DisconnectReason.loggedOut) {
-        console.log(`[WhatsApp ${accountId.slice(0, 8)}] desconectado pelo celular`);
-        await clearAuth(accountId);
+        console.log(`[WhatsApp ${tag}] desconectado pelo celular`);
+        await clearAuth(accountId, slot);
         s.state = "idle";
         s.qr = null;
-        await setWaState(accountId, "logged_out", null);
-        await sendDisconnectAlert(accountId, true);
+        await setWaState(accountId, "logged_out", null, slot);
+        await sendDisconnectAlert(accountId, true, slot);
         return;
       }
       if (wasConnected || !s.downSince) {
         s.downSince = s.downSince || Date.now();
-        await setWaState(accountId, "reconnecting", null);
+        await setWaState(accountId, "reconnecting", null, slot);
       }
       // QR expirou sem ninguém ler: para (a pessoa clica em "Gerar QR Code" de novo)
-      if (!(await hasSavedLogin(accountId)) && s.qrCount >= 5) {
-        console.log(`[WhatsApp ${accountId.slice(0, 8)}] QR expirou sem leitura — aguardando novo pedido`);
-        await setWaState(accountId, "idle", null);
+      if (!(await hasSavedLogin(accountId, slot)) && s.qrCount >= 5) {
+        console.log(`[WhatsApp ${tag}] QR expirou sem leitura — aguardando novo pedido`);
+        await setWaState(accountId, "idle", null, slot);
         s.state = "idle";
         s.qr = null;
         s.qrCount = 0;
         return;
       }
       s.state = "starting";
-      setTimeout(() => startSession(accountId).catch((e) => console.error("[WhatsApp] reconexão:", e)), 3000);
+      setTimeout(() => startSession(accountId, slot).catch((e) => console.error("[WhatsApp] reconexão:", e)), 3000);
     }
   });
 
   // Momento a partir do qual mensagens "atrasadas" (chegaram com o motor fora do ar) são recuperadas
-  const recoverFrom = await getLastSeen(accountId);
+  const recoverFrom = await getLastSeen(accountId, slot);
 
   sock.ev.on("messages.upsert", async (m) => {
     for (const msg of m.messages) {
@@ -398,16 +478,16 @@ async function startSession(accountId: string) {
         const ts = Number(msg.messageTimestamp || 0) * 1000;
         if (!recoverFrom || !ts || ts < recoverFrom.getTime() - 120e3) continue;
       }
-      if (msg.key.fromMe) await handleOwnPhoneMessage(accountId, msg);
-      else await handleIncomingMessage(accountId, msg);
+      if (msg.key.fromMe) await handleOwnPhoneMessage(accountId, msg, slot);
+      else await handleIncomingMessage(accountId, msg, slot);
     }
   });
 
   return s;
 }
 
-async function stopSession(accountId: string, logout: boolean) {
-  const s = getSession(accountId);
+async function stopSession(accountId: string, logout: boolean, slot = 1) {
+  const s = getSession(accountId, slot);
   s.stopping = true;
   try {
     if (logout) await s.sock?.logout().catch(() => {});
@@ -418,16 +498,38 @@ async function stopSession(accountId: string, logout: boolean) {
   s.qr = null;
   s.phone = null;
   s.downSince = null;
-  if (logout) await clearAuth(accountId);
-  await setWaState(accountId, "idle", null);
+  if (logout) await clearAuth(accountId, slot);
+  await setWaState(accountId, "idle", null, slot);
 }
 
 /** Reabre as conexões salvas (ao iniciar e de tempos em tempos) */
 async function syncSessions() {
   // Marca "visto por último" das contas conectadas e avisa quedas longas (> 5 min)
   for (const s of sessions.values()) {
-    if (s.state === "connected" && !SELFTEST) await touchLastSeen(s.accountId);
-    if (s.downSince && Date.now() - s.downSince > 5 * 60e3) await sendDisconnectAlert(s.accountId, false);
+    if (s.state === "connected" && !SELFTEST) await touchLastSeen(s.accountId, s.slot);
+    if (s.downSince && Date.now() - s.downSince > 5 * 60e3) await sendDisconnectAlert(s.accountId, false, s.slot);
+  }
+  // WhatsApps 2 e 3: só dentro do limite da conta (se o limite baixou, a conexão extra é encerrada)
+  const extra = await db
+    .select({ accountId: waNumbers.accountId, slot: waNumbers.slot, enabled: waNumbers.enabled, type: accounts.type, maxWhatsapp: accounts.maxWhatsapp, active: accounts.active })
+    .from(waNumbers)
+    .innerJoin(accounts, eq(accounts.id, waNumbers.accountId));
+  for (const n of extra) {
+    if (n.slot < 2) continue; // a linha do WhatsApp 1 só guarda as regras dele
+    const allowed = n.enabled && n.active && n.slot >= 2 && n.slot <= slotsOf(n);
+    const s = getSession(n.accountId, n.slot);
+    if (!allowed) {
+      if (s.sock) {
+        console.log(`[WhatsApp ${n.accountId.slice(0, 8)}#${n.slot}] fora do limite da conta — encerrando`);
+        await stopSession(n.accountId, false, n.slot);
+      }
+      continue;
+    }
+    if (s.state === "idle" && !s.sock && (SELFTEST || (await hasSavedLogin(n.accountId, n.slot)))) {
+      console.log(`[WhatsApp ${n.accountId.slice(0, 8)}#${n.slot}] reabrindo sessão salva`);
+      await startSession(n.accountId, n.slot).catch((e) => console.error("[WhatsApp] start:", e));
+      await pause(500);
+    }
   }
   const rows = await db
     .select({ id: accounts.id })
@@ -505,7 +607,7 @@ function unwrap(message: any) {
 }
 
 /** Baixa a mídia (áudio, foto, vídeo, documento) e devolve como data URL para guardar */
-async function downloadMedia(accountId: string, msg: any) {
+async function downloadMedia(accountId: string, msg: any, slot = 1) {
   if (SELFTEST && msg.__testMedia) return msg.__testMedia; // só no teste local
   const m = unwrap(msg.message);
   const key = Object.keys(MEDIA_KINDS).find((k) => m?.[k]);
@@ -514,7 +616,7 @@ async function downloadMedia(accountId: string, msg: any) {
   const size = Number(info.fileLength || 0);
   if (size && size > MAX_STORED_MEDIA) return { skipped: true as const };
   try {
-    const sock = sessions.get(accountId)?.sock;
+    const sock = (sessions.get(skey(accountId, slot)) || connectedSession(accountId))?.sock;
     const buffer = (await downloadMediaMessage(
       { ...msg, message: m },
       "buffer",
@@ -558,7 +660,7 @@ async function groupSubject(accountId: string, jid: string) {
   const hit = groupNames.get(jid);
   if (hit && Date.now() - hit.at < 30 * 60e3) return hit.name;
   try {
-    const meta = await sessions.get(accountId)?.sock?.groupMetadata(jid);
+    const meta = await connectedSession(accountId)?.sock?.groupMetadata(jid);
     if (meta?.subject) {
       groupNames.set(jid, { name: meta.subject, at: Date.now() });
       return meta.subject as string;
@@ -567,7 +669,7 @@ async function groupSubject(accountId: string, jid: string) {
   return hit?.name || null;
 }
 
-async function handleGroupMessage(accountId: string, msg: any, fromMe: boolean) {
+async function handleGroupMessage(accountId: string, msg: any, fromMe: boolean, slot = 1) {
   try {
     const jid: string = msg.key.remoteJid;
     if (!msg.key.id || (fromMe && recentSentIds.includes(msg.key.id))) return;
@@ -580,7 +682,7 @@ async function handleGroupMessage(accountId: string, msg: any, fromMe: boolean) 
     if (!extracted) return;
     const dup = await db.query.messages.findFirst({ where: eq(messages.whatsappMessageId, msg.key.id) });
     if (dup) return;
-    const media = extracted.type !== "text" ? await downloadMedia(accountId, msg) : null;
+    const media = extracted.type !== "text" ? await downloadMedia(accountId, msg, slot) : null;
     const participant = String(msg.key.participant || msg.participant || "").split("@")[0].split(":")[0];
     await db.insert(messages).values({
       conversationId: conversation.id,
@@ -596,6 +698,7 @@ async function handleGroupMessage(accountId: string, msg: any, fromMe: boolean) 
       mediaFileName: media && "fileName" in media ? media.fileName : null,
     });
     const set: Record<string, unknown> = { lastMessageAt: new Date() };
+    if ((conversation.waSlot || 1) !== slot) set.waSlot = slot;
     const name = await groupSubject(accountId, jid);
     if (name && name !== conversation.leadName) set.leadName = name;
     await db.update(conversations).set(set).where(eq(conversations.id, conversation.id));
@@ -606,11 +709,17 @@ async function handleGroupMessage(accountId: string, msg: any, fromMe: boolean) 
 
 /** Grupos em que o número conectado participa */
 async function listGroups(accountId: string) {
-  const sock = sessions.get(accountId)?.sock;
-  if (!sock || sessions.get(accountId)?.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
+  const socks: Sock[] = [];
+  for (let n = 1; n <= MAX_SLOTS; n++) {
+    const s = sessions.get(skey(accountId, n));
+    if (s?.sock && s.state === "connected") socks.push(s.sock);
+  }
+  if (!socks.length) return { error: "WhatsApp desta conta não está conectado" };
   try {
-    const all = await sock.groupFetchAllParticipating();
-    const list = Object.values(all || {}).map((g: any) => ({ jid: g.id as string, name: (g.subject as string) || "Grupo", size: Array.isArray(g.participants) ? g.participants.length : null }));
+    // Grupos de todos os números conectados da conta (sem repetir)
+    const all: Record<string, any> = {};
+    for (const sock of socks) Object.assign(all, await sock.groupFetchAllParticipating());
+    const list = Object.values(all).map((g: any) => ({ jid: g.id as string, name: (g.subject as string) || "Grupo", size: Array.isArray(g.participants) ? g.participants.length : null }));
     for (const g of list) groupNames.set(g.jid, { name: g.name, at: Date.now() });
     return { groups: list.sort((a, b) => a.name.localeCompare(b.name)) };
   } catch (e) {
@@ -618,10 +727,10 @@ async function listGroups(accountId: string) {
   }
 }
 
-async function handleIncomingMessage(accountId: string, msg: any) {
+async function handleIncomingMessage(accountId: string, msg: any, slot = 1) {
   try {
     const phoneJid: string = msg.key.remoteJid;
-    if (phoneJid?.endsWith("@g.us")) return handleGroupMessage(accountId, msg, false);
+    if (phoneJid?.endsWith("@g.us")) return handleGroupMessage(accountId, msg, false, slot);
     if (isIgnoredJid(phoneJid)) return;
     const extracted = extractText(msg.message);
     if (!extracted) return;
@@ -643,7 +752,7 @@ async function handleIncomingMessage(accountId: string, msg: any) {
     if (!conversation) {
       const [created] = await db
         .insert(conversations)
-        .values({ accountId, phoneJid, leadName: pushName || "Lead", lastMessageAt: new Date() })
+        .values({ accountId, phoneJid, leadName: pushName || "Lead", lastMessageAt: new Date(), waSlot: slot })
         .onConflictDoNothing()
         .returning();
       conversation =
@@ -655,12 +764,23 @@ async function handleIncomingMessage(accountId: string, msg: any) {
       await db.update(conversations).set({ leadName: pushName }).where(eq(conversations.id, conversation.id));
     }
     if (!conversation) return;
+    // O cliente falou por este número: as respostas saem por ele
+    if ((conversation.waSlot || 1) !== slot) {
+      await db.update(conversations).set({ waSlot: slot }).where(eq(conversations.id, conversation.id));
+    }
 
     const existingLead = await db.query.leads.findFirst({ where: eq(leads.conversationId, conversation.id) });
     if (!existingLead) {
+      // Lead novo entra no funil escolhido para este WhatsApp (se houver)
+      const waCfg = await numberConfig(accountId, slot);
+      let funnelId: string | null = null;
+      if (waCfg.funnelId) {
+        const f = await db.query.funnels.findFirst({ where: and(eq(funnels.id, waCfg.funnelId), eq(funnels.accountId, accountId)) });
+        if (f && !f.isDefault) funnelId = f.id;
+      }
       await db
         .insert(leads)
-        .values({ accountId, conversationId: conversation.id, cardName: pushName || "Lead", phone, stage: "FIRST_CONTACT" })
+        .values({ accountId, conversationId: conversation.id, cardName: pushName || "Lead", phone, stage: "FIRST_CONTACT", funnelId })
         .onConflictDoNothing();
     } else if (phone && !existingLead.phone) {
       await db.update(leads).set({ phone }).where(eq(leads.id, existingLead.id));
@@ -674,7 +794,7 @@ async function handleIncomingMessage(accountId: string, msg: any) {
     });
     const repliedFollowup = lastMsg?.direction === "OUT" && lastMsg.sender === "FOLLOWUP";
 
-    const media = extracted.type !== "text" ? await downloadMedia(accountId, msg) : null;
+    const media = extracted.type !== "text" ? await downloadMedia(accountId, msg, slot) : null;
     const sentAt = msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000) : new Date();
     const [saved] = await db.insert(messages).values({
       conversationId: conversation.id,
@@ -740,10 +860,10 @@ function rememberSent(id: string) {
 }
 
 /** Alguém respondeu pelo celular da empresa: registra e pausa a IA desse lead */
-async function handleOwnPhoneMessage(accountId: string, msg: any) {
+async function handleOwnPhoneMessage(accountId: string, msg: any, slot = 1) {
   try {
     const phoneJid: string = msg.key.remoteJid;
-    if (phoneJid?.endsWith("@g.us")) return handleGroupMessage(accountId, msg, true);
+    if (phoneJid?.endsWith("@g.us")) return handleGroupMessage(accountId, msg, true, slot);
     if (isIgnoredJid(phoneJid) || !msg.key.id || recentSentIds.includes(msg.key.id)) return;
     const extracted = extractText(msg.message);
     if (!extracted) return;
@@ -754,7 +874,7 @@ async function handleOwnPhoneMessage(accountId: string, msg: any) {
     const dup = await db.query.messages.findFirst({ where: eq(messages.whatsappMessageId, msg.key.id) });
     if (dup) return;
 
-    const media = extracted.type !== "text" ? await downloadMedia(accountId, msg) : null;
+    const media = extracted.type !== "text" ? await downloadMedia(accountId, msg, slot) : null;
     await db.insert(messages).values({
       conversationId: conversation.id,
       direction: "OUT",
@@ -768,7 +888,7 @@ async function handleOwnPhoneMessage(accountId: string, msg: any) {
       mediaMimeType: media && "mime" in media ? media.mime : null,
       mediaFileName: media && "fileName" in media ? media.fileName : null,
     });
-    await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
+    await db.update(conversations).set({ lastMessageAt: new Date(), waSlot: slot }).where(eq(conversations.id, conversation.id));
     await db
       .update(leads)
       .set({ aiPaused: true, botId: null, botStep: null, botTries: 0, updatedAt: new Date() })
@@ -789,7 +909,7 @@ async function signed(accountId: string, text: string, authorName?: string | nul
 /** Envia texto pelo WhatsApp da conta e registra no histórico */
 async function sendText(accountId: string, phoneJid: string, text: string, sender: Sender, authorName?: string | null) {
   if (metaChannelOf(phoneJid)) return metaSendText(accountId, phoneJid, text, sender, authorName);
-  const s = sessions.get(accountId);
+  const s = await sessionFor(accountId, phoneJid);
   if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
   try {
     const response = await s.sock.sendMessage(phoneJid, { text: sender === "HUMAN" ? await signed(accountId, text, authorName) : text });
@@ -862,7 +982,7 @@ interface MediaPayload {
 
 async function sendMedia(accountId: string, phoneJid: string, media: MediaPayload, sender: Sender, authorName?: string | null) {
   if (metaChannelOf(phoneJid)) return metaSendMedia(accountId, phoneJid, media, sender, authorName);
-  const s = sessions.get(accountId);
+  const s = await sessionFor(accountId, phoneJid);
   if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
   try {
     let buffer: Buffer = Buffer.from(media.base64, "base64");
@@ -1258,6 +1378,8 @@ async function runAi(accountId: string, conversationId: string, force = false) {
   const lead = await db.query.leads.findFirst({ where: eq(leads.conversationId, conversationId) });
   if (!conversation || !lead) return;
   if (lead.aiPaused || lead.sellerId || lead.stage === "SALE") return;
+  // Regras do WhatsApp em que a conversa está (produtos e orientação próprios)
+  const waCfg = conversation.channel === "WHATSAPP" ? await numberConfig(accountId, conversation.waSlot) : normalizeWaConfig(null);
 
   const recent = await db.query.messages.findMany({
     where: eq(messages.conversationId, conversationId),
@@ -1297,7 +1419,7 @@ async function runAi(accountId: string, conversationId: string, force = false) {
   // Catálogo: produtos ativos da conta (códigos curtos P1, P2... para a IA)
   // Ações (procedimentos) ativas da conta
   const actions = (await ensureActions(db, accountId)).filter((a) => a.active);
-  const catalog = settings.catalogEnabled ? await loadCatalog(accountId, actions) : [];
+  const catalog = settings.catalogEnabled ? await loadCatalog(accountId, actions, waCfg.productIds) : [];
   // Sem bucket configurado a IA não oferece vídeo
   if (!storageReady()) for (const c of catalog) c.ai.hasVideo = false;
   // Qualificação "Antes de informar": até o cliente dizer nome/cidade, preço e detalhes nem chegam à IA
@@ -1313,7 +1435,9 @@ async function runAi(accountId: string, conversationId: string, force = false) {
     .filter((c, _i, arr) => c.funnelId === leadFunnelId || !arr.some((o) => o.funnelId === leadFunnelId && o.name.trim().toLowerCase() === c.name.trim().toLowerCase()));
 
   const agentInput = (locked: boolean): Parameters<typeof runSdrAgent>[0] => ({
-      systemPrompt: settings.systemPrompt || "Você é a atendente virtual da empresa.",
+      systemPrompt:
+        (settings.systemPrompt || "Você é a atendente virtual da empresa.") +
+        (waCfg.aiInstructions ? `\n\nOrientação para este número de WhatsApp: ${waCfg.aiInstructions}` : ""),
       style: { style: settings.style, styleCustom: settings.styleCustom, replyLength: settings.replyLength, emojiLevel: settings.emojiLevel },
       offerVideo: settings.offerVideo,
       sellerHours: sellerAvailability(normalizeSellerHours(settings.sellerHours)),
@@ -1500,7 +1624,7 @@ async function runAi(accountId: string, conversationId: string, force = false) {
 
 /** Mostra "digitando..." (ou "gravando áudio...") no WhatsApp do cliente enquanto espera */
 async function typingFor(accountId: string, jid: string, ms: number, kind: "composing" | "recording") {
-  const sock = metaChannelOf(jid) ? null : sessions.get(accountId)?.sock;
+  const sock = metaChannelOf(jid) ? null : (await sessionFor(accountId, jid))?.sock;
   const end = Date.now() + ms;
   try {
     while (Date.now() < end) {
@@ -1556,7 +1680,7 @@ async function recordAction(
   await db.update(leads).set(set).where(eq(leads.id, leadId));
 }
 
-const loadCatalog = (accountId: string, actions: AiAction[] = []) => loadCatalogFor(db, accountId, actions);
+const loadCatalog = (accountId: string, actions: AiAction[] = [], onlyIds: string[] = []) => loadCatalogFor(db, accountId, actions, onlyIds);
 
 /** Envia a primeira foto do produto com legenda "Nome — preço" (+ descrição curta) */
 async function sendProductPhoto(
@@ -1609,7 +1733,7 @@ async function sendDriveFile(accountId: string, phoneJid: string, fileId: string
       await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
       return { success: true, messageId: mid };
     }
-    const s = sessions.get(accountId);
+    const s = await sessionFor(accountId, phoneJid);
     if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
     const buffer = await getObject(f.storageKey);
     let content: any;
@@ -1674,7 +1798,7 @@ async function sendProductVideo(accountId: string, phoneJid: string, productId: 
       await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
       return { success: true, messageId: mid };
     }
-    const s = sessions.get(accountId);
+    const s = await sessionFor(accountId, phoneJid);
     if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
     const buffer = await getObject(product.videoKey);
     const caption = sender === "HUMAN" ? await signed(accountId, `*${product.name}*`, authorName) : `*${product.name}*`;
@@ -1818,10 +1942,22 @@ async function assignSeller(
   accountId: string,
   rules: { region: string | null; saleType: "ANY" | "WHOLESALE" | "RETAIL"; priority: number; active: boolean; sellerId: string; seller: { active: boolean } | null }[],
   city: string | null,
-  saleType: "ANY" | "WHOLESALE" | "RETAIL"
+  saleType: "ANY" | "WHOLESALE" | "RETAIL",
+  /** Só estes vendedores (os do WhatsApp em que o lead chegou); vazio = todos */
+  onlySellers: string[] = []
 ) {
+  const only = new Set(onlySellers);
+  if (only.size) rules = rules.filter((r) => only.has(r.sellerId));
   let pool = sellerPool(rules.map((r) => ({ ...r, sellerActive: r.seller?.active !== false })), city, saleType);
   const st = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
+  // Número com vendedores próprios e nenhuma regra serve: a fila é com os vendedores dele
+  if (!pool.length && only.size) {
+    const own = await db
+      .select({ id: sellers.id })
+      .from(sellers)
+      .where(and(eq(sellers.accountId, accountId), eq(sellers.active, true), inArray(sellers.id, [...only])));
+    pool = own.map((x) => x.id);
+  }
   // Rodízio ligado e nenhuma regra serve para este lead: a fila é com todos os vendedores ativos
   if (!pool.length && st?.rotationEnabled) {
     const all = await db
@@ -1863,7 +1999,7 @@ async function handoffToSeller(
   const current = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
   const city = d.city || current?.city || null;
   const saleType = d.saleType !== "ANY" ? d.saleType : current?.saleType || "ANY";
-  const sellerId = await assignSeller(accountId, rules, city, saleType);
+  const sellerId = await assignSeller(accountId, rules, city, saleType, (await configForJid(accountId, leadJid)).sellerIds);
   const seller = sellerId ? await db.query.sellers.findFirst({ where: eq(sellers.id, sellerId) }) : null;
 
   await db
@@ -2055,7 +2191,7 @@ async function applyBotOption(
         where: eq(schema.distributionRules.accountId, accountId),
         with: { seller: true },
       });
-      sellerId = await assignSeller(accountId, rules, lead.city, lead.saleType);
+      sellerId = await assignSeller(accountId, rules, lead.city, lead.saleType, (await configForJid(accountId, conv.phoneJid)).sellerIds);
     }
     const seller = sellerId ? await db.query.sellers.findFirst({ where: and(eq(sellers.id, sellerId), eq(sellers.accountId, accountId)) }) : null;
     if (seller) {
@@ -2208,7 +2344,7 @@ async function processBroadcasts() {
       }
       const acc = await loadAccount(b.accountId);
       if (!acc || !acc.active) continue;
-      if (sessions.get(b.accountId)?.state !== "connected") {
+      if (!connectedSession(b.accountId)) {
         await note("WhatsApp desconectado. O disparo continua quando reconectar.");
         continue;
       }
@@ -2284,7 +2420,7 @@ async function processFollowups() {
       const accountId = row.id;
       const acc = await loadAccount(accountId);
       if (!acc || !acc.active) continue;
-      if (sessions.get(accountId)?.state !== "connected") continue; // sem WhatsApp não envia (tenta de novo depois)
+      if (!connectedSession(accountId)) continue; // sem WhatsApp não envia (tenta de novo depois)
       const now = new Date();
       const due = (await followupCandidates(db, accountId, s, now)).filter((c) => c.next.at.getTime() <= now.getTime());
       for (const c of due.slice(0, FOLLOWUP_PER_RUN)) {
@@ -2443,7 +2579,7 @@ async function onFollowupReply(accountId: string, conversationId: string, phoneJ
         where: eq(schema.distributionRules.accountId, accountId),
         with: { seller: true },
       });
-      const id = await assignSeller(accountId, rules, lead.city, lead.saleType);
+      const id = await assignSeller(accountId, rules, lead.city, lead.saleType, (await configForJid(accountId, phoneJid)).sellerIds);
       seller = id ? (await db.query.sellers.findFirst({ where: eq(sellers.id, id) })) || null : seller;
     }
     if (seller) {
@@ -2518,8 +2654,8 @@ async function processReminders() {
       }
       const lead = await db.query.leads.findFirst({ where: eq(leads.id, appt.leadId), with: { conversation: true } });
       if (!lead?.conversation) continue;
-      const session = sessions.get(appt.accountId);
-      if (!session || session.state !== "connected") {
+      const session = await sessionFor(appt.accountId, lead.conversation.phoneJid);
+      if (!session) {
         if (appt.reminderError !== "WhatsApp desconectado") {
           await db.update(appointments).set({ reminderError: "WhatsApp desconectado" }).where(eq(appointments.id, appt.id));
         }
@@ -2581,8 +2717,8 @@ function json(res: http.ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-async function statusOf(accountId: string) {
-  const s = sessions.get(accountId);
+async function statusOf(accountId: string, slot = 1) {
+  const s = sessions.get(skey(accountId, slot));
   const state = s?.state || "idle";
   return {
     state,
@@ -2590,6 +2726,12 @@ async function statusOf(accountId: string) {
     phone: s?.phone || null,
     qrDataUrl: s?.qr ? await QRCode.toDataURL(s.qr, { width: 320 }) : null,
   };
+}
+
+/** Número do WhatsApp pedido (1 a 3) */
+function slotOf(v: unknown) {
+  const n = Math.round(Number(v || 1));
+  return Number.isFinite(n) && n >= 1 && n <= MAX_SLOTS ? n : 1;
 }
 
 async function validAccount(id: unknown) {
@@ -2614,7 +2756,7 @@ function startApiServer() {
         if (url.pathname === "/status.json") {
           const acc = await validAccount(url.searchParams.get("account"));
           if (!acc) return json(res, 400, { error: "Conta inválida" });
-          return json(res, 200, await statusOf(acc.id));
+          return json(res, 200, await statusOf(acc.id, slotOf(url.searchParams.get("slot"))));
         }
 
         if (req.method !== "POST") return json(res, 404, { error: "not found" });
@@ -2623,8 +2765,8 @@ function startApiServer() {
         if (SELFTEST && url.pathname === "/__test/incoming") {
           const acc = await validAccount(body.accountId);
           if (!acc) return json(res, 400, { error: "Conta inválida" });
-          if (body.msg?.key?.fromMe) await handleOwnPhoneMessage(acc.id, body.msg);
-          else await handleIncomingMessage(acc.id, body.msg);
+          if (body.msg?.key?.fromMe) await handleOwnPhoneMessage(acc.id, body.msg, slotOf(body.slot));
+          else await handleIncomingMessage(acc.id, body.msg, slotOf(body.slot));
           return json(res, 200, {});
         }
         if (SELFTEST && url.pathname === "/__test/reminders") {
@@ -2645,8 +2787,8 @@ function startApiServer() {
           // Confere se o número tem WhatsApp e devolve o endereço certo (resolve o 9º dígito)
           const digits = String(body.phone || "").replace(/\D/g, "");
           if (digits.length < 10) return json(res, 400, { error: "Número inválido" });
-          const sock = sessions.get(acc.id)?.sock;
-          if (!sock || sessions.get(acc.id)?.state !== "connected") return json(res, 502, { error: "WhatsApp desta conta não está conectado" });
+          const sock = connectedSession(acc.id)?.sock;
+          if (!sock) return json(res, 502, { error: "WhatsApp desta conta não está conectado" });
           try {
             const found = await sock.onWhatsApp(digits);
             const hit = Array.isArray(found) ? found.find((f: any) => f?.exists) : null;
@@ -2660,17 +2802,19 @@ function startApiServer() {
           return json(res, "error" in r ? 502 : 200, r);
         }
         if (url.pathname === "/connect") {
-          const s = getSession(acc.id);
+          const slot = slotOf(body.slot);
+          if (slot > slotsOf(acc)) return json(res, 403, { error: `Esta conta pode ter até ${slotsOf(acc)} WhatsApp(s)` });
+          const s = getSession(acc.id, slot);
           if (s.state === "idle") {
             s.qrCount = 0;
-            await startSession(acc.id);
+            await startSession(acc.id, slot);
             // espera um pouco pelo primeiro QR
-            for (let i = 0; i < 20 && getSession(acc.id).state === "starting"; i++) await pause(300);
+            for (let i = 0; i < 20 && getSession(acc.id, slot).state === "starting"; i++) await pause(300);
           }
-          return json(res, 200, await statusOf(acc.id));
+          return json(res, 200, await statusOf(acc.id, slot));
         }
         if (url.pathname === "/logout") {
-          await stopSession(acc.id, true);
+          await stopSession(acc.id, true, slotOf(body.slot));
           return json(res, 200, { ok: true });
         }
         if (url.pathname === "/send") {

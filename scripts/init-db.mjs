@@ -765,6 +765,24 @@ CREATE TABLE IF NOT EXISTS support_calls (
 CREATE INDEX IF NOT EXISTS support_calls_provider_idx ON support_calls (provider_account_id, starts_at);
 CREATE INDEX IF NOT EXISTS support_calls_client_idx ON support_calls (client_account_id);
 
+-- Até 3 WhatsApps por conta: o 1 fica na conta; o 2 e o 3 aqui (sessão no wa_auth com chaves "s2:" / "s3:")
+CREATE TABLE IF NOT EXISTS wa_numbers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  slot integer NOT NULL,
+  label varchar(60),
+  enabled boolean NOT NULL DEFAULT false,
+  state varchar(20),
+  phone varchar(40),
+  state_at timestamptz,
+  last_seen_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS wa_numbers_account_slot_idx ON wa_numbers (account_id, slot);
+ALTER TABLE wa_numbers ADD COLUMN IF NOT EXISTS config jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS wa_slot integer;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS wa_label varchar(60);
+
 -- Migrações que rodam uma única vez
 CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());
 DO $$ BEGIN

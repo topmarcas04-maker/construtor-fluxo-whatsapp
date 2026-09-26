@@ -60,6 +60,10 @@ export interface Lead {
     handle?: string | null;
     leadName: string | null;
     lastMessageAt: string | null;
+    /** Por qual WhatsApp da conta a conversa está (1, 2 ou 3) */
+    waSlot?: number;
+    /** Nome desse WhatsApp, quando a conta tem mais de um */
+    waLabel?: string | null;
   };
   lastMessage: LastMessage | null;
   /** Mensagens do cliente ainda não lidas pela equipe */
@@ -136,7 +140,7 @@ export const CHANNEL_BADGE: Record<string, string> = {
 /** Linha de contato: telefone (WhatsApp), @usuario (Instagram) ou "Facebook Messenger" */
 export function contactLine(lead: Pick<Lead, "phone" | "conversation">) {
   const ch = lead.conversation.channel || "WHATSAPP";
-  if (lead.phone) return formatPhone(lead.phone) + (ch !== "WHATSAPP" ? ` · ${CHANNEL_LABEL[ch]}` : "");
+  if (lead.phone) return formatPhone(lead.phone) + (ch !== "WHATSAPP" ? ` · ${CHANNEL_LABEL[ch]}` : lead.conversation.waLabel ? ` · ${lead.conversation.waLabel}` : "");
   if (ch === "INSTAGRAM") return lead.conversation.handle ? `@${lead.conversation.handle} · Instagram` : "Instagram";
   if (ch === "MESSENGER") return "Facebook Messenger";
   return lead.conversation.phoneJid.split("@")[0];

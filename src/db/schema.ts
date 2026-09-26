@@ -127,6 +127,8 @@ export const accounts = pgTable(
     waStateAt: timestamp("wa_state_at", { withTimezone: true }),
     /** Última vez que o motor viu o WhatsApp conectado (para recuperar mensagens perdidas) */
     waLastSeenAt: timestamp("wa_last_seen_at", { withTimezone: true }),
+    /** Nome do WhatsApp 1 (ex.: "Vendas"), aparece quando a conta tem mais de um número */
+    waLabel: varchar("wa_label", { length: 60 }),
     /** Cliente pode editar os cards dos leads (definido por quem cadastrou) */
     leadEdit: boolean("lead_edit").notNull().default(false),
     /** Cliente pode editar os próprios produtos (definido por quem cadastrou) */
@@ -145,6 +147,34 @@ export const accounts = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [uniqueIndex("accounts_slug_idx").on(table.slug), index("accounts_parent_id_idx").on(table.parentId)]
+);
+
+/**
+ * WhatsApps 2 e 3 da conta (o 1 continua nos campos wa* da conta; a linha do slot 1 só guarda a config).
+ * A sessão deles fica no wa_auth com as chaves "s2:..." / "s3:...".
+ */
+export const waNumbers = pgTable(
+  "wa_numbers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    /** 2 ou 3 */
+    slot: integer("slot").notNull(),
+    label: varchar("label", { length: 60 }),
+    /** Manter conectado no motor */
+    enabled: boolean("enabled").notNull().default(false),
+    /** Gravado pelo motor: connected | reconnecting | logged_out | idle */
+    state: varchar("state", { length: 20 }),
+    phone: varchar("phone", { length: 40 }),
+    stateAt: timestamp("state_at", { withTimezone: true }),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    /** Regras próprias do número: produtos, vendedores, funil e orientação da IA (ver lib/whatsapp/config) */
+    config: jsonb("config").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("wa_numbers_account_slot_idx").on(table.accountId, table.slot)]
 );
 
 /** Sessão do WhatsApp (Baileys) guardada no banco — sobrevive a novos deploys */
@@ -265,6 +295,8 @@ export const conversations = pgTable(
     /** Grupo do WhatsApp (sem lead, sem IA) e se aparece no painel */
     isGroup: boolean("is_group").notNull().default(false),
     groupEnabled: boolean("group_enabled").notNull().default(false),
+    /** Por qual WhatsApp da conta a conversa está (1, 2 ou 3; vazio = 1) */
+    waSlot: integer("wa_slot"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [uniqueIndex("conversations_account_phone_idx").on(table.accountId, table.phoneJid)]

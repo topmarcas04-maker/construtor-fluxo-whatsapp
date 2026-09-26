@@ -4,6 +4,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { conversations, leads, messages } from "@/db/schema";
 import { requireUser, sellerScope } from "@/lib/auth/server";
+import { allowedSlots, slotLabels } from "@/lib/whatsapp/numbers";
 
 /**
  * GET /api/sdr/leads
@@ -50,6 +51,11 @@ export async function GET() {
       .groupBy(messages.conversationId);
     const unread = new Map(unreadRows.map((r) => [r.conversationId, Math.max(0, Number(r.n))]));
 
+    // Conta com mais de um WhatsApp: mostra por qual número está cada conversa
+    const multiWa = (await allowedSlots(auth.accountId)) > 1;
+    const labels = multiWa ? await slotLabels(auth.accountId) : {};
+    const waLabel = (slot: number | null) => (multiWa ? labels[slot || 1] || `WhatsApp ${slot || 1}` : null);
+
     const shaped = all
       .map((lead) => ({
         id: lead.id,
@@ -83,6 +89,8 @@ export async function GET() {
           handle: lead.conversation.handle,
           leadName: lead.conversation.leadName,
           lastMessageAt: lead.conversation.lastMessageAt,
+          waSlot: lead.conversation.waSlot || 1,
+          waLabel: (lead.conversation.channel || "WHATSAPP") === "WHATSAPP" ? waLabel(lead.conversation.waSlot) : null,
         },
         lastMessage: lead.conversation.messages[0] || null,
         unread: unread.get(lead.conversationId) || 0,

@@ -1,6 +1,6 @@
 /**
  * Cliente HTTP para o motor do WhatsApp (processo separado com Baileys).
- * O motor mantém um WhatsApp conectado por conta (Master, cada parceiro, cada cliente).
+ * O motor mantém até 3 WhatsApps conectados por conta (Master, cada parceiro, cada cliente).
  */
 
 export interface EngineStatus {
@@ -46,16 +46,17 @@ async function call<T>(path: string, init?: RequestInit, timeoutMs = 8000): Prom
   }
 }
 
-export function getEngineStatus(accountId: string) {
-  return call<EngineStatus>(`/status.json?account=${encodeURIComponent(accountId)}`);
+/** slot = qual WhatsApp da conta (1 = principal, 2 ou 3) */
+export function getEngineStatus(accountId: string, slot = 1) {
+  return call<EngineStatus>(`/status.json?account=${encodeURIComponent(accountId)}&slot=${slot}`);
 }
 
-export function connectWhatsapp(accountId: string) {
-  return call<EngineStatus>(`/connect`, { method: "POST", body: JSON.stringify({ accountId }) }, 15000);
+export function connectWhatsapp(accountId: string, slot = 1) {
+  return call<EngineStatus>(`/connect`, { method: "POST", body: JSON.stringify({ accountId, slot }) }, 15000);
 }
 
-export function logoutWhatsapp(accountId: string) {
-  return call<{ ok: boolean }>(`/logout`, { method: "POST", body: JSON.stringify({ accountId }) }, 15000);
+export function logoutWhatsapp(accountId: string, slot = 1) {
+  return call<{ ok: boolean }>(`/logout`, { method: "POST", body: JSON.stringify({ accountId, slot }) }, 15000);
 }
 
 export function sendWhatsappMessage(

@@ -34,7 +34,8 @@ export function productActionNames(
 
 const CATALOG_LIMIT = 80;
 
-export async function loadCatalogFor(db: Db, accountId: string, actions: AiAction[] = []) {
+/** onlyIds: só estes produtos (ex.: os liberados para um WhatsApp da conta); vazio = todos */
+export async function loadCatalogFor(db: Db, accountId: string, actions: AiAction[] = [], onlyIds: string[] = []) {
   const rows = await db
     .select({
       id: products.id,
@@ -61,7 +62,7 @@ export async function loadCatalogFor(db: Db, accountId: string, actions: AiActio
     })
     .from(products)
     .leftJoin(productCategories, eq(productCategories.id, products.categoryId))
-    .where(and(eq(products.accountId, accountId), eq(products.active, true)))
+    .where(and(eq(products.accountId, accountId), eq(products.active, true), onlyIds.length ? inArray(products.id, onlyIds) : undefined))
     .orderBy(products.sort, products.name)
     .limit(CATALOG_LIMIT);
   if (!rows.length) return [];
