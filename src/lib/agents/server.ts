@@ -1,6 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { accounts, aiAgents, leads, productCategories, products, waNumbers } from "@/db/schema";
+import { accounts, aiAgents, aiSettings, leads, productCategories, products, waNumbers } from "@/db/schema";
 import { STYLE_PRESETS, LENGTH_OPTIONS, EMOJI_OPTIONS } from "@/lib/ai/style";
 import { normalizeQualify } from "@/lib/ai/qualify";
 import { ensureActions } from "@/lib/actions/shared";
@@ -44,7 +44,10 @@ export async function agentsPayload(accountId: string) {
         return cfg.agentId === agentId;
       })
       .map((slot) => labels[slot] || `WhatsApp ${slot}`);
+  const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId), columns: { enabled: true } });
   return {
+    /** Atendimento automático da conta (liga/desliga todos os agentes no WhatsApp) */
+    aiEnabled: Boolean(settings?.enabled),
     agents: agents.map((a) => ({
       ...a,
       // Leads sem agente definido são atendidos pelo principal

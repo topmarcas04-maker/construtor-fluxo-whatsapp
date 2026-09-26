@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Plus, Pencil, Copy, Trash2, MessageCircleMore, Crown, Package, ListChecks, ShieldCheck, Smartphone, ArrowLeft, Check, Route, Users } from "lucide-react";
+import { Bot, Plus, Pencil, Copy, Trash2, MessageCircleMore, Crown, Package, ListChecks, ShieldCheck, Smartphone, ArrowLeft, Check, Route, Users, Power } from "lucide-react";
 import { Page, PageHeader, Card, Badge, Button, Field, Input, Textarea, Toggle, ErrorNote, EmptyState } from "@/components/ui";
 import { StyleCard, AiTester } from "@/components/settings/AiStyle";
 import { QualifyCard } from "@/components/settings/QualifyCard";
@@ -12,6 +12,7 @@ import { AgentsReport } from "@/components/agents/AgentsReport";
 type AgentRow = AgentProfile & { conversations: number; channels: string[] };
 
 interface Data {
+  aiEnabled?: boolean;
   agents: AgentRow[];
   limit: number;
   options: {
@@ -331,6 +332,7 @@ export function AgentsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ agent: AgentProfile | null; test?: boolean } | null>(null);
   const [tab, setTab] = useState<"agentes" | "relatorios">("agentes");
+  const [switching, setSwitching] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -355,6 +357,16 @@ export function AgentsScreen() {
       setError((e as Error).message);
     }
   };
+  const setAiEnabled = async (enabled: boolean) => {
+    setError(null);
+    setSwitching(true);
+    try {
+      setData(await api("/api/agents/enabled", "PATCH", { enabled }));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+    setSwitching(false);
+  };
   const toggleActive = async (ag: AgentRow) => {
     setError(null);
     try {
@@ -374,7 +386,7 @@ export function AgentsScreen() {
           data={data}
           focusTest={editing.test}
           onClose={() => setEditing(null)}
-          onSaved={(d) => setData({ agents: d.agents, limit: d.limit, options: d.options })}
+          onSaved={(d) => setData((prev) => ({ ...(prev || {}), agents: d.agents, limit: d.limit, options: d.options }))}
         />
       </Page>
     );
@@ -413,6 +425,28 @@ export function AgentsScreen() {
         <AgentsReport />
       ) : (
       <>
+      {data.aiEnabled ? (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+          <p className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+            <Power size={16} /> Atendimento automático ligado: os agentes ativos respondem no WhatsApp.
+          </p>
+          <Button variant="secondary" onClick={() => setAiEnabled(false)} disabled={switching}>
+            {switching ? "..." : "Desligar"}
+          </Button>
+        </div>
+      ) : (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+          <div>
+            <p className="flex items-center gap-2 text-sm font-semibold text-amber-900">
+              <Power size={16} /> Atendimento automático desligado
+            </p>
+            <p className="text-xs text-amber-800">Nenhum agente responde no WhatsApp, mesmo os que estão "Ativo". O teste aqui na tela continua funcionando.</p>
+          </div>
+          <Button onClick={() => setAiEnabled(true)} disabled={switching}>
+            {switching ? "Ligando..." : "Ligar atendimento"}
+          </Button>
+        </div>
+      )}
       <p className="mb-4 text-sm text-slate-500">
         {data.agents.length} de {data.limit} agente{data.limit > 1 ? "s" : ""} do seu plano.
         {full && data.limit < 20 && " Para criar mais, fale com quem administra a sua conta."}
