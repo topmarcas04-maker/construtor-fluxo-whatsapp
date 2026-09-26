@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { agentEvents, leads } from "@/db/schema";
-import { requireUser, sellerScope } from "@/lib/auth/server";
+import { requireUser, sellerScope, canResetTestLead } from "@/lib/auth/server";
 import { ensureAgents } from "@/lib/agents/shared";
 
 /** Agente atual do lead, agentes disponíveis e o histórico (encaminhamentos, trocas, agendamentos...) */
@@ -29,5 +29,6 @@ export async function GET(_req: NextRequest, c: { params: Promise<{ id: string }
     agentId: lead.agentId || primary?.id || null,
     agents: agents.map((a) => ({ id: a.id, name: a.name, active: a.active, isPrimary: a.isPrimary })),
     events,
+    canReset: canResetTestLead(auth.user),
   });
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Sparkles, CalendarPlus, Bot } from "lucide-react";
+import { Sparkles, CalendarPlus, Bot, RotateCcw } from "lucide-react";
 import { AppointmentModal } from "@/components/agenda/AppointmentModal";
 import { type Appointment, STATUS_LABEL, STATUS_STYLE, spParts } from "@/components/agenda/types";
 import type { Lead, Seller, Tag } from "@/lib/types/sdr";
@@ -39,6 +39,8 @@ interface AgentHistory {
   agentId: string | null;
   agents: { id: string; name: string; active: boolean; isPrimary: boolean }[];
   events: { id: string; kind: string; detail: string | null; agentName: string | null; createdAt: string }[];
+  /** Pode resetar o lead de teste (só o administrador master) */
+  canReset?: boolean;
 }
 const inputCls =
   "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[var(--accent)]";
@@ -75,18 +77,38 @@ export function LeadPanel({
   sellers,
   onPatch,
   canEdit,
+  onReset,
 }: {
   lead: Lead;
   tags: Tag[];
   sellers: Seller[];
   onPatch: (fields: Record<string, unknown>) => void;
   canEdit: boolean;
+  /** Chamado depois de resetar o lead de teste */
+  onReset?: () => void;
 }) {
   const leadTagIds = new Set(lead.tags.map((t) => t.id));
   const [productList, setProductList] = useState<{ id: string; name: string; kind: string; active: boolean }[]>([]);
   useEffect(() => {
     loadProducts().then(setProductList);
   }, []);
+  const [resetting, setResetting] = useState(false);
+  const resetLead = async () => {
+    const ok = window.confirm(
+      "Resetar este lead de TESTE?\n\nApaga toda a conversa, o card, as etiquetas, o histórico de agentes e os agendamentos dele. " +
+        "A próxima mensagem desse número entra como um cliente novo.\n\nUse só com o seu número de teste. Não dá para desfazer."
+    );
+    if (!ok) return;
+    setResetting(true);
+    const res = await fetch(`/api/sdr/leads/${lead.id}/reset`, { method: "POST" }).catch(() => null);
+    setResetting(false);
+    if (!res?.ok) {
+      const data = await res?.json().catch(() => ({}));
+      window.alert(data?.error || "Não foi possível resetar o lead");
+      return;
+    }
+    onReset?.();
+  };
   const [note, setNote] = useState(lead.note || "");
   useEffect(() => setNote(lead.note || ""), [lead.id, lead.note]);
 
@@ -360,6 +382,23 @@ export function LeadPanel({
         />
       </div>
       </fieldset>
+
+      {agentInfo?.canReset && (
+        <div className="rounded-xl border border-dashed border-rose-200 bg-rose-50/50 p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-rose-700">Número de teste</p>
+          <p className="mt-1 text-xs text-slate-500">
+            Zera este contato para testar como se fosse um cliente novo (roteador, palavra-chave e primeiro atendimento).
+          </p>
+          <button
+            type="button"
+            onClick={resetLead}
+            disabled={resetting}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+          >
+            <RotateCcw size={14} /> {resetting ? "Resetando..." : "Resetar lead (teste)"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

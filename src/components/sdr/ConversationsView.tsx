@@ -257,6 +257,13 @@ export function ConversationsView({
     onLeadUpdated();
   };
 
+  /** Depois de resetar o lead de teste: fecha a ficha e recarrega a lista */
+  const afterReset = () => {
+    setShowFicha(false);
+    setMessages([]);
+    onLeadUpdated();
+  };
+
   /** Coluna do funil do card (cabeçalho no computador, menu "+" no celular) */
   const columnSelect = (className: string) => {
     if (!selectedLead) return null;
@@ -647,7 +654,7 @@ export function ConversationsView({
       {/* Ficha do lead */}
       {selectedLead && fichaDocked && (
         <div className="hidden min-h-0 overflow-y-auto border-l border-slate-200 bg-white xl:block">
-          <LeadPanel lead={selectedLead} tags={tags} sellers={sellers} onPatch={patchLead} canEdit={canEdit} />
+          <LeadPanel lead={selectedLead} tags={tags} sellers={sellers} onPatch={patchLead} canEdit={canEdit} onReset={afterReset} />
         </div>
       )}
 
@@ -663,7 +670,7 @@ export function ConversationsView({
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
-              <LeadPanel lead={selectedLead} tags={tags} sellers={sellers} onPatch={patchLead} canEdit={canEdit} />
+              <LeadPanel lead={selectedLead} tags={tags} sellers={sellers} onPatch={patchLead} canEdit={canEdit} onReset={afterReset} />
             </div>
           </div>
         </div>

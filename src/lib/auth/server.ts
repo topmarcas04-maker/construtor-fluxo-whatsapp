@@ -145,3 +145,8 @@ export async function requireUser(
 export function sellerScope(user: CurrentUser) {
   return user.role === "SELLER" && user.sellerId ? user.sellerId : null;
 }
+
+/** Resetar lead de teste: só o administrador master, na própria conta (não quando está visualizando outra conta) */
+export function canResetTestLead(user: CurrentUser) {
+  return user.role === "MASTER" && user.homeAccount.type === "MASTER" && !user.actingAs;
+}
