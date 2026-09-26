@@ -37,6 +37,7 @@ interface Account {
   hasOwnKey: boolean;
   leadEdit: boolean;
   productEdit?: boolean;
+  testReset?: boolean;
   planId?: string | null;
   maxWhatsapp?: number;
   maxAgents?: number;
@@ -63,6 +64,7 @@ type Form = {
   aiSource: "OWN" | "PARENT" | "NONE";
   leadEdit: boolean;
   productEdit: boolean;
+  testReset: boolean;
   planId: string;
   benefits: PlanBenefits;
   adminName: string;
@@ -151,6 +153,7 @@ export function AccountsScreen() {
       aiSource: "PARENT",
       leadEdit: false,
       productEdit: true,
+      testReset: false,
       planId: "",
       benefits: { ...DEFAULT_BENEFITS },
       adminName: "",
@@ -175,6 +178,7 @@ export function AccountsScreen() {
       aiSource: a.aiSource,
       leadEdit: a.leadEdit,
       productEdit: a.productEdit !== false,
+      testReset: Boolean(a.testReset),
       planId: a.planId || "",
       benefits: {
         maxWhatsapp: a.maxWhatsapp ?? 1,
@@ -211,6 +215,7 @@ export function AccountsScreen() {
         aiSource: form.aiSource,
         leadEdit: form.leadEdit,
         productEdit: form.productEdit,
+        ...(isPartners ? { testReset: form.testReset } : {}),
         planId: form.planId || null,
         ...form.benefits,
       };
@@ -601,6 +606,21 @@ export function AccountsScreen() {
               </div>
               <p className="mt-2 text-xs text-slate-400">{AI_SOURCE_LABEL[form.aiSource]}</p>
             </section>
+
+            {isPartners && (
+              <section className="rounded-xl border border-slate-200 p-4">
+                <p className="mb-1 font-semibold text-slate-800">Resetar lead de teste</p>
+                <p className="mb-3 text-sm text-slate-500">
+                  Mostra o botão "Resetar lead (teste)" na ficha do lead para os administradores deste parceiro. Ele apaga a
+                  conversa inteira para testar o número como cliente novo. Libere só para quem você confia.
+                </p>
+                <Toggle
+                  checked={form.testReset}
+                  onChange={(v) => setForm({ ...form, testReset: v })}
+                  label={form.testReset ? "Pode resetar leads de teste" : "Não pode resetar"}
+                />
+              </section>
+            )}
 
             {!isPartners && (
               <section className="rounded-xl border border-slate-200 p-4">

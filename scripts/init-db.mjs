@@ -380,6 +380,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS wa_state_at timestamptz;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS wa_last_seen_at timestamptz;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS lead_edit boolean NOT NULL DEFAULT false;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS product_edit boolean NOT NULL DEFAULT true;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS test_reset boolean NOT NULL DEFAULT false;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS sign_messages boolean NOT NULL DEFAULT true;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS alert_phone varchar(40);
 CREATE INDEX IF NOT EXISTS messages_whatsapp_message_id_idx ON messages (whatsapp_message_id);

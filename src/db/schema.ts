@@ -133,6 +133,8 @@ export const accounts = pgTable(
     leadEdit: boolean("lead_edit").notNull().default(false),
     /** Cliente pode editar os próprios produtos (definido por quem cadastrou) */
     productEdit: boolean("product_edit").notNull().default(true),
+    /** Parceiro pode usar "Resetar lead (teste)" (liberado pelo Master) */
+    testReset: boolean("test_reset").notNull().default(false),
     /** Plano escolhido por quem cadastrou (modelo; os benefícios ficam copiados abaixo e podem ser ajustados) */
     planId: uuid("plan_id"),
     /** Quantos números de WhatsApp a conta pode conectar (1 a 3) */

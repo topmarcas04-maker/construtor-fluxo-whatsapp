@@ -46,6 +46,8 @@ export function accountValues(
   if (body.active !== undefined) values.active = Boolean(body.active);
   if (body.leadEdit !== undefined) values.leadEdit = Boolean(body.leadEdit);
   if (body.productEdit !== undefined) values.productEdit = Boolean(body.productEdit);
+  // Resetar lead de teste: só o Master libera, e só para parceiros
+  if (body.testReset !== undefined && opts.childType === "PARTNER") values.testReset = Boolean(body.testReset);
   // Plano (só os planos da conta mãe) e benefícios (nunca acima do que a conta mãe tem)
   if (body.planId !== undefined) {
     const planId = body.planId ? String(body.planId) : null;

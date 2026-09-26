@@ -49,6 +49,8 @@ export interface CurrentUser {
   canEditLeads: boolean;
   /** Pode cadastrar/editar produtos e categorias */
   canEditProducts: boolean;
+  /** Pode usar "Resetar lead (teste)" */
+  canResetLeads?: boolean;
 }
 
 /** Permissão extra (não é menu) que o administrador dá a um vendedor */
@@ -108,6 +110,8 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       modules,
       canManage: isAdmin,
       canEditLeads: accountAllows && userAllows,
+      // Resetar lead de teste: o Master sempre; administradores de parceiro que o Master liberou
+      canResetLeads: user.role === "MASTER" || (isAdmin && home.type === "PARTNER" && Boolean(home.testReset)),
       // Produtos: mesma lógica — Cliente só se liberado por quem cadastrou; vendedor só com "editar-produtos"
       canEditProducts:
         (acting.type !== "CLIENT" || acting.productEdit !== false || actingAs) &&
@@ -146,7 +150,7 @@ export function sellerScope(user: CurrentUser) {
   return user.role === "SELLER" && user.sellerId ? user.sellerId : null;
 }
 
-/** Resetar lead de teste: só o administrador master, na própria conta (não quando está visualizando outra conta) */
+/** Resetar lead de teste: o Master, ou parceiros que o Master liberou (Contas → editar → Resetar lead de teste) */
 export function canResetTestLead(user: CurrentUser) {
-  return user.role === "MASTER" && user.homeAccount.type === "MASTER" && !user.actingAs;
+  return Boolean(user.canResetLeads);
 }
