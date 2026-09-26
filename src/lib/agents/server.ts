@@ -4,7 +4,7 @@ import { accounts, aiAgents, leads, productCategories, products, waNumbers } fro
 import { STYLE_PRESETS, LENGTH_OPTIONS, EMOJI_OPTIONS } from "@/lib/ai/style";
 import { normalizeQualify } from "@/lib/ai/qualify";
 import { ensureActions } from "@/lib/actions/shared";
-import { AGENT_ROLES, MAX_AGENTS_LIMIT, normalizePermissions } from "./common";
+import { AGENT_ROLES, MAX_AGENTS_LIMIT, normalizePermissions, normalizeRouting } from "./common";
 import { ensureAgents } from "./shared";
 import { normalizeWaConfig } from "@/lib/whatsapp/config";
 import { slotLabels } from "@/lib/whatsapp/numbers";
@@ -68,12 +68,16 @@ export async function agentValues(accountId: string, body: Record<string, unknow
   const name = String(body.name || "").trim().slice(0, 80);
   if (!name) return { error: "Dê um nome ao agente" } as const;
   const idList = (v: unknown) => (Array.isArray(v) ? [...new Set(v.map(String))].slice(0, 500) : []);
-  const [prods, cats, actions] = await Promise.all([
+  const [prods, cats, actions, agentRows] = await Promise.all([
     db.select({ id: products.id }).from(products).where(eq(products.accountId, accountId)),
     db.select({ id: productCategories.id }).from(productCategories).where(eq(productCategories.accountId, accountId)),
     ensureActions(db, accountId),
+    db.select({ id: aiAgents.id }).from(aiAgents).where(eq(aiAgents.accountId, accountId)),
   ]);
   const has = (list: { id: string }[]) => new Set(list.map((x) => x.id));
+  const agIds = has(agentRows);
+  const routing = normalizeRouting(body.routing);
+  routing.transferTo = routing.transferTo.filter((id) => agIds.has(id));
   const pIds = has(prods);
   const cIds = has(cats);
   const aIds = has(actions);
@@ -96,6 +100,7 @@ export async function agentValues(accountId: string, body: Record<string, unknow
       categoryIds: idList(body.categoryIds).filter((id) => cIds.has(id)),
       actionIds: idList(body.actionIds).filter((id) => aIds.has(id)),
       permissions: normalizePermissions(body.permissions),
+      routing,
     },
   } as const;
 }

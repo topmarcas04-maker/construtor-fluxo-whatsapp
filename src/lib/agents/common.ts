@@ -45,6 +45,8 @@ export interface AgentPermissions {
   tags: boolean;
   /** Passar o cliente para um vendedor */
   handoffSeller: boolean;
+  /** Passar a conversa para outro Agente de IA */
+  handoffAgent: boolean;
 }
 
 export const PERMISSION_LIST: { key: keyof AgentPermissions; label: string; hint: string }[] = [
@@ -57,6 +59,7 @@ export const PERMISSION_LIST: { key: keyof AgentPermissions; label: string; hint
   { key: "moveFunnel", label: "Mover no funil", hint: "Move o card para colunas com regra." },
   { key: "tags", label: "Colocar etiquetas", hint: "Usa as etiquetas da conta." },
   { key: "handoffSeller", label: "Passar para vendedor", hint: "Transfere para a fila de vendedores." },
+  { key: "handoffAgent", label: "Transferir para agente", hint: "Passa a conversa para outro agente da equipe, com o contexto." },
 ];
 
 export const ALL_PERMISSIONS: AgentPermissions = {
@@ -69,7 +72,85 @@ export const ALL_PERMISSIONS: AgentPermissions = {
   moveFunnel: true,
   tags: true,
   handoffSeller: true,
+  handoffAgent: true,
 };
+
+/** Intenções que o roteador reconhece (o agente diz quais atende) */
+export const AGENT_INTENTS = [
+  { key: "compra", label: "Compra" },
+  { key: "preco", label: "Preço" },
+  { key: "produto", label: "Produto" },
+  { key: "financiamento", label: "Financiamento" },
+  { key: "agendamento", label: "Agendamento" },
+  { key: "suporte", label: "Suporte" },
+  { key: "assistencia", label: "Assistência técnica" },
+  { key: "garantia", label: "Garantia" },
+  { key: "pos_venda", label: "Pós-venda" },
+  { key: "cobranca", label: "Cobrança" },
+  { key: "humano", label: "Falar com humano" },
+] as const;
+
+/** Como o agente entra nas conversas e para quem pode passar */
+export interface AgentRouting {
+  /** Assuntos que este agente atende (o roteador usa para encaminhar) */
+  intents: string[];
+  /** Quando encaminhar para ele, em palavras (ex.: "clientes que já compraram e querem revisão") */
+  hint: string;
+  /** Palavras-chave da 1ª mensagem que já trazem a conversa para ele (ex.: frase do anúncio) */
+  keywords: string[];
+  /** Só no Agente Principal: encaminhar conversas novas para o agente certo */
+  router: boolean;
+  /** Para quais agentes pode transferir (vazio = todos) */
+  transferTo: string[];
+}
+
+export const EMPTY_ROUTING: AgentRouting = { intents: [], hint: "", keywords: [], router: false, transferTo: [] };
+
+export function normalizeRouting(raw: unknown): AgentRouting {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const list = (v: unknown, max: number, len: number) =>
+    Array.isArray(v) ? [...new Set(v.map((x) => String(x).trim()).filter((x) => x && x.length <= len))].slice(0, max) : [];
+  return {
+    intents: list(r.intents, 20, 30).filter((k) => AGENT_INTENTS.some((i) => i.key === k)),
+    hint: typeof r.hint === "string" ? r.hint.trim().slice(0, 500) : "",
+    keywords: list(r.keywords, 30, 80),
+    router: r.router === true,
+    transferTo: list(r.transferTo, 50, 64),
+  };
+}
+
+/** Tira acento e deixa minúsculo (para comparar palavras-chave) */
+export function plain(s: string) {
+  return (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Agente cuja palavra-chave aparece na mensagem (a palavra-chave mais longa ganha) */
+export function agentByKeyword<T extends { id: string; active: boolean; routing: AgentRouting }>(agents: T[], text: string): T | null {
+  const t = plain(text);
+  if (!t) return null;
+  let best: { agent: T; len: number } | null = null;
+  for (const a of agents) {
+    if (!a.active) continue;
+    for (const k of a.routing.keywords) {
+      const pk = plain(k);
+      if (pk && t.includes(pk) && (!best || pk.length > best.len)) best = { agent: a, len: pk.length };
+    }
+  }
+  return best?.agent || null;
+}
+
+/** Descrição curta do que o agente faz (vai para o roteador e para os outros agentes) */
+export function agentScope(a: Pick<AgentProfile, "role" | "roleCustom" | "objective" | "routing">) {
+  const intents = a.routing.intents.map((k) => AGENT_INTENTS.find((i) => i.key === k)?.label).filter(Boolean);
+  return [
+    roleLabel(a.role, a.roleCustom),
+    a.objective?.trim() || null,
+    intents.length ? `assuntos: ${intents.join(", ")}` : null,
+    a.routing.hint || null,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+}
 
 export function normalizePermissions(raw: unknown): AgentPermissions {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
@@ -97,6 +178,7 @@ export interface AgentProfile {
   categoryIds: string[];
   actionIds: string[];
   permissions: AgentPermissions;
+  routing: AgentRouting;
   isPrimary: boolean;
   active: boolean;
 }
@@ -123,6 +205,7 @@ export function toProfile(row: Record<string, unknown>): AgentProfile {
     categoryIds: ids(row.categoryIds),
     actionIds: ids(row.actionIds),
     permissions: normalizePermissions(row.permissions),
+    routing: normalizeRouting(row.routing),
     isPrimary: row.isPrimary === true,
     active: row.active !== false,
   };

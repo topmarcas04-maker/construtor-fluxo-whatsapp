@@ -811,6 +811,8 @@ CREATE TABLE IF NOT EXISTS ai_agents (
 );
 CREATE INDEX IF NOT EXISTS ai_agents_account_idx ON ai_agents (account_id);
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS agent_id uuid;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS agent_handoff jsonb;
+ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS routing jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS max_agents integer NOT NULL DEFAULT 1;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_agents integer NOT NULL DEFAULT 1;
 -- Cada conta com IA configurada ganha o "Agente Comercial" (principal) com as configurações de hoje

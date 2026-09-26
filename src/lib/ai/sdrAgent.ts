@@ -66,6 +66,10 @@ export interface AgentInput {
   handoffAuto?: boolean;
   /** A IA oferece o vídeo do produto ("quer ver um vídeo?") */
   offerVideo?: boolean;
+  /** Outros Agentes de IA para quem este pode passar a conversa (nome exato + o que fazem) */
+  agents?: { name: string; scope: string }[];
+  /** A conversa veio de outro agente: quem passou, por quê e o resumo */
+  receivedFrom?: { agent: string; reason: string | null; summary: string | null } | null;
   catalog?: {
     code: string;
     name: string;
@@ -120,6 +124,9 @@ export interface AgentDecision {
   columnName: string | null;
   /** Dados de qualificação informados pelo cliente (chave do campo → valor) */
   data: Record<string, string>;
+  /** Passar a conversa para outro Agente de IA (nome exato) e o motivo */
+  transferAgent: string | null;
+  transferAgentReason: string | null;
 }
 
 export const TOOL_NAME = "registrar_atendimento";
@@ -222,18 +229,33 @@ const TOOL = {
 /** Ferramenta com o campo "dados" montado a partir dos campos de qualificação da conta */
 function buildTool(input: AgentInput) {
   const fields = input.qualify ? qualifyDataFields(input.qualify) : [];
-  if (!fields.length) return TOOL;
+  const agents = input.agents || [];
+  if (!fields.length && !agents.length) return TOOL;
   return {
     ...TOOL,
     input_schema: {
       ...TOOL.input_schema,
       properties: {
         ...TOOL.input_schema.properties,
-        dados: {
-          type: "object",
-          description: "Dados de qualificação que o cliente JÁ informou na conversa. Deixe vazio o que ele não disse; nunca invente.",
-          properties: Object.fromEntries(fields.map((f) => [f.key, { type: "string", description: f.label }])),
-        },
+        ...(fields.length
+          ? {
+              dados: {
+                type: "object",
+                description: "Dados de qualificação que o cliente JÁ informou na conversa. Deixe vazio o que ele não disse; nunca invente.",
+                properties: Object.fromEntries(fields.map((f) => [f.key, { type: "string", description: f.label }])),
+              },
+            }
+          : {}),
+        ...(agents.length
+          ? {
+              transferir_agente: {
+                type: "string",
+                enum: agents.map((a) => a.name),
+                description: "Só quando o cliente precisa de algo que é função de outro agente da equipe: o nome exato dele. Caso contrário, não preencha.",
+              },
+              motivo_agente: { type: "string", description: "Por que passar para esse agente (curto)." },
+            }
+          : {}),
       },
     },
   };
@@ -271,7 +293,31 @@ REGRAS DE FORMATO
 - Não repita perguntas que o cliente já respondeu. Faça no máximo uma pergunta por vez.
 - Nunca invente preço, estoque, prazo ou condição que não esteja nas instruções ou no catálogo.
 - Se o cliente mandar áudio ou imagem que você não consegue ver, peça gentilmente para escrever.
-- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${styleBlock(input.style || {})}${qualifyBlock(input.qualify, { name: l.name, city: l.city, data: l.data }, input.qualifyPending)}${handoffBlock(input)}${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}`;
+- Mantenha os dados de qualificação atualizados em todas as respostas (repita o que já sabe).${styleBlock(input.style || {})}${qualifyBlock(input.qualify, { name: l.name, city: l.city, data: l.data }, input.qualifyPending)}${handoffBlock(input)}${channelBlock(input)}${schedulingBlock(input)}${actionsBlock(input)}${columnsBlock(input)}${catalogBlock(input)}${agentsBlock(input)}`;
+}
+
+function agentsBlock(input: AgentInput) {
+  const lines: string[] = [];
+  const r = input.receivedFrom;
+  if (r) {
+    lines.push(
+      `- Esta conversa foi passada para você pelo agente "${r.agent}"${r.reason ? ` (motivo: ${r.reason})` : ""}.${r.summary ? ` Resumo até aqui: ${r.summary}` : ""}`,
+      "- Continue de onde parou, sem se apresentar de novo e sem repetir perguntas já respondidas. Para o cliente é a mesma conversa."
+    );
+  }
+  const agents = input.agents || [];
+  if (agents.length) {
+    lines.push("- Outros agentes da equipe (você pode passar a conversa para eles):");
+    for (const a of agents) lines.push(`  • ${a.name}: ${a.scope}`);
+    lines.push(
+      '- Se o cliente precisa de algo que é função de outro agente e está fora da sua, preencha "transferir_agente" com o nome exato e "motivo_agente", e deixe "resposta" vazia: o outro agente continua a conversa na hora, com todo o histórico. Não anuncie a troca.',
+      "- Não transfira por qualquer dúvida simples que você mesmo consegue responder."
+    );
+  }
+  return lines.length ? `
+
+EQUIPE DE AGENTES
+${lines.join("\n")}` : "";
 }
 
 function handoffBlock(input: AgentInput) {
@@ -475,6 +521,8 @@ export function parseDecision(raw: Record<string, unknown>, allowedTags: string[
     interestCode: /^p\d{1,4}$/i.test(String(raw.produto_interesse || "").trim())
       ? String(raw.produto_interesse).trim().toUpperCase()
       : null,
+    transferAgent: clean(raw.transferir_agente, 80),
+    transferAgentReason: clean(raw.motivo_agente, 300),
     productCodes: parsePhotoRefs(raw.enviar_fotos),
     videoCode: /^\s*p\d{1,4}\b/i.test(String(raw.enviar_video || ""))
       ? /p\d{1,4}/i.exec(String(raw.enviar_video))![0].toUpperCase()

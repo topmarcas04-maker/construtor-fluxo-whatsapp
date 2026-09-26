@@ -391,6 +391,8 @@ export const leads = pgTable(
     fuCount: integer("fu_count").notNull().default(0),
     /** Agente de IA que está atendendo este lead (vazio = o do WhatsApp ou o principal) */
     agentId: uuid("agent_id"),
+    /** Última troca de agente: { from, fromName, to, reason, summary, at } */
+    agentHandoff: jsonb("agent_handoff"),
     fuLastAt: timestamp("fu_last_at", { withTimezone: true }),
     /** Quando o cliente informou os dados da qualificação (libera preço e detalhes para a IA) */
     qualifiedAt: timestamp("qualified_at", { withTimezone: true }),
@@ -519,6 +521,8 @@ export const aiAgents = pgTable(
     /** Ações do agente (vazio = todas as ativas) */
     actionIds: jsonb("action_ids").$type<string[]>().notNull().default([]),
     permissions: jsonb("permissions").notNull().default({}),
+    /** Assuntos, palavras-chave, roteador e para quem pode transferir (ver AgentRouting) */
+    routing: jsonb("routing").notNull().default({}),
     sort: integer("sort").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

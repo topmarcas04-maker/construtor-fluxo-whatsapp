@@ -106,7 +106,8 @@ import { sellerPool, chooseSeller, type RotationState } from "../src/lib/ai/dist
 import { loadCatalogFor } from "../src/lib/ai/catalog";
 import { normalizeWaConfig, type WaNumberConfig } from "../src/lib/whatsapp/config";
 import { ensureAgents, pickAgent } from "../src/lib/agents/shared";
-import { agentSystemPrompt, restrictCatalogItem, restrictDecision } from "../src/lib/agents/common";
+import { agentSystemPrompt, restrictCatalogItem, restrictDecision, agentByKeyword, agentScope } from "../src/lib/agents/common";
+import { routeWithAi } from "../src/lib/ai/router";
 import { storageReady, getObject, signedUrl } from "../src/lib/storage/s3";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
@@ -1365,7 +1366,8 @@ async function loadAccount(id: string) {
   return db.query.accounts.findFirst({ where: eq(accounts.id, id) });
 }
 
-async function runAi(accountId: string, conversationId: string, force = false) {
+/** depth: quantas trocas de agente já houve nesta rodada (evita ficar passando de um para o outro) */
+async function runAi(accountId: string, conversationId: string, force = false, depth = 0) {
   const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
   if (!settings?.enabled) return;
 
@@ -1382,11 +1384,6 @@ async function runAi(accountId: string, conversationId: string, force = false) {
   if (lead.aiPaused || lead.sellerId || lead.stage === "SALE") return;
   // Regras do WhatsApp em que a conversa está (agente, vendedores, funil)
   const waCfg = conversation.channel === "WHATSAPP" ? await numberConfig(accountId, conversation.waSlot) : normalizeWaConfig(null);
-  // Agente de IA que atende: o do lead → o do WhatsApp → o principal
-  const agent = pickAgent(await ensureAgents(db, accountId), lead.agentId, waCfg.agentId);
-  if (!agent) return;
-  if (lead.agentId !== agent.id) await db.update(leads).set({ agentId: agent.id }).where(eq(leads.id, lead.id));
-  const perms = agent.permissions;
 
   const recent = await db.query.messages.findMany({
     where: eq(messages.conversationId, conversationId),
@@ -1396,6 +1393,60 @@ async function runAi(accountId: string, conversationId: string, force = false) {
   const history = recent.reverse();
   // Só responde se a última mensagem é do cliente (ou quando o chatbot passou a conversa para a IA)
   if (!history.length || (!force && history[history.length - 1].direction !== "IN")) return;
+
+  // Agente de IA que atende: o do lead → palavra-chave da 1ª mensagem (campanha) → o do WhatsApp → roteador → o principal
+  const allAgents = await ensureAgents(db, accountId);
+  const activeAgents = allAgents.filter((a) => a.active);
+  let agent = activeAgents.find((a) => a.id === lead.agentId) || null;
+  let routedBy: string | null = null;
+  if (!agent) {
+    const firstIn = history.find((m) => m.direction === "IN");
+    const kw = activeAgents.length > 1 && firstIn ? agentByKeyword(activeAgents, firstIn.transcript || firstIn.body || "") : null;
+    if (kw) {
+      agent = kw;
+      routedBy = "palavra-chave";
+    } else if (waCfg.agentId) {
+      agent = activeAgents.find((a) => a.id === waCfg.agentId) || null;
+    }
+    if (!agent) {
+      const primary = pickAgent(allAgents, null, null);
+      if (primary?.routing.router && activeAgents.length > 1) {
+        try {
+          const r = await routeWithAi(
+            activeAgents.map((a) => ({ id: a.id, name: a.name, scope: agentScope(a) })),
+            history.filter((m) => m.direction === "IN").map((m) => m.transcript || m.body || ""),
+            { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL }
+          );
+          const hit = r ? activeAgents.find((a) => a.id === r.id) : null;
+          if (hit) {
+            agent = hit;
+            routedBy = r?.intent ? `roteador: ${r.intent}` : "roteador";
+          }
+        } catch (err) {
+          console.warn(`[IA ${accountId.slice(0, 8)}] roteador falhou, fica com o principal:`, (err as Error)?.message || err);
+        }
+      }
+      if (!agent) agent = primary;
+    }
+  }
+  if (!agent) return;
+  if (lead.agentId !== agent.id) {
+    await db
+      .update(leads)
+      .set({ agentId: agent.id, ...(routedBy ? { lastAction: `Encaminhado para ${agent.name} (${routedBy})`.slice(0, 120), lastActionAt: new Date() } : {}) })
+      .where(eq(leads.id, lead.id));
+  }
+  const perms = agent.permissions;
+  // Para quem este agente pode passar a conversa
+  const targets = perms.handoffAgent
+    ? activeAgents.filter((a) => a.id !== agent.id && (!agent.routing.transferTo.length || agent.routing.transferTo.includes(a.id)))
+    : [];
+  // Veio de outro agente há pouco? O novo agente recebe o motivo e o resumo
+  const ho = (lead.agentHandoff || null) as { to?: string; fromName?: string; reason?: string | null; summary?: string | null; at?: string } | null;
+  const receivedFrom =
+    ho && ho.to === agent.id && ho.at && Date.now() - new Date(ho.at).getTime() < 48 * 3600e3
+      ? { agent: ho.fromName || "outro agente", reason: ho.reason || null, summary: ho.summary || null }
+      : null;
 
   const allTags = await db.select().from(tags).where(eq(tags.accountId, accountId));
   const rules = await db.query.distributionRules.findMany({
@@ -1448,6 +1499,8 @@ async function runAi(accountId: string, conversationId: string, force = false) {
       systemPrompt: agentSystemPrompt(agent, settings.systemPrompt || "Você é a atendente virtual da empresa."),
       style: { style: agent.style, styleCustom: agent.styleCustom, replyLength: agent.replyLength, emojiLevel: agent.emojiLevel },
       offerVideo: agent.offerVideo && perms.videos,
+      agents: targets.map((a) => ({ name: a.name, scope: agentScope(a) })),
+      receivedFrom,
       sellerHours: sellerAvailability(normalizeSellerHours(settings.sellerHours)),
       qualify,
       qualifyPending: locked,
@@ -1530,6 +1583,36 @@ async function runAi(accountId: string, conversationId: string, force = false) {
   if (newest && newest.id !== history[history.length - 1].id && newest.direction === "IN") {
     scheduleAi(accountId, conversationId);
     return;
+  }
+
+  // Passar para outro Agente de IA: troca o agente e ele responde na hora, com o histórico e o resumo
+  if (decision.transferAgent && perms.handoffAgent && depth < 2) {
+    const wanted = decision.transferAgent.trim().toLowerCase();
+    const target = targets.find((a) => a.name.trim().toLowerCase() === wanted);
+    if (target) {
+      await db
+        .update(leads)
+        .set({
+          agentId: target.id,
+          agentHandoff: {
+            from: agent.id,
+            fromName: agent.name,
+            to: target.id,
+            toName: target.name,
+            reason: decision.transferAgentReason,
+            summary: decision.summary || null,
+            at: new Date().toISOString(),
+          },
+          aiSummary: decision.summary || lead.aiSummary,
+          lastAction: `${agent.name} → ${target.name}`.slice(0, 120),
+          lastActionAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(leads.id, lead.id));
+      console.log(`[IA ${accountId.slice(0, 8)}] ${conversation.phoneJid}: ${agent.name} passou para ${target.name}${decision.transferAgentReason ? ` (${decision.transferAgentReason})` : ""}`);
+      await runAi(accountId, conversationId, true, depth + 1);
+      return;
+    }
   }
 
   // Ação concluída: passa para vendedor, título/duração da agenda, coluna do funil

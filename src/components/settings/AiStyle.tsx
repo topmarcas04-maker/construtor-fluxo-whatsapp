@@ -137,12 +137,18 @@ export function AiTester({
   draft,
   disabled,
   agent,
+  flow,
 }: {
   draft: Record<string, unknown>;
   disabled?: string | null;
   /** Rascunho do Agente de IA (tela Agentes); sem isso testa o Agente Principal */
   agent?: Record<string, unknown> | null;
+  /** Simular a equipe inteira: roteador + troca de agentes */
+  flow?: boolean;
 }) {
+  /** No fluxo: agente atual e a última troca (motivo/resumo) */
+  const flowAgent = useRef<string | null>(null);
+  const flowHandoff = useRef<{ fromName: string; reason: string | null; summary: string | null } | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -183,17 +189,45 @@ export function AiTester({
             : { from: l.from, text: l.text }
         );
       setTyping(!realTime);
-      const res = await fetch("/api/sdr/settings/ai-test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history, draft, agent: agent || undefined, qualified: qualified.current }),
-      });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error || "A IA não respondeu");
-      if (my !== session.current) return;
+      // Pode haver troca de agente: o novo agente responde na sequência (até 2 trocas)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let d: any = null;
+      const routeInfo: Line[] = [];
+      for (let hop = 0; hop < 3; hop++) {
+        const res = await fetch("/api/sdr/settings/ai-test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: history,
+            draft,
+            agent: agent || undefined,
+            flow: flow ? { agentId: flowAgent.current, handoff: flowHandoff.current } : undefined,
+            qualified: qualified.current,
+          }),
+        });
+        d = await res.json();
+        if (!res.ok) throw new Error(d.error || "A IA não respondeu");
+        if (my !== session.current) return;
+        if (d.routed) routeInfo.push({ from: "info", text: `🧭 ${d.routed}`, at: hhmm() });
+        if (d.transfer) {
+          routeInfo.push({
+            from: "info",
+            text: `↪ ${flow ? "" : "Passaria: "}${d.transfer.fromName} → ${d.transfer.name}${d.transfer.reason ? ` (${d.transfer.reason})` : ""}`,
+            at: hhmm(),
+          });
+          if (flow && hop < 2) {
+            flowAgent.current = d.transfer.id;
+            flowHandoff.current = { fromName: d.transfer.fromName, reason: d.transfer.reason || null, summary: d.transfer.summary || null };
+            continue;
+          }
+        }
+        break;
+      }
+      if (flow && d.agentId) flowAgent.current = d.agentId;
+      if (routeInfo.length) setLines((l) => [...l, ...routeInfo]);
       if (d.qualified) qualified.current = true;
       const speed = (d.speed as string) || (draft.replySpeed as string);
-      const parts = d.parts as string[];
+      const parts = (d.parts || []) as string[];
       // Mesmo ritmo do WhatsApp: espera, "digitando...", uma mensagem de cada vez
       if (realTime && parts.length) {
         setTyping(true);
@@ -227,7 +261,7 @@ export function AiTester({
       if (d.action) info.push({ from: "info", text: `⚡ Ação: ${d.action}`, at });
       if (d.appointment) info.push({ from: "info", text: `📅 Agendaria: ${d.appointment}`, at });
       if (d.handoff) info.push({ from: "info", text: "👤 Passaria para um vendedor", at });
-      info.push({ from: "info", text: `Nota ${d.score}/100${d.summary ? ` · ${d.summary}` : ""}`, at });
+      info.push({ from: "info", text: `${flow && d.agent ? `🤖 ${d.agent} · ` : ""}Nota ${d.score}/100${d.summary ? ` · ${d.summary}` : ""}`, at });
       setLines((l) => [...l, ...info]);
     } catch (e) {
       setError((e as Error).message);
@@ -242,6 +276,8 @@ export function AiTester({
   const reset = () => {
     session.current++;
     qualified.current = false;
+    flowAgent.current = null;
+    flowHandoff.current = null;
     setLines([]);
     setError(null);
     setTyping(false);
@@ -256,7 +292,9 @@ export function AiTester({
             <MessageCircleMore size={17} /> Testar Agente
           </p>
           <p className="text-xs text-white/75">
-            Converse como se fosse o cliente. Usa o que está na tela (mesmo sem salvar). Nada é enviado nem salvo.
+            {flow
+              ? "Simula a equipe inteira: o roteador escolhe o agente e eles passam a conversa entre si. Nada é enviado nem salvo."
+              : "Converse como se fosse o cliente. Usa o que está na tela (mesmo sem salvar). Nada é enviado nem salvo."}
           </p>
         </div>
         <div className="flex items-center gap-2">

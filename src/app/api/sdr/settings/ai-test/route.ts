@@ -14,7 +14,8 @@ import { ensureFunnels, ensureColumns } from "@/lib/funnel/shared";
 import { storageReady } from "@/lib/storage/s3";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "@/lib/ai/hours";
 import { ensureAgents } from "@/lib/agents/shared";
-import { agentSystemPrompt, restrictCatalogItem, restrictDecision, toProfile } from "@/lib/agents/common";
+import { agentSystemPrompt, restrictCatalogItem, restrictDecision, toProfile, agentByKeyword, agentScope, type AgentProfile } from "@/lib/agents/common";
+import { routeWithAi } from "@/lib/ai/router";
 import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff } from "@/lib/ai/qualify";
 
 /**
@@ -47,9 +48,41 @@ export async function POST(req: NextRequest) {
   const agents = await ensureAgents(db, auth.accountId);
   const primary = agents.find((a) => a.isPrimary) || agents[0];
   const fromAgentScreen = Boolean(body.agent && typeof body.agent === "object");
-  const agent = fromAgentScreen
-    ? toProfile({ ...(agents.find((a) => a.id === body.agent.id) || primary || {}), ...body.agent, id: body.agent.id || "rascunho" })
-    : primary;
+  // Simular fluxo entre agentes: { flow: { agentId?, handoff? } } — sem agentId o roteador escolhe
+  const flow = body.flow && typeof body.flow === "object" ? (body.flow as { agentId?: string | null; handoff?: { fromName?: string; reason?: string | null; summary?: string | null } | null }) : null;
+  const activeAgents = agents.filter((a) => a.active);
+  let routed: string | null = null;
+  let agent: AgentProfile = primary;
+  if (fromAgentScreen) {
+    agent = toProfile({ ...(agents.find((a) => a.id === body.agent.id) || primary || {}), ...body.agent, id: body.agent.id || "rascunho" });
+  } else if (flow) {
+    const current = activeAgents.find((a) => a.id === flow.agentId);
+    if (current) agent = current;
+    else {
+      const firstLead = msgs.find((m) => m.from === "lead");
+      const kw = firstLead && activeAgents.length > 1 ? agentByKeyword(activeAgents, String(firstLead.text || "")) : null;
+      if (kw) {
+        agent = kw;
+        routed = `palavra-chave → ${kw.name}`;
+      } else if (primary?.routing.router && activeAgents.length > 1) {
+        const r = await routeWithAi(
+          activeAgents.map((a) => ({ id: a.id, name: a.name, scope: agentScope(a) })),
+          msgs.filter((m) => m.from === "lead").map((m) => String(m.text || "")),
+          { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL }
+        ).catch(() => null);
+        const hit = r ? activeAgents.find((a) => a.id === r.id) : null;
+        if (hit) {
+          agent = hit;
+          routed = `roteador → ${hit.name}${r?.intent ? ` (${r.intent})` : ""}`;
+        }
+      }
+    }
+  }
+  // Para quem este agente pode passar a conversa
+  const targets = agent.permissions.handoffAgent
+    ? activeAgents.filter((a) => a.id !== agent.id && (!agent.routing.transferTo.length || agent.routing.transferTo.includes(a.id)))
+    : [];
+  const receivedFrom = flow?.handoff ? { agent: flow.handoff.fromName || "outro agente", reason: flow.handoff.reason || null, summary: flow.handoff.summary || null } : null;
   const perms = agent.permissions;
   const actions = allActions.filter((a) => a.active && (!agent.actionIds.length || agent.actionIds.includes(a.id)));
   const catalog =
@@ -115,6 +148,8 @@ export async function POST(req: NextRequest) {
         scheduling: { enabled: settings.schedulingEnabled && perms.schedule, businessHours: settings.businessHours, busy: busyRows.map((b) => `${formatSpDate(b.startsAt).slice(0, 5)} às ${formatSpTime(b.startsAt)}`), current: null },
         catalog: catalog.map((c) => (locked ? maskCatalogItem(c.ai) : c.ai)),
         offerVideo,
+        agents: targets.map((a) => ({ name: a.name, scope: agentScope(a) })),
+        receivedFrom,
         sellerHours: sellerAvailability(normalizeSellerHours(body.draft?.sellerHours ?? settings.sellerHours)),
         qualify,
         qualifyPending: locked,
@@ -125,6 +160,21 @@ export async function POST(req: NextRequest) {
     const aiOpts = { apiKey: key.apiKey, model, baseUrl: process.env.ANTHROPIC_BASE_URL };
     let d = await runSdrAgent(input(pending), aiOpts);
     if (!d) return NextResponse.json({ error: "A IA não respondeu" }, { status: 502 });
+    // Passou para outro agente: a tela manda de novo, já com o novo agente (igual ao WhatsApp)
+    const transferTo = d.transferAgent ? targets.find((a) => a.name.trim().toLowerCase() === d!.transferAgent!.trim().toLowerCase()) : null;
+    if (transferTo) {
+      return NextResponse.json({
+        parts: [],
+        media: [],
+        agent: agent.name,
+        agentId: agent.id,
+        routed,
+        transfer: { id: transferTo.id, name: transferTo.name, reason: d.transferAgentReason, summary: d.summary || null, fromName: agent.name },
+        score: d.score,
+        summary: d.summary,
+        speed: typeof draft.replySpeed === "string" ? draft.replySpeed : settings.replySpeed,
+      });
+    }
     // Transferência automática (igual ao atendimento real); "só transferir" não passa preço nem foto
     const missingFirst = missingForHandoff(qualify, { name: d.name, city: d.city, data: mergeQualifyData(qualify, null, d.data), leadTexts });
     const silentHandoff = Boolean(missingFirst && missingFirst.length === 0 && onlyHandoff(qualify));
@@ -179,6 +229,8 @@ export async function POST(req: NextRequest) {
       media,
       qualified,
       agent: agent.name,
+      agentId: agent.id,
+      routed,
       speed: typeof draft.replySpeed === "string" ? draft.replySpeed : settings.replySpeed,
       action: d.actionName || null,
       handoff: d.handoff,

@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Plus, Pencil, Copy, Trash2, MessageCircleMore, Crown, Package, ListChecks, ShieldCheck, Smartphone, ArrowLeft, Check } from "lucide-react";
+import { Bot, Plus, Pencil, Copy, Trash2, MessageCircleMore, Crown, Package, ListChecks, ShieldCheck, Smartphone, ArrowLeft, Check, Route, Users } from "lucide-react";
 import { Page, PageHeader, Card, Badge, Button, Field, Input, Textarea, Toggle, ErrorNote, EmptyState } from "@/components/ui";
 import { StyleCard, AiTester } from "@/components/settings/AiStyle";
 import { QualifyCard } from "@/components/settings/QualifyCard";
-import { AGENT_ROLES, PERMISSION_LIST, ALL_PERMISSIONS, roleLabel, type AgentProfile } from "@/lib/agents/common";
+import { AGENT_ROLES, AGENT_INTENTS, PERMISSION_LIST, ALL_PERMISSIONS, EMPTY_ROUTING, roleLabel, type AgentProfile } from "@/lib/agents/common";
 import { DEFAULT_QUALIFY, normalizeQualify } from "@/lib/ai/qualify";
 
 type AgentRow = AgentProfile & { conversations: number; channels: string[] };
@@ -44,6 +44,7 @@ const NEW_AGENT: Omit<AgentProfile, "id"> = {
   categoryIds: [],
   actionIds: [],
   permissions: ALL_PERMISSIONS,
+  routing: EMPTY_ROUTING,
   isPrimary: false,
   active: true,
 };
@@ -140,6 +141,10 @@ function AgentEditor({
   };
 
   const qualify = normalizeQualify(a.qualify ?? DEFAULT_QUALIFY);
+  const routing = a.routing || EMPTY_ROUTING;
+  const setRouting = (patch: Partial<typeof routing>) => set({ routing: { ...routing, ...patch } });
+  const others = data.agents.filter((x) => x.id !== a.id);
+  const [kwText, setKwText] = useState((a.routing || EMPTY_ROUTING).keywords.join(", "));
   const prodsByCat = data.options.products;
 
   return (
@@ -230,6 +235,57 @@ function AgentEditor({
 
       <Section icon={ListChecks} title="Ações do Agente" hint="Procedimentos que ele pode executar (agendar, ligação, reserva...). Nenhuma marcada = todas as ações ativas.">
         <Chips items={data.options.actions} selected={a.actionIds} onToggle={(id) => toggleId("actionIds", id)} empty="Nenhuma ação cadastrada (Configurações → Ações do Agente)." />
+      </Section>
+
+      <Section
+        icon={Route}
+        title="Quando este agente entra na conversa"
+        hint="O roteador e os outros agentes usam isto para saber quando passar a conversa para ele."
+      >
+        <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Assuntos que ele atende</p>
+        <Chips
+          items={AGENT_INTENTS.map((i) => ({ id: i.key, name: i.label }))}
+          selected={routing.intents}
+          onToggle={(k) => setRouting({ intents: routing.intents.includes(k) ? routing.intents.filter((x) => x !== k) : [...routing.intents, k] })}
+          empty=""
+        />
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <Field label="Quando passar para ele (em palavras)" hint='Ex.: "clientes que já compraram e precisam de revisão ou peça".'>
+            <Input value={routing.hint} maxLength={500} onChange={(e) => setRouting({ hint: e.target.value })} />
+          </Field>
+          <Field label="Palavras-chave da 1ª mensagem (campanhas)" hint='Separe por vírgula. Ex.: a frase do anúncio "Quero a Eko 10". A conversa já começa com ele.'>
+            <Input
+              value={kwText}
+              onChange={(e) => {
+                setKwText(e.target.value);
+                setRouting({ keywords: e.target.value.split(",").map((k) => k.trim()).filter(Boolean) });
+              }}
+            />
+          </Field>
+        </div>
+        {a.isPrimary && (
+          <div className="mt-4 rounded-lg bg-violet-50/70 p-3">
+            <Toggle checked={routing.router} onChange={(v) => setRouting({ router: v })} label="Agente Principal encaminha as conversas novas" />
+            <p className="mt-1 text-xs text-slate-500">
+              Na primeira mensagem de uma conversa nova, ele entende o que o cliente quer e passa para o agente certo (usa uma chamada curta de IA, só no
+              começo). Desligado, ele mesmo atende e só transfere quando precisar.
+            </p>
+          </div>
+        )}
+        {others.length > 0 && (
+          <div className="mt-4">
+            <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <Users size={13} /> Pode transferir para
+            </p>
+            <Chips
+              items={others.map((o) => ({ id: o.id, name: o.name, active: o.active }))}
+              selected={routing.transferTo}
+              onToggle={(id) => setRouting({ transferTo: routing.transferTo.includes(id) ? routing.transferTo.filter((x) => x !== id) : [...routing.transferTo, id] })}
+              empty=""
+            />
+            <p className="mt-1 text-[11px] text-slate-400">Nenhum marcado = pode transferir para qualquer agente ativo (se a permissão "Transferir para agente" estiver ligada).</p>
+          </div>
+        )}
       </Section>
 
       <Section icon={ShieldCheck} title="Permissões" hint="O agente só faz o que estiver ligado aqui.">
@@ -398,6 +454,12 @@ export function AgentsScreen() {
           ))}
         </div>
       )}
+      {data.agents.filter((x) => x.active).length > 1 && (
+        <div className="mt-6">
+          <AiTester draft={{}} flow />
+        </div>
+      )}
+
       <p className="mt-6 text-xs text-slate-400">
         Qual agente atende cada WhatsApp você escolhe em WhatsApp → Regras deste número. Sem escolha, quem atende é o Agente Principal. A chave de IA, o modelo, o
         horário dos vendedores e a mensagem de transferência ficam em Configurações → Agentes de IA e valem para todos.
