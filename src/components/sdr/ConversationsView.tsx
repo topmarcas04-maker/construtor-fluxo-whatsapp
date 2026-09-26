@@ -95,7 +95,7 @@ function StatusChip({ lead }: { lead: Lead }) {
   if (lead.aiPaused) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-        <PauseCircle size={11} /> Agente pausado
+        <PauseCircle size={11} /> Atendimento humano
       </span>
     );
   }

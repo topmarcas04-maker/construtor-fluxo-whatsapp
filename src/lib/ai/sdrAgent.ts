@@ -12,6 +12,7 @@
 
 import { qualifyBlock, qualifyDataFields, type QualifyData, type QualifySettings } from "./qualify";
 import { styleBlock, type StyleSettings } from "./style";
+import { readUsage, type Usage } from "./usage";
 
 export interface AgentHistoryMessage {
   direction: "IN" | "OUT";
@@ -127,6 +128,8 @@ export interface AgentDecision {
   /** Passar a conversa para outro Agente de IA (nome exato) e o motivo */
   transferAgent: string | null;
   transferAgentReason: string | null;
+  /** Tokens gastos nesta chamada (para o relatório de consumo) */
+  usage?: Usage | null;
 }
 
 export const TOOL_NAME = "registrar_atendimento";
@@ -606,7 +609,9 @@ export async function runSdrAgent(
   }
   const toolUse = data.content?.find((c) => c.type === "tool_use" && c.name === TOOL_NAME);
   if (!toolUse?.input) throw new Error("A IA não devolveu o atendimento no formato esperado");
-  return parseDecision(toolUse.input, input.tags);
+  const decision = parseDecision(toolUse.input, input.tags);
+  decision.usage = readUsage(data);
+  return decision;
 }
 
 /** Normaliza texto para comparar cidades (sem acento, minúsculo) */

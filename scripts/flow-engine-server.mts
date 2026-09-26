@@ -47,6 +47,8 @@ import {
   chatbots,
   followupSettings,
   waNumbers,
+  agentEvents,
+  aiUsage,
   broadcasts,
   broadcastRecipients,
   driveFiles,
@@ -108,6 +110,7 @@ import { normalizeWaConfig, type WaNumberConfig } from "../src/lib/whatsapp/conf
 import { ensureAgents, pickAgent } from "../src/lib/agents/shared";
 import { agentSystemPrompt, restrictCatalogItem, restrictDecision, agentByKeyword, agentScope } from "../src/lib/agents/common";
 import { routeWithAi } from "../src/lib/ai/router";
+import type { Usage } from "../src/lib/ai/usage";
 import { storageReady, getObject, signedUrl } from "../src/lib/storage/s3";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
@@ -197,6 +200,30 @@ async function configForJid(accountId: string, phoneJid: string) {
   });
   if (conv && conv.channel !== "WHATSAPP") return normalizeWaConfig(null);
   return numberConfig(accountId, conv?.waSlot);
+}
+
+/** Histórico dos Agentes de IA no lead (não trava o atendimento se falhar) */
+async function logAgentEvent(
+  accountId: string,
+  leadId: string,
+  agent: { id: string; name: string } | null,
+  kind: string,
+  detail: string | null,
+  meta?: Record<string, unknown>
+) {
+  await db
+    .insert(agentEvents)
+    .values({ accountId, leadId, agentId: agent?.id || null, agentName: agent?.name || null, kind, detail: detail?.slice(0, 500) || null, meta: meta || null })
+    .catch((e) => console.warn("[Agentes] histórico:", (e as Error)?.message || e));
+}
+
+/** Consumo de IA (tokens) por conta/agente/modelo */
+async function logUsage(accountId: string, agentId: string | null, model: string, kind: string, u: Usage | null | undefined) {
+  if (!u) return;
+  await db
+    .insert(aiUsage)
+    .values({ accountId, agentId, model: model.slice(0, 80), kind, inputTokens: u.input, outputTokens: u.output })
+    .catch((e) => console.warn("[Consumo] ", (e as Error)?.message || e));
 }
 
 /** Por qual WhatsApp falar com este contato: o número em que a conversa está */
@@ -1417,6 +1444,7 @@ async function runAi(accountId: string, conversationId: string, force = false, d
             history.filter((m) => m.direction === "IN").map((m) => m.transcript || m.body || ""),
             { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL }
           );
+          await logUsage(accountId, primary.id, settings.model || "claude-sonnet-4-5", "ROUTER", r?.usage);
           const hit = r ? activeAgents.find((a) => a.id === r.id) : null;
           if (hit) {
             agent = hit;
@@ -1435,6 +1463,7 @@ async function runAi(accountId: string, conversationId: string, force = false, d
       .update(leads)
       .set({ agentId: agent.id, ...(routedBy ? { lastAction: `Encaminhado para ${agent.name} (${routedBy})`.slice(0, 120), lastActionAt: new Date() } : {}) })
       .where(eq(leads.id, lead.id));
+    await logAgentEvent(accountId, lead.id, agent, "ROUTED", routedBy ? `Encaminhado para ${agent.name} (${routedBy})` : `${agent.name} começou a atender`);
   }
   const perms = agent.permissions;
   // Para quem este agente pode passar a conversa
@@ -1538,6 +1567,7 @@ async function runAi(accountId: string, conversationId: string, force = false, d
   const aiOpts = { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL };
   let decision = await runSdrAgent(agentInput(pending), aiOpts);
   if (!decision) return;
+  await logUsage(accountId, agent.id, aiOpts.model, "REPLY", decision.usage);
 
   // Dados de qualificação (endereço, uso, campos criados pela empresa...) e transferência automática:
   // com os campos obrigatórios preenchidos, o lead vai para o próximo vendedor da fila.
@@ -1566,8 +1596,10 @@ async function runAi(accountId: string, conversationId: string, force = false, d
   let unlocked = !pending;
   if (!lead.qualifiedAt && qualify.mode !== "OFF" && isQualified(qualify, decision, leadTexts, lead.city)) {
     await db.update(leads).set({ qualifiedAt: new Date() }).where(eq(leads.id, lead.id));
+    await logAgentEvent(accountId, lead.id, agent, "QUALIFIED", "Lead qualificado");
     if (pending && !silentHandoff) {
       const again = await runSdrAgent(agentInput(false), aiOpts).catch(() => null);
+      await logUsage(accountId, agent.id, aiOpts.model, "REPLY", again?.usage);
       if (again) decision = again;
       unlocked = true;
     }
@@ -1609,6 +1641,10 @@ async function runAi(accountId: string, conversationId: string, force = false, d
           updatedAt: new Date(),
         })
         .where(eq(leads.id, lead.id));
+      await logAgentEvent(accountId, lead.id, agent, "TRANSFER", `${agent.name} → ${target.name}${decision.transferAgentReason ? ` (${decision.transferAgentReason})` : ""}`, {
+        to: target.id,
+        toName: target.name,
+      });
       console.log(`[IA ${accountId.slice(0, 8)}] ${conversation.phoneJid}: ${agent.name} passou para ${target.name}${decision.transferAgentReason ? ` (${decision.transferAgentReason})` : ""}`);
       await runAi(accountId, conversationId, true, depth + 1);
       return;
@@ -1646,8 +1682,13 @@ async function runAi(accountId: string, conversationId: string, force = false, d
   if (decision.appointment && settings.schedulingEnabled) {
     const sched = action?.kind === "SCHEDULE" ? action : null;
     await saveAiAppointment(accountId, lead.id, decision, settings, currentAppt?.id || null, sched?.appointmentMinutes || null);
+    const ap = decision.appointment;
+    await logAgentEvent(accountId, lead.id, agent, "APPOINTMENT", `${ap.subject} em ${ap.date.split("-").reverse().join("/")} às ${ap.time}`);
   }
-  if (action) await recordAction(lead.id, action, allColumns, funnelList);
+  if (action) {
+    await recordAction(lead.id, action, allColumns, funnelList);
+    await logAgentEvent(accountId, lead.id, agent, "ACTION", action.name);
+  }
 
   const parts = decision.reply
     .split(/\n\s*\n/)
@@ -1708,7 +1749,10 @@ async function runAi(accountId: string, conversationId: string, force = false, d
   }
 
   if (decision.handoff) {
-    await handoffToSeller(accountId, lead.id, conversation.phoneJid, conversation.leadName, decision, settings, rules);
+    const sellerName = await handoffToSeller(accountId, lead.id, conversation.phoneJid, conversation.leadName, decision, settings, rules);
+    await logAgentEvent(accountId, lead.id, agent, "HANDOFF_SELLER", `Passou para ${sellerName || "a equipe"}${decision.handoffReason ? ` — ${decision.handoffReason}` : ""}`, {
+      minutes: Math.round((Date.now() - new Date(lead.createdAt).getTime()) / 60000),
+    });
   }
   console.log(
     `[IA ${accountId.slice(0, 8)}] ${conversation.phoneJid} (${agent.name}) — nota ${decision.score}` +
@@ -2147,6 +2191,7 @@ async function handoffToSeller(
       if ("error" in r) console.warn("[IA] Não consegui avisar o vendedor:", r.error);
     }
   }
+  return seller?.name || null;
 }
 
 // ============================================================================
@@ -2574,7 +2619,12 @@ async function sendFollowup(accountId: string, s: FollowupSettings, c: FollowupC
               sender: m.sender,
             })),
           },
-          { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL }
+          {
+            apiKey: key.apiKey,
+            model: settings.model || "claude-sonnet-4-5",
+            baseUrl: process.env.ANTHROPIC_BASE_URL,
+            onUsage: (u) => void logUsage(accountId, null, settings.model || "claude-sonnet-4-5", "FOLLOWUP", u),
+          }
         );
       } catch (err) {
         console.warn(`[Recontato ${accountId.slice(0, 8)}] IA falhou, usando o texto fixo:`, (err as Error)?.message || err);

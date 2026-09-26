@@ -1,6 +1,7 @@
 /**
  * IA escreve a mensagem de recontato olhando a conversa. Sem imports "@/" (usado pelo motor).
  */
+import { readUsage, type Usage } from "./usage";
 
 export interface FollowupAiInput {
   systemPrompt: string;
@@ -15,7 +16,7 @@ export interface FollowupAiInput {
 
 export async function generateFollowup(
   input: FollowupAiInput,
-  opts: { apiKey: string; model: string; baseUrl?: string; timeoutMs?: number }
+  opts: { apiKey: string; model: string; baseUrl?: string; timeoutMs?: number; onUsage?: (u: Usage) => void }
 ): Promise<string | null> {
   const convo = input.history
     .slice(-20)
@@ -54,6 +55,8 @@ export async function generateFollowup(
   });
   const data = (await res.json().catch(() => ({}))) as { content?: { type: string; text?: string }[]; error?: { message?: string } };
   if (!res.ok) throw new Error(`API da IA respondeu ${res.status}: ${data?.error?.message || "erro"}`);
+  const usage = readUsage(data);
+  if (usage && opts.onUsage) opts.onUsage(usage);
   const text = (data.content || [])
     .filter((c) => c.type === "text")
     .map((c) => c.text || "")

@@ -24,6 +24,22 @@ function scoreTone(score: number) {
 }
 
 const labelCls = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400";
+
+const EVENT_ICON: Record<string, string> = {
+  ROUTED: "🧭",
+  TRANSFER: "↪",
+  MANUAL: "✋",
+  QUALIFIED: "✅",
+  APPOINTMENT: "📅",
+  ACTION: "⚡",
+  HANDOFF_SELLER: "👤",
+};
+
+interface AgentHistory {
+  agentId: string | null;
+  agents: { id: string; name: string; active: boolean; isPrimary: boolean }[];
+  events: { id: string; kind: string; detail: string | null; agentName: string | null; createdAt: string }[];
+}
 const inputCls =
   "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[var(--accent)]";
 
@@ -73,6 +89,15 @@ export function LeadPanel({
   }, []);
   const [note, setNote] = useState(lead.note || "");
   useEffect(() => setNote(lead.note || ""), [lead.id, lead.note]);
+
+  // Agente de IA atual e histórico (encaminhamentos, trocas, agendamentos...)
+  const [agentInfo, setAgentInfo] = useState<AgentHistory | null>(null);
+  useEffect(() => {
+    fetch(`/api/sdr/leads/${lead.id}/agents`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setAgentInfo)
+      .catch(() => {});
+  }, [lead.id, lead.updatedAt]);
 
   // Agendamentos deste lead
   const [appts, setAppts] = useState<Appointment[]>([]);
@@ -247,6 +272,43 @@ export function LeadPanel({
           ))}
         </select>
       </div>
+
+      {agentInfo && agentInfo.agents.length > 0 && (
+        <div>
+          <span className={labelCls}>
+            <Bot size={11} className="mr-1 inline" />
+            Agente de IA
+          </span>
+          <select
+            value={agentInfo.agentId || ""}
+            onChange={(e) => e.target.value && onPatch({ agentId: e.target.value })}
+            className={inputCls}
+            title="Trocar o agente que atende este lead"
+          >
+            {agentInfo.agents.map((a) => (
+              <option key={a.id} value={a.id} disabled={!a.active}>
+                {a.name}
+                {a.isPrimary ? " (principal)" : ""}
+                {!a.active ? " — desativado" : ""}
+              </option>
+            ))}
+          </select>
+          {agentInfo.events.length > 0 && (
+            <ol className="mt-2 space-y-1.5 border-l border-slate-200 pl-3">
+              {agentInfo.events.slice(0, 12).map((ev) => (
+                <li key={ev.id} className="text-xs text-slate-600">
+                  <span className="mr-1">{EVENT_ICON[ev.kind] || "•"}</span>
+                  {ev.detail || ev.kind}
+                  {ev.agentName && !["ROUTED", "TRANSFER", "MANUAL"].includes(ev.kind) ? <span className="text-slate-400"> · {ev.agentName}</span> : null}
+                  <span className="block text-[10px] text-slate-400">
+                    {new Date(ev.createdAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
 
       <div>
         <span className={labelCls}>Vendedor responsável</span>

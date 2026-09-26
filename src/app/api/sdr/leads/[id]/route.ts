@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
-import { leads, leadTags, conversations, sellers, tags, funnelColumns, products, funnels } from "@/db/schema";
+import { leads, leadTags, conversations, sellers, tags, funnelColumns, products, funnels, aiAgents, agentEvents } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { requireUser, sellerScope } from "@/lib/auth/server";
 
@@ -103,6 +103,23 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
         if (!s) return NextResponse.json({ error: "Vendedor inválido" }, { status: 400 });
       }
       set.sellerId = body.sellerId || null;
+    }
+    // Trocar o Agente de IA que atende este lead (fica registrado no histórico)
+    if (typeof body.agentId === "string" && body.agentId) {
+      const ag = await db.query.aiAgents.findFirst({ where: and(eq(aiAgents.id, body.agentId), eq(aiAgents.accountId, auth.accountId)) });
+      if (!ag) return NextResponse.json({ error: "Agente inválido" }, { status: 400 });
+      if (ag.id !== lead.agentId) {
+        set.agentId = ag.id;
+        set.agentHandoff = null;
+        await db.insert(agentEvents).values({
+          accountId: auth.accountId,
+          leadId: lead.id,
+          agentId: ag.id,
+          agentName: ag.name,
+          kind: "MANUAL",
+          detail: `${auth.user.name || "Equipe"} passou para ${ag.name}`,
+        });
+      }
     }
     if (body.dealValue !== undefined) {
       const v = body.dealValue === null || body.dealValue === "" ? null : Number(body.dealValue);

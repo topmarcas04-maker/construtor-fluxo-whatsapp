@@ -1,3 +1,5 @@
+import { readUsage, type Usage } from "./usage";
+
 /**
  * Roteador: o Agente Principal lê o começo da conversa e escolhe o agente certo da equipe.
  * Uma chamada curta de IA, só quando a conversa é nova. Sem imports "@/" (motor e site usam).
@@ -13,7 +15,7 @@ export async function routeWithAi(
   candidates: RouteCandidate[],
   clientMessages: string[],
   opts: { apiKey: string; model: string; baseUrl?: string; timeoutMs?: number }
-): Promise<{ id: string; intent: string | null } | null> {
+): Promise<{ id: string; intent: string | null; usage: Usage | null } | null> {
   const text = clientMessages
     .map((m) => m.trim())
     .filter(Boolean)
@@ -55,5 +57,5 @@ export async function routeWithAi(
   const hit = candidates.find((c) => c.name.trim().toLowerCase() === name);
   if (!hit) return null;
   const intent = typeof input?.intencao === "string" ? input.intencao.trim().slice(0, 80) : null;
-  return { id: hit.id, intent };
+  return { id: hit.id, intent, usage: readUsage(data) };
 }

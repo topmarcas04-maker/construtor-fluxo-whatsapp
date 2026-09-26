@@ -2,7 +2,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { and, asc, eq, gte, inArray, lt } from "drizzle-orm";
 import { db } from "@/db/client";
-import { aiSettings, appointments, distributionRules, productImages, products, tags } from "@/db/schema";
+import { aiSettings, aiUsage, appointments, distributionRules, productImages, products, tags } from "@/db/schema";
+import type { Usage } from "@/lib/ai/usage";
 import { pickProductImage, productCaption } from "@/lib/products/format";
 import { formatSpDate, formatSpTime } from "@/lib/time";
 import { requireUser } from "@/lib/auth/server";
@@ -24,6 +25,13 @@ import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQu
  *         agent?: { id?, name, role, instructions, style, qualify, productIds, categoryIds, actionIds, permissions... } }
  * Sem "agent", testa o Agente Principal com as instruções da tela de Configurações.
  */
+/** Testes também gastam tokens: entram no consumo como TEST */
+async function logTestUsage(accountId: string, agentId: string | null, model: string, u: Usage | null | undefined) {
+  if (!u) return;
+  const id = agentId && /^[0-9a-f-]{36}$/i.test(agentId) ? agentId : null;
+  await db.insert(aiUsage).values({ accountId, agentId: id, model, kind: "TEST", inputTokens: u.input, outputTokens: u.output }).catch(() => {});
+}
+
 export async function POST(req: NextRequest) {
   const auth = await requireUser(["configuracoes", "agentes"]);
   if (auth.error) return auth.error;
@@ -70,6 +78,7 @@ export async function POST(req: NextRequest) {
           msgs.filter((m) => m.from === "lead").map((m) => String(m.text || "")),
           { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL }
         ).catch(() => null);
+        await logTestUsage(auth.accountId, null, settings.model || "claude-sonnet-4-5", r?.usage);
         const hit = r ? activeAgents.find((a) => a.id === r.id) : null;
         if (hit) {
           agent = hit;
@@ -160,6 +169,7 @@ export async function POST(req: NextRequest) {
     const aiOpts = { apiKey: key.apiKey, model, baseUrl: process.env.ANTHROPIC_BASE_URL };
     let d = await runSdrAgent(input(pending), aiOpts);
     if (!d) return NextResponse.json({ error: "A IA não respondeu" }, { status: 502 });
+    await logTestUsage(auth.accountId, agent.id, model, d.usage);
     // Passou para outro agente: a tela manda de novo, já com o novo agente (igual ao WhatsApp)
     const transferTo = d.transferAgent ? targets.find((a) => a.name.trim().toLowerCase() === d!.transferAgent!.trim().toLowerCase()) : null;
     if (transferTo) {

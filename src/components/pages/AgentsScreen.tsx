@@ -7,6 +7,7 @@ import { StyleCard, AiTester } from "@/components/settings/AiStyle";
 import { QualifyCard } from "@/components/settings/QualifyCard";
 import { AGENT_ROLES, AGENT_INTENTS, PERMISSION_LIST, ALL_PERMISSIONS, EMPTY_ROUTING, roleLabel, type AgentProfile } from "@/lib/agents/common";
 import { DEFAULT_QUALIFY, normalizeQualify } from "@/lib/ai/qualify";
+import { AgentsReport } from "@/components/agents/AgentsReport";
 
 type AgentRow = AgentProfile & { conversations: number; channels: string[] };
 
@@ -329,6 +330,7 @@ export function AgentsScreen() {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ agent: AgentProfile | null; test?: boolean } | null>(null);
+  const [tab, setTab] = useState<"agentes" | "relatorios">("agentes");
 
   const load = useCallback(async () => {
     try {
@@ -389,6 +391,28 @@ export function AgentsScreen() {
           </Button>
         }
       />
+      <div className="mb-4 inline-flex gap-1 rounded-xl bg-slate-100 p-1">
+        {(
+          [
+            ["agentes", "Agentes"],
+            ["relatorios", "Relatórios e consumo"],
+          ] as const
+        ).map(([k, label]) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => setTab(k)}
+            className={`rounded-lg px-4 py-1.5 text-sm font-semibold ${tab === k ? "bg-white text-[var(--accent)] shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "relatorios" ? (
+        <AgentsReport />
+      ) : (
+      <>
       <p className="mb-4 text-sm text-slate-500">
         {data.agents.length} de {data.limit} agente{data.limit > 1 ? "s" : ""} do seu plano.
         {full && data.limit < 20 && " Para criar mais, fale com quem administra a sua conta."}
@@ -464,6 +488,8 @@ export function AgentsScreen() {
         Qual agente atende cada WhatsApp você escolhe em WhatsApp → Regras deste número. Sem escolha, quem atende é o Agente Principal. A chave de IA, o modelo, o
         horário dos vendedores e a mensagem de transferência ficam em Configurações → Agentes de IA e valem para todos.
       </p>
+      </>
+      )}
     </Page>
   );
 }

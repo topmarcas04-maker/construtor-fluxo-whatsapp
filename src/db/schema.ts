@@ -530,6 +530,48 @@ export const aiAgents = pgTable(
   (table) => [index("ai_agents_account_idx").on(table.accountId)]
 );
 
+/**
+ * Histórico dos Agentes de IA no lead: encaminhamento, transferência, qualificação,
+ * agendamento, ação e passagem para vendedor.
+ */
+export const agentEvents = pgTable(
+  "agent_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id"),
+    agentName: varchar("agent_name", { length: 80 }),
+    /** ROUTED | TRANSFER | QUALIFIED | APPOINTMENT | ACTION | HANDOFF_SELLER | MANUAL */
+    kind: varchar("kind", { length: 20 }).notNull(),
+    detail: text("detail"),
+    meta: jsonb("meta"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("agent_events_account_idx").on(table.accountId, table.createdAt), index("agent_events_lead_idx").on(table.leadId)]
+);
+
+/** Consumo de IA (tokens) por conta, agente, modelo e tipo de chamada */
+export const aiUsage = pgTable(
+  "ai_usage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id"),
+    model: varchar("model", { length: 80 }).notNull(),
+    /** REPLY | ROUTER | FOLLOWUP | TEST */
+    kind: varchar("kind", { length: 12 }).notNull(),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("ai_usage_account_idx").on(table.accountId, table.createdAt)]
+);
+
 export const aiSettings = pgTable("ai_settings", {
   id: varchar("id", { length: 64 }).primaryKey(),
   systemPrompt: text("system_prompt").notNull().default(""),

@@ -813,6 +813,30 @@ CREATE INDEX IF NOT EXISTS ai_agents_account_idx ON ai_agents (account_id);
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS agent_id uuid;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS agent_handoff jsonb;
 ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS routing jsonb NOT NULL DEFAULT '{}'::jsonb;
+CREATE TABLE IF NOT EXISTS agent_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  lead_id uuid REFERENCES leads(id) ON DELETE CASCADE,
+  agent_id uuid,
+  agent_name varchar(80),
+  kind varchar(20) NOT NULL,
+  detail text,
+  meta jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS agent_events_account_idx ON agent_events (account_id, created_at);
+CREATE INDEX IF NOT EXISTS agent_events_lead_idx ON agent_events (lead_id);
+CREATE TABLE IF NOT EXISTS ai_usage (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  agent_id uuid,
+  model varchar(80) NOT NULL,
+  kind varchar(12) NOT NULL,
+  input_tokens integer NOT NULL DEFAULT 0,
+  output_tokens integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ai_usage_account_idx ON ai_usage (account_id, created_at);
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS max_agents integer NOT NULL DEFAULT 1;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_agents integer NOT NULL DEFAULT 1;
 -- Cada conta com IA configurada ganha o "Agente Comercial" (principal) com as configurações de hoje
