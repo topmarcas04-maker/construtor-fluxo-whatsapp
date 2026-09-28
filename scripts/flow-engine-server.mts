@@ -46,6 +46,7 @@ import {
   funnels,
   chatbots,
   followupSettings,
+  followupEvents,
   waNumbers,
   agentEvents,
   aiUsage,
@@ -99,7 +100,7 @@ import {
   type BotOption,
 } from "../src/lib/chatbot/common";
 import { followupCandidates, ensureDisqualifiedColumn, type FollowupCandidate } from "../src/lib/followup/shared";
-import { withDefaults, fillName, type FollowupSettings } from "../src/lib/followup/common";
+import { parseFollowupConfig, fillName, type FollowupItem } from "../src/lib/followup/common";
 import { generateFollowup } from "../src/lib/ai/followup";
 import { replyDelayMs, typingMs } from "../src/lib/ai/style";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "../src/lib/ai/hours";
@@ -921,7 +922,7 @@ async function handleOwnPhoneMessage(accountId: string, msg: any, slot = 1) {
     await db.update(conversations).set({ lastMessageAt: new Date(), waSlot: slot }).where(eq(conversations.id, conversation.id));
     await db
       .update(leads)
-      .set({ aiPaused: true, botId: null, botStep: null, botTries: 0, updatedAt: new Date() })
+      .set({ aiPaused: true, coverAt: null, botId: null, botStep: null, botTries: 0, updatedAt: new Date() })
       .where(eq(leads.conversationId, conversation.id));
   } catch (error) {
     console.error("[Error] handleOwnPhoneMessage:", error);
@@ -1340,7 +1341,7 @@ async function handleMetaMessage(conn: typeof metaConnections.$inferSelect, chan
     // Alguém respondeu pelo app do Instagram/Facebook: a pessoa assumiu a conversa
     await db
       .update(leads)
-      .set({ aiPaused: true, botId: null, botStep: null, botTries: 0, updatedAt: new Date() })
+      .set({ aiPaused: true, coverAt: null, botId: null, botStep: null, botTries: 0, updatedAt: new Date() })
       .where(eq(leads.conversationId, conversation.id));
     return;
   }
@@ -1408,7 +1409,9 @@ async function runAi(accountId: string, conversationId: string, force = false, d
   const conversation = await db.query.conversations.findFirst({ where: eq(conversations.id, conversationId) });
   const lead = await db.query.leads.findFirst({ where: eq(leads.conversationId, conversationId) });
   if (!conversation || !lead) return;
-  if (lead.aiPaused || lead.sellerId || lead.stage === "SALE") return;
+  // Cobertura: o vendedor não respondeu e o agente assumiu (até o vendedor voltar a falar)
+  const covering = Boolean(lead.coverAt && lead.sellerId);
+  if (lead.aiPaused || (lead.sellerId && !covering) || lead.stage === "SALE") return;
   // Regras do WhatsApp em que a conversa está (agente, vendedores, funil)
   const waCfg = conversation.channel === "WHATSAPP" ? await numberConfig(accountId, conversation.waSlot) : normalizeWaConfig(null);
 
@@ -1465,7 +1468,8 @@ async function runAi(accountId: string, conversationId: string, force = false, d
       .where(eq(leads.id, lead.id));
     await logAgentEvent(accountId, lead.id, agent, "ROUTED", routedBy ? `Encaminhado para ${agent.name} (${routedBy})` : `${agent.name} começou a atender`);
   }
-  const perms = agent.permissions;
+  // Na cobertura o agente não passa para a fila de vendedores: o vendedor do lead continua depois
+  const perms = covering ? { ...agent.permissions, handoffSeller: false } : agent.permissions;
   // Para quem este agente pode passar a conversa
   const targets = perms.handoffAgent
     ? activeAgents.filter((a) => a.id !== agent.id && (!agent.routing.transferTo.length || agent.routing.transferTo.includes(a.id)))
@@ -1524,8 +1528,15 @@ async function runAi(accountId: string, conversationId: string, force = false, d
     .filter((c) => c.kind === "CUSTOM" && c.aiRule?.trim())
     .filter((c, _i, arr) => c.funnelId === leadFunnelId || !arr.some((o) => o.funnelId === leadFunnelId && o.name.trim().toLowerCase() === c.name.trim().toLowerCase()));
 
+  // Cobertura: o agente sabe que está segurando o atendimento para o vendedor
+  const coverSeller = covering && lead.sellerId ? await db.query.sellers.findFirst({ where: eq(sellers.id, lead.sellerId), columns: { name: true } }) : null;
+  const coverNote = covering
+    ? `\n\nSITUAÇÃO AGORA: este cliente é atendido pelo consultor ${coverSeller?.name || "responsável"}, que está ocupado e ainda não conseguiu responder. ` +
+      `Você está cobrindo o atendimento: responda o cliente com atenção, tire as dúvidas que puder e diga que ${coverSeller?.name || "o consultor"} continua o atendimento assim que estiver livre. ` +
+      `Não diga que vai transferir para outra pessoa.`
+    : "";
   const agentInput = (locked: boolean): Parameters<typeof runSdrAgent>[0] => ({
-      systemPrompt: agentSystemPrompt(agent, settings.systemPrompt || "Você é a atendente virtual da empresa."),
+      systemPrompt: agentSystemPrompt(agent, settings.systemPrompt || "Você é a atendente virtual da empresa.") + coverNote,
       style: { style: agent.style, styleCustom: agent.styleCustom, replyLength: agent.replyLength, emojiLevel: agent.emojiLevel },
       offerVideo: agent.offerVideo && perms.videos,
       agents: targets.map((a) => ({ name: a.name, scope: agentScope(a) })),
@@ -2555,18 +2566,18 @@ async function processFollowups() {
   try {
     const rows = await db.select().from(followupSettings);
     for (const row of rows) {
-      const s = withDefaults(row.config as Partial<FollowupSettings>);
-      if (!s.enabled) continue;
+      const items = parseFollowupConfig(row.config).items.filter((it) => it.enabled);
+      if (!items.length) continue;
       const accountId = row.id;
       const acc = await loadAccount(accountId);
       if (!acc || !acc.active) continue;
       if (!connectedSession(accountId)) continue; // sem WhatsApp não envia (tenta de novo depois)
       const now = new Date();
-      const due = (await followupCandidates(db, accountId, s, now)).filter((c) => c.next.at.getTime() <= now.getTime());
+      const due = (await followupCandidates(db, accountId, items, now)).filter((c) => c.next.at.getTime() <= now.getTime());
       for (const c of due.slice(0, FOLLOWUP_PER_RUN)) {
         try {
-          if (c.next.kind === "SEND") await sendFollowup(accountId, s, c);
-          else await finishFollowup(accountId, s, c);
+          if (c.next.kind === "SEND") await sendFollowup(accountId, c.item, c);
+          else await finishFollowup(accountId, c.item, c);
         } catch (err) {
           console.error(`[Recontato ${accountId.slice(0, 8)}] erro com ${c.phoneJid}:`, (err as Error)?.message || err);
         }
@@ -2580,7 +2591,28 @@ async function processFollowups() {
   }
 }
 
-async function sendFollowup(accountId: string, s: FollowupSettings, c: FollowupCandidate) {
+/** Histórico do recontato/cobertura para o relatório (não trava nada se falhar) */
+async function logFollowup(
+  accountId: string,
+  leadId: string,
+  kind: "SENT" | "REPLIED" | "HANDOFF" | "FINAL" | "COVER",
+  data: { followupId?: string | null; followupName?: string | null; sellerId?: string | null; attempt?: number | null } = {}
+) {
+  await db
+    .insert(followupEvents)
+    .values({
+      accountId,
+      leadId,
+      kind,
+      followupId: data.followupId?.slice(0, 40) || null,
+      followupName: data.followupName?.slice(0, 80) || null,
+      sellerId: data.sellerId || null,
+      attempt: data.attempt ?? null,
+    })
+    .catch((e) => console.warn("[Recontato] histórico:", (e as Error)?.message || e));
+}
+
+async function sendFollowup(accountId: string, s: FollowupItem, c: FollowupCandidate) {
   if (c.next.kind !== "SEND") return;
   const k = c.next.attempt;
   const total = s.attempts.length;
@@ -2639,13 +2671,14 @@ async function sendFollowup(accountId: string, s: FollowupSettings, c: FollowupC
     console.warn(`[Recontato ${accountId.slice(0, 8)}] não enviei para ${c.phoneJid}:`, r.error);
     return;
   }
-  const set: Record<string, unknown> = { fuCount: k + 1, fuLastAt: new Date() };
+  const set: Record<string, unknown> = { fuCount: k + 1, fuLastAt: new Date(), fuId: s.id };
   if (c.botId) set.botAt = new Date(); // mantém o menu do chatbot valendo
   await db.update(leads).set(set).where(eq(leads.id, c.leadId));
+  await logFollowup(accountId, c.leadId, "SENT", { followupId: s.id, followupName: s.name, sellerId: c.sellerId, attempt: k + 1 });
   console.log(`[Recontato ${accountId.slice(0, 8)}] ${c.phoneJid}: tentativa ${k + 1}/${total} enviada`);
 }
 
-async function finishFollowup(accountId: string, s: FollowupSettings, c: FollowupCandidate) {
+async function finishFollowup(accountId: string, s: FollowupItem, c: FollowupCandidate) {
   const set: Record<string, unknown> = {
     fuCount: s.attempts.length + 1,
     botId: null,
@@ -2665,6 +2698,7 @@ async function finishFollowup(accountId: string, s: FollowupSettings, c: Followu
     if (!tag) [tag] = await db.insert(tags).values({ accountId, name: tagName.slice(0, 60), color: "gray" }).returning();
     await db.insert(leadTags).values({ leadId: c.leadId, tagId: tag.id }).onConflictDoNothing();
   }
+  await logFollowup(accountId, c.leadId, "FINAL", { followupId: s.id, followupName: s.name, sellerId: c.sellerId, attempt: s.attempts.length });
   console.log(`[Recontato ${accountId.slice(0, 8)}] ${c.phoneJid}: sem resposta — desqualificado`);
 }
 
@@ -2676,15 +2710,20 @@ async function finishFollowup(accountId: string, s: FollowupSettings, c: Followu
 async function onFollowupReply(accountId: string, conversationId: string, phoneJid: string, text: string) {
   const row = await db.query.followupSettings.findFirst({ where: eq(followupSettings.id, accountId) });
   if (!row) return false;
-  const s = withDefaults(row.config as Partial<FollowupSettings>);
+  const items = parseFollowupConfig(row.config).items;
   const lead = await db.query.leads.findFirst({ where: eq(leads.conversationId, conversationId) });
   if (!lead || lead.closed) return false;
+  // Recontato que o cliente respondeu (o que enviou a última tentativa)
+  const s = items.find((it) => it.id === lead.fuId) || items[0];
+  if (!s) return false;
+  await logFollowup(accountId, lead.id, "REPLIED", { followupId: s.id, followupName: s.name, sellerId: lead.sellerId, attempt: lead.fuCount || null });
   const conv = await db.query.conversations.findFirst({ where: eq(conversations.id, conversationId) });
   const leadName = (lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conv?.leadName) || null;
 
   const set: Record<string, unknown> = {
     fuCount: 0,
     fuLastAt: null,
+    fuId: null,
     lastAction: "Respondeu o recontato",
     lastActionAt: new Date(),
     updatedAt: new Date(),
@@ -2733,6 +2772,7 @@ async function onFollowupReply(accountId: string, conversationId: string, phoneJ
         .set({ sellerId: seller.id, aiPaused: true, botId: null, botStep: null, botTries: 0, lastAction: "Recontato: passou para o vendedor", updatedAt: new Date() })
         .where(eq(leads.id, lead.id));
       handed = true;
+      await logFollowup(accountId, lead.id, "HANDOFF", { followupId: s.id, followupName: s.name, sellerId: seller.id });
       const template = s.replyHandoffMessage.trim();
       if (template) {
         await pause(1500);
@@ -2764,6 +2804,112 @@ async function onFollowupReply(accountId: string, conversationId: string, phoneJ
   }
   console.log(`[Recontato ${accountId.slice(0, 8)}] ${phoneJid}: respondeu${handed ? " — passou para o vendedor" : ""}`);
   return handed;
+}
+
+// ============================================================================
+// COBERTURA DO VENDEDOR (agente assume quando o vendedor não responde)
+// ============================================================================
+
+let coverRunning = false;
+const COVER_PER_RUN = 15;
+
+/**
+ * Lead com vendedor, atendimento humano (agente pausado), e a última mensagem é do cliente há mais de X horas:
+ * o agente assume e responde. Quando o vendedor mandar mensagem, o agente pausa de novo.
+ */
+async function processCover() {
+  if (coverRunning) return;
+  coverRunning = true;
+  try {
+    const rows = await db.select().from(followupSettings);
+    for (const row of rows) {
+      const cover = parseFollowupConfig(row.config).cover;
+      if (!cover.enabled) continue;
+      const accountId = row.id;
+      const acc = await loadAccount(accountId);
+      if (!acc || !acc.active) continue;
+      if (!connectedSession(accountId)) continue;
+      const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
+      if (!settings?.enabled) continue; // sem IA ligada não há quem assuma
+      if (cover.onlyOpenHours && !sellerAvailability(normalizeSellerHours(settings.sellerHours)).open) continue;
+
+      const limit = new Date(Date.now() - cover.hours * 3600e3);
+      const due = await db.execute(sql`
+        SELECT l.id, l.conversation_id, l.seller_id, c.phone_jid,
+               coalesce(nullif(l.card_name, 'Lead'), c.lead_name) AS name, lm.body AS last_body
+          FROM leads l
+          JOIN conversations c ON c.id = l.conversation_id
+          JOIN LATERAL (
+            SELECT m.sent_at, m.direction, m.body FROM messages m
+             WHERE m.conversation_id = c.id ORDER BY m.sent_at DESC LIMIT 1
+          ) lm ON true
+         WHERE l.account_id = ${accountId}
+           AND c.channel = 'WHATSAPP'
+           AND c.is_group = false
+           AND l.closed = false
+           AND l.stage <> 'SALE'
+           AND l.seller_id IS NOT NULL
+           AND l.ai_paused = true
+           AND l.bot_id IS NULL
+           AND lm.direction = 'IN'
+           AND lm.sent_at <= ${limit}
+           AND lm.sent_at > now() - interval '30 days'
+           AND (l.cover_at IS NULL OR l.cover_at < lm.sent_at)
+         ORDER BY lm.sent_at ASC
+         LIMIT ${COVER_PER_RUN}
+      `);
+      const agents = await ensureAgents(db, accountId);
+      const coverAgent = cover.agentId ? agents.find((a) => a.id === cover.agentId && a.active) || null : null;
+
+      for (const r of due.rows as Record<string, unknown>[]) {
+        const leadId = String(r.id);
+        const conversationId = String(r.conversation_id);
+        const sellerId = String(r.seller_id);
+        try {
+          await db
+            .update(leads)
+            .set({
+              aiPaused: false,
+              coverAt: new Date(),
+              ...(coverAgent ? { agentId: coverAgent.id } : {}),
+              lastAction: `Agente assumiu: vendedor sem responder há ${cover.hours}h`.slice(0, 120),
+              lastActionAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(leads.id, leadId));
+          await logFollowup(accountId, leadId, "COVER", { followupId: "cover", followupName: "Cobertura do vendedor", sellerId });
+          await logAgentEvent(accountId, leadId, coverAgent, "COVER", `Vendedor sem responder há ${cover.hours}h: o agente assumiu`);
+          scheduleAi(accountId, conversationId);
+
+          if (cover.notifySeller) {
+            const seller = await db.query.sellers.findFirst({ where: eq(sellers.id, sellerId) });
+            const jid = sellerJid(seller?.phone || null);
+            if (seller?.active && jid) {
+              const phoneJid = String(r.phone_jid);
+              const leadPhone = phoneJid.endsWith("@s.whatsapp.net") ? phoneJid.split("@")[0] : null;
+              const lines = [
+                `⏰ *Cliente esperando há mais de ${cover.hours}h*`,
+                `*Cliente:* ${(r.name as string | null) || "sem nome"}`,
+                r.last_body ? `*Última mensagem:* ${String(r.last_body).slice(0, 300)}` : null,
+                `\nO agente de IA assumiu para o cliente não ficar sem resposta. Assim que você responder, ele pausa e a conversa volta para você.`,
+                leadPhone ? `\nFalar com o cliente: https://wa.me/${leadPhone}` : null,
+              ].filter(Boolean);
+              const sent = await sendText(accountId, jid, lines.join("\n"), "AI");
+              if ("error" in sent) console.warn("[Cobertura] Não consegui avisar o vendedor:", sent.error);
+            }
+          }
+          console.log(`[Cobertura ${accountId.slice(0, 8)}] ${r.phone_jid}: vendedor sem responder — agente assumiu`);
+        } catch (err) {
+          console.error(`[Cobertura ${accountId.slice(0, 8)}] erro:`, (err as Error)?.message || err);
+        }
+        await pause(SELFTEST ? 100 : 1500);
+      }
+    }
+  } catch (err) {
+    console.error("[Cobertura] erro:", (err as Error)?.message || err);
+  } finally {
+    coverRunning = false;
+  }
 }
 
 // ============================================================================
@@ -3010,6 +3156,7 @@ async function main() {
   setInterval(() => syncSessions().catch((e) => console.error("[sync]", e)), 60_000);
   setInterval(() => processReminders(), SELFTEST ? 3_000 : 30_000);
   setInterval(() => processFollowups(), SELFTEST ? 3_000 : 60_000);
+  setInterval(() => processCover(), SELFTEST ? 3_000 : 60_000);
   setInterval(() => processBroadcasts(), SELFTEST ? 2_000 : 10_000);
 
   const shutdown = async () => {

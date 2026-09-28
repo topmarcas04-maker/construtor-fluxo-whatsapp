@@ -1,16 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MessageSquare, KanbanSquare, Search, Users } from "lucide-react";
+import { MessageSquare, KanbanSquare, Search, Users, List } from "lucide-react";
 import type { Lead, QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import { leadDisplayName } from "@/lib/types/sdr";
 import { ExpandButton } from "@/components/layout/Fullscreen";
 import { ConversationsView } from "@/components/sdr/ConversationsView";
 import { FunnelView } from "@/components/sdr/FunnelView";
 import { GroupsView } from "@/components/sdr/GroupsView";
+import { LeadsTable } from "@/components/sdr/LeadsTable";
 import type { FunnelColumn, FunnelWithColumns } from "@/lib/funnel/common";
 
-type ViewMode = "conversas" | "grupos" | "funil";
+type ViewMode = "conversas" | "lista" | "grupos" | "funil";
 
 export function LeadsScreen() {
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -40,6 +41,17 @@ export function LeadsScreen() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  // Link de outra tela (ex.: relatório do recontato): /leads?lead=ID abre a conversa
+  useEffect(() => {
+    try {
+      const id = new URLSearchParams(window.location.search).get("lead");
+      if (id) {
+        setSelectedLeadId(id);
+        setView("conversas");
+      }
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -99,10 +111,11 @@ export function LeadsScreen() {
       >
         <h1 className="mr-2 text-xl font-semibold text-slate-900">Leads</h1>
 
-        <div className="flex rounded-lg bg-slate-100 p-1">
+        <div className="flex max-w-full overflow-x-auto rounded-lg bg-slate-100 p-1">
           {(
             [
               { key: "conversas", label: "Conversas", icon: MessageSquare },
+              { key: "lista", label: "Todos os leads", icon: List },
               { key: "grupos", label: "Grupos", icon: Users },
               { key: "funil", label: "Funil", icon: KanbanSquare },
             ] as const
@@ -168,6 +181,19 @@ export function LeadsScreen() {
             funnels={funnels}
             onMobileChat={setMobileChat}
             showSellerFilter={showSellerFilter}
+          />
+        ) : view === "lista" ? (
+          <LeadsTable
+            leads={filtered}
+            tags={tags}
+            sellers={sellers}
+            funnels={funnels}
+            loading={loading}
+            showSellerFilter={showSellerFilter}
+            onOpenLead={(leadId) => {
+              setSelectedLeadId(leadId);
+              setView("conversas");
+            }}
           />
         ) : view === "grupos" ? (
           <GroupsView quickReplies={quickReplies} onMobileChat={setMobileChat} />

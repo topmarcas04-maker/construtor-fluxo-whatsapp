@@ -400,6 +400,10 @@ export const leads = pgTable(
     /** Última troca de agente: { from, fromName, to, reason, summary, at } */
     agentHandoff: jsonb("agent_handoff"),
     fuLastAt: timestamp("fu_last_at", { withTimezone: true }),
+    /** Recontato em que o lead está (id do recontato na configuração) */
+    fuId: varchar("fu_id", { length: 40 }),
+    /** Cobertura: quando o agente assumiu porque o vendedor não respondeu */
+    coverAt: timestamp("cover_at", { withTimezone: true }),
     /** Quando o cliente informou os dados da qualificação (libera preço e detalhes para a IA) */
     qualifiedAt: timestamp("qualified_at", { withTimezone: true }),
     /** Dados de qualificação coletados pela IA (endereço, uso, campos criados pela empresa…) */
@@ -1051,6 +1055,32 @@ export const followupSettings = pgTable("followup_settings", {
   config: jsonb("config").notNull().default({}),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Histórico do recontato e da cobertura (para o relatório).
+ * kind: SENT (tentativa enviada) | REPLIED (cliente respondeu) | HANDOFF (passou para o vendedor)
+ *       | FINAL (sem resposta, desqualificado) | COVER (agente assumiu porque o vendedor não respondeu)
+ */
+export const followupEvents = pgTable(
+  "followup_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "cascade" }),
+    followupId: varchar("followup_id", { length: 40 }),
+    followupName: varchar("followup_name", { length: 80 }),
+    sellerId: uuid("seller_id"),
+    kind: varchar("kind", { length: 12 }).notNull(),
+    attempt: integer("attempt"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("followup_events_account_idx").on(table.accountId, table.createdAt),
+    index("followup_events_lead_idx").on(table.leadId),
+  ]
+);
 
 // ============================================================================
 // CHATBOT (MENUS AUTOMÁTICOS SEM IA)

@@ -74,14 +74,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         where: and(eq(driveFiles.id, String(body.driveFileId)), eq(driveFiles.accountId, auth.accountId)),
       });
       if (!file) return NextResponse.json({ error: "Arquivo não encontrado" }, { status: 404 });
-      await db.update(leads).set({ aiPaused: true, botId: null, botStep: null, botTries: 0, updatedAt: new Date() }).where(eq(leads.conversationId, id));
+      await db.update(leads).set({ aiPaused: true, coverAt: null, botId: null, botStep: null, botTries: 0, updatedAt: new Date() }).where(eq(leads.conversationId, id));
       result = await sendWhatsappDriveFile(auth.accountId, conversation.phoneJid, file.id, author);
     } else if (body.productId) {
       const product = await db.query.products.findFirst({
         where: and(eq(products.id, String(body.productId)), eq(products.accountId, auth.accountId)),
       });
       if (!product) return NextResponse.json({ error: "Produto não encontrado" }, { status: 404 });
-      await db.update(leads).set({ aiPaused: true, botId: null, botStep: null, botTries: 0, updatedAt: new Date() }).where(eq(leads.conversationId, id));
+      await db.update(leads).set({ aiPaused: true, coverAt: null, botId: null, botStep: null, botTries: 0, updatedAt: new Date() }).where(eq(leads.conversationId, id));
       result = await sendWhatsappProduct(auth.accountId, conversation.phoneJid, product.id, author, body.imageId ? String(body.imageId) : null, body.video === true);
     } else if (body.media) {
       const { kind, dataUrl, fileName } = body.media as { kind: string; dataUrl: string; fileName?: string };
@@ -93,7 +93,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (base64.length * 0.75 > MAX_UPLOAD) {
         return NextResponse.json({ error: "Arquivo muito grande (máx. 8 MB)" }, { status: 400 });
       }
-      await db.update(leads).set({ aiPaused: true, botId: null, botStep: null, botTries: 0, updatedAt: new Date() }).where(eq(leads.conversationId, id));
+      await db.update(leads).set({ aiPaused: true, coverAt: null, botId: null, botStep: null, botTries: 0, updatedAt: new Date() }).where(eq(leads.conversationId, id));
       result = await sendWhatsappMedia(
         auth.accountId,
         conversation.phoneJid,
@@ -109,7 +109,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     } else {
       const text = String(body.text || "");
       if (!text.trim()) return NextResponse.json({ error: "Digite uma mensagem" }, { status: 400 });
-      await db.update(leads).set({ aiPaused: true, botId: null, botStep: null, botTries: 0, updatedAt: new Date() }).where(eq(leads.conversationId, id));
+      await db.update(leads).set({ aiPaused: true, coverAt: null, botId: null, botStep: null, botTries: 0, updatedAt: new Date() }).where(eq(leads.conversationId, id));
       result = await sendWhatsappMessage(auth.accountId, conversation.phoneJid, text, "HUMAN", author);
     }
 

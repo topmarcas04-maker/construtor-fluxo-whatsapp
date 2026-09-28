@@ -33,6 +33,7 @@ const EVENT_ICON: Record<string, string> = {
   APPOINTMENT: "📅",
   ACTION: "⚡",
   HANDOFF_SELLER: "👤",
+  COVER: "⏰",
 };
 
 interface AgentHistory {

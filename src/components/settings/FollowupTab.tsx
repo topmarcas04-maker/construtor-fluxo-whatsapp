@@ -1,26 +1,47 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, Sparkles, Type, Clock, CalendarClock, Ban, Tag as TagIcon, Workflow, Info, UserCheck, MessagesSquare, Bell, Undo2 } from "lucide-react";
+import { Plus, Trash2, Sparkles, Type, Clock, CalendarClock, Ban, Tag as TagIcon, Workflow, Info, UserCheck, MessagesSquare, Bell, Undo2, Repeat, ShieldAlert, BarChart3, Bot } from "lucide-react";
 import { Button, Field, Input, Textarea, Toggle, Badge, ErrorNote } from "@/components/ui";
 import { TAG_COLOR_CLASSES } from "@/lib/types/sdr";
 import {
-  DEFAULT_FOLLOWUP,
+  DEFAULT_COVER,
   MAX_ATTEMPTS,
+  MAX_FOLLOWUPS,
+  SELLER_SCOPE_LABEL,
   WEEKDAYS,
   fillName,
+  newFollowupItem,
   slotAt,
-  type FollowupSettings,
+  type CoverSettings,
+  type FollowupItem,
+  type SellerScope,
 } from "@/lib/followup/common";
+import { FollowupReport } from "./FollowupReport";
 
 interface Data {
-  settings: FollowupSettings;
+  items: FollowupItem[];
+  cover: CoverSettings;
   funnels: { id: string; name: string; columns: { id: string; name: string }[] }[];
   tags: { id: string; name: string; color: string }[];
+  agents: { id: string; name: string; active: boolean; isPrimary: boolean }[];
   aiEnabled: boolean;
   hasAiKey: boolean;
-  queue: { leadId: string; name: string | null; phone: string; kind: "SEND" | "FINAL"; attempt: number | null; at: string; inBot: boolean }[];
+  queue: {
+    leadId: string;
+    name: string | null;
+    phone: string;
+    kind: "SEND" | "FINAL";
+    attempt: number | null;
+    total: number;
+    followupId: string;
+    followupName: string;
+    at: string;
+    inBot: boolean;
+  }[];
 }
+
+type Section = "recontatos" | "cobertura" | "relatorio";
 
 async function api(url: string, method: string, body?: unknown) {
   const res = await fetch(url, {
@@ -36,36 +57,79 @@ async function api(url: string, method: string, body?: unknown) {
 const fmt = (d: Date) =>
   d.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 
+const BLANK: FollowupItem = { ...newFollowupItem("Recontato"), id: "__blank" };
+
 export function FollowupTab() {
   const [data, setData] = useState<Data | null>(null);
-  const [s, setS] = useState<FollowupSettings>(DEFAULT_FOLLOWUP);
+  const [items, setItems] = useState<FollowupItem[]>([]);
+  const [cover, setCover] = useState<CoverSettings>(DEFAULT_COVER);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [section, setSection] = useState<Section>("recontatos");
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(async () => {
-    const d: Data = await api("/api/sdr/followup", "GET");
+  const apply = useCallback((d: Data) => {
     setData(d);
-    setS(d.settings);
+    setItems(d.items);
+    setCover(d.cover);
+    setSelectedId((cur) => (cur && d.items.some((it) => it.id === cur) ? cur : d.items[0]?.id || null));
   }, []);
+  const load = useCallback(async () => {
+    apply(await api("/api/sdr/followup", "GET"));
+  }, [apply]);
   useEffect(() => {
     load().catch((e) => setError((e as Error).message));
   }, [load]);
 
-  const set = (patch: Partial<FollowupSettings>) => {
+  const s: FollowupItem = items.find((it) => it.id === selectedId) || BLANK;
+  const set = (patch: Partial<FollowupItem>) => {
     setSaved(false);
-    setS((x) => ({ ...x, ...patch }));
+    setItems((list) => list.map((it) => (it.id === s.id ? { ...it, ...patch } : it)));
   };
-  const setAttempt = (i: number, patch: Partial<FollowupSettings["attempts"][number]>) =>
+  const setAttempt = (i: number, patch: Partial<FollowupItem["attempts"][number]>) =>
     set({ attempts: s.attempts.map((a, j) => (j === i ? { ...a, ...patch } : a)) });
+  const setCov = (patch: Partial<CoverSettings>) => {
+    setSaved(false);
+    setCover((c) => ({ ...c, ...patch }));
+  };
+
+  const addItem = () => {
+    if (items.length >= MAX_FOLLOWUPS) return;
+    const hasWith = items.some((it) => it.sellerScope === "WITH");
+    const it = newFollowupItem(items.length === 0 ? "Recontato geral" : hasWith ? `Recontato ${items.length + 1}` : "Recontato com vendedor");
+    if (items.length > 0 && !hasWith) {
+      it.sellerScope = "WITH";
+      it.includeWithSeller = true;
+      it.includeTeam = true;
+      it.replyAction = "HANDOFF";
+    }
+    setItems((list) => [...list, it]);
+    setSelectedId(it.id);
+    setSaved(false);
+  };
+  const removeItem = () => {
+    if (!confirm(`Excluir o recontato "${s.name}"? (só vale depois de salvar)`)) return;
+    const rest = items.filter((it) => it.id !== s.id);
+    setItems(rest);
+    setSelectedId(rest[0]?.id || null);
+    setSaved(false);
+  };
+  const move = (dir: -1 | 1) => {
+    const i = items.findIndex((it) => it.id === s.id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= items.length) return;
+    const list = [...items];
+    [list[i], list[j]] = [list[j], list[i]];
+    setItems(list);
+    setSaved(false);
+  };
 
   const save = async () => {
     setSaving(true);
     setError(null);
     try {
-      const d: Data = await api("/api/sdr/followup", "PUT", s);
-      setData(d);
-      setS(d.settings);
+      apply(await api("/api/sdr/followup", "PUT", { items, cover }));
       setSaved(true);
     } catch (e) {
       setError((e as Error).message);
@@ -94,18 +158,167 @@ export function FollowupTab() {
   if (!data) return <div className="p-6 text-sm text-slate-400">{error || "Carregando..."}</div>;
   const aiReady = data.aiEnabled && data.hasAiKey;
 
+  const SECTIONS: { key: Section; label: string; Icon: typeof Repeat }[] = [
+    { key: "recontatos", label: "Recontatos", Icon: Repeat },
+    { key: "cobertura", label: "Cobertura do vendedor", Icon: ShieldAlert },
+    { key: "relatorio", label: "Relatório", Icon: BarChart3 },
+  ];
+  const saveBar = (label: string) => (
+    <>
+      <ErrorNote message={error} />
+      <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-4">
+        {saved && <span className="text-sm font-semibold text-emerald-600">Salvo!</span>}
+        <Button onClick={save} disabled={saving}>
+          {saving ? "Salvando..." : label}
+        </Button>
+      </div>
+    </>
+  );
+
   return (
     <div className="space-y-6 p-5 md:p-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="max-w-2xl">
-          <h3 className="font-semibold text-slate-900">Recontato automático</h3>
-          <p className="mt-1 text-sm text-slate-600">
-            Quando o cliente para de responder, o sistema volta a chamar no WhatsApp nos horários que você escolher. Se ele responder, o
-            recontato para e vale o que você configurar em &quot;Quando o cliente responder&quot; (seguir com a IA ou passar para o vendedor).
-            Sem resposta depois da última tentativa, o card vai para &quot;Desqualificado&quot;.
+      <div className="flex gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1">
+        {SECTIONS.map(({ key, label, Icon }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setSection(key)}
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
+              section === key ? "bg-white text-[var(--accent)] shadow-sm" : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <Icon size={15} /> {label}
+          </button>
+        ))}
+      </div>
+
+      {section === "relatorio" && <FollowupReport items={items.map((it) => ({ id: it.id, name: it.name }))} />}
+
+      {section === "cobertura" && (
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-2xl">
+              <h3 className="font-semibold text-slate-900">Agente quando o vendedor não atende</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Se o lead está com um vendedor e o cliente fica esperando resposta, depois do tempo escolhido um agente de IA assume para o
+                cliente não ficar sem atendimento. Assim que o vendedor responder (pelo painel ou pelo celular da empresa), o agente pausa e a
+                conversa volta para ele.
+              </p>
+            </div>
+            <Toggle checked={cover.enabled} onChange={(v) => setCov({ enabled: v })} label={cover.enabled ? "Ligado" : "Desligado"} />
+          </div>
+          {!aiReady && (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {data.aiEnabled ? "A conta está sem chave de IA" : "A IA desta conta está desligada"}: sem IA o agente não consegue assumir.
+            </p>
+          )}
+          <div className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
+            O agente assume quando o cliente espera o vendedor por
+            <input
+              type="number"
+              min={1}
+              max={720}
+              value={cover.hours}
+              onChange={(e) => setCov({ hours: Number(e.target.value) })}
+              className="w-20 rounded-lg border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)]"
+            />
+            horas <span className="text-xs text-slate-400">(de 1 a 720 horas = 30 dias)</span>
+          </div>
+          <Field label="Agente que assume" hint="O agente responde o cliente e diz que o vendedor continua o atendimento assim que puder.">
+            <select
+              value={cover.agentId || ""}
+              onChange={(e) => setCov({ agentId: e.target.value || null })}
+              className="w-full max-w-md rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm outline-none focus:border-[var(--accent)]"
+            >
+              <option value="">O agente que já atendia o lead (ou o principal)</option>
+              {data.agents
+                .filter((a) => a.active)
+                .map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                    {a.isPrimary ? " (principal)" : ""}
+                  </option>
+                ))}
+            </select>
+          </Field>
+          <div className="space-y-2 text-sm text-slate-700">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={cover.notifySeller} onChange={(e) => setCov({ notifySeller: e.target.checked })} className="h-4 w-4 accent-[var(--accent)]" />
+              <Bell size={14} className="text-[var(--accent)]" /> Avisar o vendedor no WhatsApp que o agente assumiu
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={cover.onlyOpenHours} onChange={(e) => setCov({ onlyOpenHours: e.target.checked })} className="h-4 w-4 accent-[var(--accent)]" />
+              <Clock size={14} className="text-[var(--accent)]" /> Só assumir dentro do horário dos consultores
+            </label>
+          </div>
+          <p className="flex items-start gap-1.5 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+            <Bot size={14} className="mt-0.5 shrink-0" /> Vale só para WhatsApp, leads com vendedor e com a última mensagem do cliente. Nunca
+            para venda fechada. Enquanto cobre, o agente não passa o cliente para outro vendedor.
           </p>
+          {saveBar("Salvar cobertura")}
         </div>
-        <Toggle checked={s.enabled} onChange={(v) => set({ enabled: v })} label={s.enabled ? "Ligado" : "Desligado"} />
+      )}
+
+      {section === "recontatos" && (
+      <>
+      <div className="max-w-3xl">
+        <h3 className="font-semibold text-slate-900">Recontato automático</h3>
+        <p className="mt-1 text-sm text-slate-600">
+          Quando o cliente para de responder, o sistema volta a chamar no WhatsApp nos horários que você escolher. Você pode ter vários
+          recontatos (ex.: um para leads com vendedor e um geral). Cada lead entra em um só: o primeiro da lista que servir para ele.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        {items.map((it, i) => (
+          <button
+            key={it.id}
+            type="button"
+            onClick={() => setSelectedId(it.id)}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-semibold transition ${
+              it.id === s.id ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]" : "border-slate-200 text-slate-600 hover:border-slate-300"
+            }`}
+          >
+            <span className={`h-2 w-2 rounded-full ${it.enabled ? "bg-emerald-500" : "bg-slate-300"}`} />
+            {i + 1}. {it.name}
+          </button>
+        ))}
+        {items.length < MAX_FOLLOWUPS && (
+          <button
+            type="button"
+            onClick={addItem}
+            className="inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-600 hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          >
+            <Plus size={14} /> Novo recontato
+          </button>
+        )}
+      </div>
+
+      {items.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
+          Nenhum recontato criado. Clique em <b>Novo recontato</b> para começar.
+          {saveBar("Salvar")}
+        </div>
+      ) : (
+      <>
+      <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <Field label="Nome do recontato" className="min-w-[220px] flex-1">
+          <Input value={s.name} maxLength={60} onChange={(e) => set({ name: e.target.value })} />
+        </Field>
+        <div className="flex items-center gap-1 pb-1">
+          <button type="button" onClick={() => move(-1)} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100" title="Subir na ordem (tem prioridade)">
+            ↑
+          </button>
+          <button type="button" onClick={() => move(1)} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100" title="Descer na ordem">
+            ↓
+          </button>
+          <button type="button" onClick={removeItem} className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-400 hover:text-red-500" title="Excluir recontato">
+            <Trash2 size={15} />
+          </button>
+        </div>
+        <div className="pb-1">
+          <Toggle checked={s.enabled} onChange={(v) => set({ enabled: v })} label={s.enabled ? "Ligado" : "Desligado"} />
+        </div>
       </div>
 
       {/* Quem escreve */}
@@ -265,10 +478,23 @@ export function FollowupTab() {
             <input type="checkbox" checked={s.includeTeam} onChange={(e) => set({ includeTeam: e.target.checked })} className="h-4 w-4 accent-[var(--accent)]" />
             Incluir leads que estão com a equipe (agente pausado ou chatbot passou para a equipe)
           </label>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={s.includeWithSeller} onChange={(e) => set({ includeWithSeller: e.target.checked })} className="h-4 w-4 accent-[var(--accent)]" />
-            Incluir leads com vendedor definido
-          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {(["WITHOUT", "WITH", "ALL"] as SellerScope[]).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => set({ sellerScope: k, includeWithSeller: k !== "WITHOUT" })}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+                  s.sellerScope === k ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-slate-200 text-slate-600 hover:border-slate-300"
+                }`}
+              >
+                {SELLER_SCOPE_LABEL[k]}
+              </button>
+            ))}
+          </div>
+          {s.sellerScope === "WITH" && !s.includeTeam && (
+            <p className="text-xs text-amber-700">Dica: marque a opção acima, porque lead com vendedor normalmente está com o agente pausado.</p>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             Só leads com nota até
             <input
@@ -458,18 +684,14 @@ export function FollowupTab() {
         </div>
       </div>
 
-      <ErrorNote message={error} />
-      <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-4">
-        {saved && <span className="text-sm font-semibold text-emerald-600">Salvo!</span>}
-        <Button onClick={save} disabled={saving}>
-          {saving ? "Salvando..." : "Salvar recontato"}
-        </Button>
-      </div>
+      {saveBar("Salvar recontatos")}
+      </>
+      )}
 
       {/* Fila */}
       <div>
         <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-slate-800">
-          <Clock size={15} /> Próximos recontatos {!s.enabled && <Badge tone="amber">desligado — só uma prévia</Badge>}
+          <Clock size={15} /> Próximos recontatos {items.some((it) => !it.enabled) && <Badge tone="amber">desligados aparecem só como prévia</Badge>}
         </p>
         {data.queue.length === 0 ? (
           <p className="text-sm text-slate-400">Nenhum lead aguardando recontato agora.</p>
@@ -478,10 +700,11 @@ export function FollowupTab() {
             {data.queue.map((q) => (
               <div key={q.leadId} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
                 <span className="min-w-0 flex-1 truncate font-medium text-slate-800">{q.name || q.phone}</span>
+                {items.length > 1 && <Badge tone="gray">{q.followupName}</Badge>}
                 {q.inBot && <Badge tone="blue">no chatbot</Badge>}
                 {q.kind === "SEND" ? (
                   <Badge tone="purple">
-                    Tentativa {q.attempt}/{data.settings.attempts.length}
+                    Tentativa {q.attempt}/{q.total}
                   </Badge>
                 ) : (
                   <Badge tone="red">Desqualificar</Badge>
@@ -492,6 +715,8 @@ export function FollowupTab() {
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }

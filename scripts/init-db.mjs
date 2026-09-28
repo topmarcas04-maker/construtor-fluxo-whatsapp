@@ -610,6 +610,22 @@ CREATE TABLE IF NOT EXISTS followup_settings (
 );
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS fu_count integer NOT NULL DEFAULT 0;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS fu_last_at timestamptz;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS fu_id varchar(40);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS cover_at timestamptz;
+-- Histórico do recontato e da cobertura do vendedor (relatório)
+CREATE TABLE IF NOT EXISTS followup_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  lead_id uuid REFERENCES leads(id) ON DELETE CASCADE,
+  followup_id varchar(40),
+  followup_name varchar(80),
+  seller_id uuid,
+  kind varchar(12) NOT NULL,
+  attempt integer,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS followup_events_account_idx ON followup_events (account_id, created_at);
+CREATE INDEX IF NOT EXISTS followup_events_lead_idx ON followup_events (lead_id);
 
 -- Planos e serviços (suporte, calls)
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS plan_id uuid;

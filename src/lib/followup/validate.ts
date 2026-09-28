@@ -1,4 +1,13 @@
-import { MAX_ATTEMPTS, DISQUALIFIED_DEFAULT, type FollowupSettings } from "./common";
+import {
+  MAX_ATTEMPTS,
+  MAX_FOLLOWUPS,
+  DISQUALIFIED_DEFAULT,
+  newFollowupId,
+  type CoverSettings,
+  type FollowupConfig,
+  type FollowupItem,
+  type FollowupSettings,
+} from "./common";
 
 const HHMM = /^([01]?\d|2[0-3]):[0-5]\d$/;
 
@@ -50,4 +59,38 @@ export function followupValues(body: Record<string, unknown>, refs: { tagIds: Se
       replyRescue: body.replyRescue !== false,
     },
   };
+}
+
+/** Valida a lista de recontatos + a cobertura do vendedor */
+export function followupConfigValues(
+  body: Record<string, unknown>,
+  refs: { tagIds: Set<string>; columnIds: Set<string>; agentIds: Set<string> }
+): { error: string } | { values: FollowupConfig } {
+  const rawItems = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : [];
+  if (rawItems.length > MAX_FOLLOWUPS) return { error: `Máximo de ${MAX_FOLLOWUPS} recontatos` };
+  const items: FollowupItem[] = [];
+  const seen = new Set<string>();
+  for (const [i, raw] of rawItems.entries()) {
+    const name = String(raw?.name || "").trim().slice(0, 60) || `Recontato ${i + 1}`;
+    const parsed = followupValues(raw || {}, refs);
+    if ("error" in parsed) return { error: `${name}: ${parsed.error}` };
+    let id = typeof raw.id === "string" && /^[\w-]{1,40}$/.test(raw.id) ? raw.id : newFollowupId();
+    if (seen.has(id)) id = newFollowupId();
+    seen.add(id);
+    const scope = raw.sellerScope === "ALL" || raw.sellerScope === "WITH" ? raw.sellerScope : "WITHOUT";
+    items.push({ ...parsed.values, id, name, sellerScope: scope, includeWithSeller: scope !== "WITHOUT" });
+  }
+  const c = (body.cover || {}) as Record<string, unknown>;
+  const hours = Math.round(Number(c.hours));
+  if (c.enabled === true && (!Number.isFinite(hours) || hours < 1 || hours > 720)) {
+    return { error: "Cobertura do vendedor: espera entre 1 e 720 horas" };
+  }
+  const cover: CoverSettings = {
+    enabled: c.enabled === true,
+    hours: Number.isFinite(hours) ? Math.min(Math.max(hours, 1), 720) : 2,
+    agentId: typeof c.agentId === "string" && refs.agentIds.has(c.agentId) ? c.agentId : null,
+    notifySeller: c.notifySeller !== false,
+    onlyOpenHours: c.onlyOpenHours === true,
+  };
+  return { values: { items, cover } };
 }

@@ -179,3 +179,113 @@ export function fillName(text: string, nome?: string | null) {
     .replace(/^\s*[,!]\s*/, "")
     .trim();
 }
+
+// ============================================================================
+// VÁRIOS RECONTATOS + COBERTURA DO VENDEDOR
+// ============================================================================
+
+/** Quais leads o recontato pega, pelo vendedor */
+export type SellerScope = "ALL" | "WITH" | "WITHOUT";
+
+/** Um recontato da conta (a conta pode ter vários; o lead entra no primeiro que servir) */
+export interface FollowupItem extends FollowupSettings {
+  id: string;
+  name: string;
+  /** ALL = todos; WITH = só leads com vendedor; WITHOUT = só leads sem vendedor */
+  sellerScope: SellerScope;
+}
+
+/** Agente que assume quando o vendedor não responde o cliente */
+export interface CoverSettings {
+  enabled: boolean;
+  /** Horas que o cliente fica esperando o vendedor antes do agente assumir (1 a 720) */
+  hours: number;
+  /** Agente que assume (vazio = o agente do lead / o principal) */
+  agentId: string | null;
+  /** Avisar o vendedor no WhatsApp que o agente assumiu */
+  notifySeller: boolean;
+  /** Só assumir dentro do horário dos consultores */
+  onlyOpenHours: boolean;
+}
+
+export interface FollowupConfig {
+  items: FollowupItem[];
+  cover: CoverSettings;
+}
+
+export const MAX_FOLLOWUPS = 10;
+
+export const DEFAULT_COVER: CoverSettings = {
+  enabled: false,
+  hours: 2,
+  agentId: null,
+  notifySeller: true,
+  onlyOpenHours: false,
+};
+
+export function newFollowupId() {
+  return `fu_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/** Recontato novo (para o botão "Novo recontato") */
+export function newFollowupItem(name = "Novo recontato"): FollowupItem {
+  return { ...DEFAULT_FOLLOWUP, id: newFollowupId(), name, sellerScope: "WITHOUT" };
+}
+
+function itemWithDefaults(raw: Partial<FollowupItem> | null | undefined, i: number): FollowupItem {
+  const base = withDefaults(raw);
+  const r = raw || {};
+  const scope: SellerScope =
+    r.sellerScope === "ALL" || r.sellerScope === "WITH" || r.sellerScope === "WITHOUT"
+      ? r.sellerScope
+      : base.includeWithSeller
+      ? "ALL"
+      : "WITHOUT";
+  return {
+    ...base,
+    id: typeof r.id === "string" && r.id ? r.id : i === 0 ? "principal" : `fu_${i}`,
+    name: typeof r.name === "string" && r.name.trim() ? r.name.trim() : i === 0 ? "Recontato geral" : `Recontato ${i + 1}`,
+    sellerScope: scope,
+    includeWithSeller: scope !== "WITHOUT",
+  };
+}
+
+export function coverWithDefaults(raw: Partial<CoverSettings> | null | undefined): CoverSettings {
+  const r = raw || {};
+  const hours = Number(r.hours);
+  return {
+    ...DEFAULT_COVER,
+    ...r,
+    hours: Number.isFinite(hours) ? Math.min(Math.max(hours, 1), 720) : DEFAULT_COVER.hours,
+    agentId: typeof r.agentId === "string" && r.agentId ? r.agentId : null,
+  };
+}
+
+/**
+ * Lê a configuração guardada. Formato antigo (um recontato só, direto no objeto) vira
+ * o "Recontato geral"; o novo é { items: [...], cover: {...} }.
+ */
+export function parseFollowupConfig(raw: unknown): FollowupConfig {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  if (Array.isArray(r.items)) {
+    return {
+      items: (r.items as Partial<FollowupItem>[]).slice(0, MAX_FOLLOWUPS).map(itemWithDefaults),
+      cover: coverWithDefaults(r.cover as Partial<CoverSettings>),
+    };
+  }
+  const legacy = Object.keys(r).length ? [itemWithDefaults(r as Partial<FollowupItem>, 0)] : [];
+  return { items: legacy, cover: coverWithDefaults(r.cover as Partial<CoverSettings>) };
+}
+
+/** O lead passa no filtro de vendedor deste recontato? */
+export function sellerScopeOk(scope: SellerScope, hasSeller: boolean) {
+  if (scope === "WITH") return hasSeller;
+  if (scope === "WITHOUT") return !hasSeller;
+  return true;
+}
+
+export const SELLER_SCOPE_LABEL: Record<SellerScope, string> = {
+  ALL: "Todos os leads",
+  WITH: "Só leads com vendedor",
+  WITHOUT: "Só leads sem vendedor",
+};
