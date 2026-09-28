@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X, Workflow, CalendarClock, KanbanSquare, PanelRightClose, PanelRightOpen, Megaphone } from "lucide-react";
+import { Bot, UserRound, Sparkles, PauseCircle, PlayCircle, MapPin, Bell, ArrowLeft, IdCard, X, Workflow, CalendarClock, KanbanSquare, PanelRightClose, PanelRightOpen, Megaphone, MailOpen, Mail } from "lucide-react";
 import type { Lead, Message, QuickReply, Seller, Tag } from "@/lib/types/sdr";
 import {
   TAG_DOT_CLASSES,
@@ -39,6 +39,8 @@ interface Props {
   funnels: FunnelWithColumns[];
   /** Celular: conversa aberta (a tela de Leads esconde o cabeçalho para sobrar espaço) */
   onMobileChat?: (open: boolean) => void;
+  /** Mostra o filtro por vendedor (só administradores da conta Master e de Parceiros) */
+  showSellerFilter?: boolean;
 }
 
 type Filter = "todos" | "naolidas" | "aguardando" | "ia" | "vendedor" | "quentes";
@@ -118,6 +120,7 @@ export function ConversationsView({
   canEdit,
   funnels,
   onMobileChat,
+  showSellerFilter = false,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
@@ -125,6 +128,8 @@ export function ConversationsView({
   const [filter, setFilter] = useState<Filter>("todos");
   const [channelFilter, setChannelFilter] = useState<string>("todos");
   const [funnelFilter, setFunnelFilter] = useState<string>("todos");
+  /** "todos" | "sem" (sem vendedor) | id do vendedor */
+  const [sellerFilter, setSellerFilter] = useState<string>("todos");
   const channels = useMemo(
     () => [...new Set(leads.map((l) => l.conversation.channel || "WHATSAPP"))],
     [leads]
@@ -134,8 +139,14 @@ export function ConversationsView({
 
   const visible = useMemo(() => {
     const byFunnel = funnelFilter === "todos" ? leads : leads.filter((l) => funnelOfLead(l, funnels)?.id === funnelFilter);
+    const bySeller =
+      !showSellerFilter || sellerFilter === "todos"
+        ? byFunnel
+        : sellerFilter === "sem"
+        ? byFunnel.filter((l) => !l.seller)
+        : byFunnel.filter((l) => l.seller?.id === sellerFilter);
     const byChannel =
-      channelFilter === "todos" ? byFunnel : byFunnel.filter((l) => (l.conversation.channel || "WHATSAPP") === channelFilter);
+      channelFilter === "todos" ? bySeller : bySeller.filter((l) => (l.conversation.channel || "WHATSAPP") === channelFilter);
     switch (filter) {
       case "naolidas":
         return byChannel.filter((l) => (l.unread || 0) > 0);
@@ -150,7 +161,7 @@ export function ConversationsView({
       default:
         return byChannel;
     }
-  }, [leads, filter, channelFilter, funnelFilter, funnels]);
+  }, [leads, filter, channelFilter, funnelFilter, funnels, showSellerFilter, sellerFilter]);
 
   // Celular/tablet: uma tela por vez (lista → conversa) e a ficha abre por cima
   const [mobilePane, setMobilePane] = useState<"list" | "chat">("list");
@@ -257,6 +268,19 @@ export function ConversationsView({
     onLeadUpdated();
   };
 
+  /** Marca a conversa como não lida (ela para de contar como "aberta" até clicar de novo) */
+  const markUnread = async (conversationId: string, backToList = false) => {
+    if (openedByUser.current === conversationId) openedByUser.current = null;
+    if (backToList) setMobilePane("list");
+    await fetch(`/api/sdr/conversations/${conversationId}/unread`, { method: "POST" }).catch(() => {});
+    onLeadUpdated();
+  };
+  /** Marca como lida pela lista, sem abrir */
+  const markRead = async (conversationId: string) => {
+    await fetch(`/api/sdr/conversations/${conversationId}/read`, { method: "POST" }).catch(() => {});
+    onLeadUpdated();
+  };
+
   /** Depois de resetar o lead de teste: fecha a ficha e recarrega a lista */
   const afterReset = () => {
     setShowFicha(false);
@@ -330,6 +354,28 @@ export function ConversationsView({
             </button>
           ))}
         </div>
+        {showSellerFilter && sellers.length > 0 && (
+          <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2">
+            <UserRound size={14} className="shrink-0 text-slate-400" />
+            <select
+              value={sellerFilter}
+              onChange={(e) => setSellerFilter(e.target.value)}
+              className={`min-w-0 flex-1 rounded-lg border px-2 py-1 text-xs font-semibold outline-none ${
+                sellerFilter === "todos" ? "border-slate-200 text-slate-600" : "border-sky-400 bg-sky-50 text-sky-700"
+              }`}
+              aria-label="Filtrar por vendedor"
+            >
+              <option value="todos">Todos os vendedores</option>
+              <option value="sem">Sem vendedor</option>
+              {sellers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                  {s.active ? "" : " (inativo)"}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {funnels.length > 1 && (
           <div className="flex gap-1.5 overflow-x-auto border-b border-slate-100 px-3 py-2">
             {[{ id: "todos", name: "Todos os funis" }, ...funnels].map((f) => (
@@ -377,15 +423,24 @@ export function ConversationsView({
               const active = selectedLeadId === lead.id;
               const unanswered = lead.lastMessage?.direction === "IN";
               const unread = active && openedByUser.current === lead.conversationId ? 0 : lead.unread || 0;
+              const open = () => {
+                openedByUser.current = lead.conversationId;
+                onSelectLead(lead.id);
+                setMobilePane("chat");
+              };
               return (
-                <button
+                <div
                   key={lead.id}
-                  onClick={() => {
-                    openedByUser.current = lead.conversationId;
-                    onSelectLead(lead.id);
-                    setMobilePane("chat");
+                  role="button"
+                  tabIndex={0}
+                  onClick={open}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      open();
+                    }
                   }}
-                  className={`flex w-full gap-3 border-b border-slate-100 px-4 py-3 text-left transition ${
+                  className={`group relative flex w-full cursor-pointer gap-3 border-b border-slate-100 px-4 py-3 text-left transition ${
                     active ? "bg-[var(--accent)]/8 shadow-[inset_3px_0_0_var(--accent)]" : "hover:bg-slate-50"
                   }`}
                 >
@@ -448,7 +503,20 @@ export function ConversationsView({
                       ))}
                     </div>
                   </div>
-                </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (unread > 0) markRead(lead.conversationId);
+                      else markUnread(lead.conversationId);
+                    }}
+                    title={unread > 0 ? "Marcar como lida" : "Marcar como não lida"}
+                    aria-label={unread > 0 ? "Marcar como lida" : "Marcar como não lida"}
+                    className="absolute bottom-2 right-2 rounded-md border border-slate-200 bg-white p-1 text-slate-500 opacity-0 shadow-sm transition hover:text-[var(--accent)] focus:opacity-100 group-hover:opacity-100"
+                  >
+                    {unread > 0 ? <MailOpen size={14} /> : <Mail size={14} />}
+                  </button>
+                </div>
               );
             })
           )}
@@ -502,6 +570,13 @@ export function ConversationsView({
                 }`}
               >
                 {fichaDocked ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />} Ficha
+              </button>
+              <button
+                onClick={() => markUnread(selectedLead.conversationId)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                title="A conversa volta a aparecer como não lida"
+              >
+                <Mail size={16} /> Não lida
               </button>
               {columnSelect("max-w-[200px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm")}
               {selectedLead.aiPaused ? (
@@ -643,6 +718,18 @@ export function ConversationsView({
                       {selectedLead.aiPaused ? <PlayCircle size={18} /> : <PauseCircle size={18} />}
                     </span>
                     {selectedLead.aiPaused ? "Ativar agente" : "Pausar agente"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      close();
+                      markUnread(selectedLead.conversationId, true);
+                    }}
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-slate-700 active:bg-slate-100"
+                  >
+                    <span className="grid h-9 w-9 place-items-center rounded-full bg-emerald-50 text-emerald-600">
+                      <Mail size={18} />
+                    </span>
+                    Marcar como não lida
                   </button>
                 </>
               )}

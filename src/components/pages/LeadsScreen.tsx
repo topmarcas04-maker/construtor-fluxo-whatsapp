@@ -25,6 +25,8 @@ export function LeadsScreen() {
   const [search, setSearch] = useState("");
   const [canEdit, setCanEdit] = useState(false);
   const [canManageColumns, setCanManageColumns] = useState(false);
+  /** Filtro por vendedor: só administradores da conta Master e de Parceiros */
+  const [showSellerFilter, setShowSellerFilter] = useState(false);
   const [funnels, setFunnels] = useState<FunnelWithColumns[]>([]);
   const [funnelId, setFunnelId] = useState<string | null>(null);
 
@@ -47,6 +49,9 @@ export function LeadsScreen() {
       .then((u) => {
         setCanEdit(Boolean(u?.canEditLeads));
         setCanManageColumns(Boolean(u?.canManage || u?.actingAs));
+        setShowSellerFilter(
+          Boolean(u && u.role !== "SELLER" && !u.viewingAs && ["MASTER", "PARTNER"].includes(u.homeAccount?.type))
+        );
       });
     fetch("/api/sdr/funnels")
       .then((r) => (r.ok ? r.json() : []))
@@ -162,6 +167,7 @@ export function LeadsScreen() {
             canEdit={canEdit}
             funnels={funnels}
             onMobileChat={setMobileChat}
+            showSellerFilter={showSellerFilter}
           />
         ) : view === "grupos" ? (
           <GroupsView quickReplies={quickReplies} onMobileChat={setMobileChat} />

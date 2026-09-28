@@ -298,6 +298,8 @@ export const conversations = pgTable(
     lastReadAt: timestamp("last_read_at", { withTimezone: true }),
     /** Quantas mensagens do cliente já tinham chegado quando a equipe leu (o resto = não lidas) */
     readInCount: integer("read_in_count").notNull().default(0),
+    /** Marcada como não lida manualmente (some quando alguém abre a conversa) */
+    markedUnread: boolean("marked_unread").notNull().default(false),
     /** Grupo do WhatsApp (sem lead, sem IA) e se aparece no painel */
     isGroup: boolean("is_group").notNull().default(false),
     groupEnabled: boolean("group_enabled").notNull().default(false),

@@ -99,7 +99,8 @@ export async function GET() {
           waLabel: (lead.conversation.channel || "WHATSAPP") === "WHATSAPP" ? waLabel(lead.conversation.waSlot) : null,
         },
         lastMessage: lead.conversation.messages[0] || null,
-        unread: unread.get(lead.conversationId) || 0,
+        // Marcada como não lida manualmente conta como pelo menos 1
+        unread: Math.max(unread.get(lead.conversationId) || 0, lead.conversation.markedUnread ? 1 : 0),
       }))
       // Conversa com mensagem mais recente primeiro
       .sort((a, b) => {

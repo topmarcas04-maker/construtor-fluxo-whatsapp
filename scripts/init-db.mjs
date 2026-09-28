@@ -594,6 +594,8 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualify_data jsonb;
 -- Conversas não lidas
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_read_at timestamptz;
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS read_in_count integer NOT NULL DEFAULT 0;
+-- "Marcar como não lida" (manual): volta a aparecer como não lida até alguém abrir
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS marked_unread boolean NOT NULL DEFAULT false;
 
 -- Grupos do WhatsApp no painel
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS is_group boolean NOT NULL DEFAULT false;
