@@ -173,6 +173,7 @@ export async function PUT(req: NextRequest) {
   if (body.qualify && typeof body.qualify === "object") set.qualify = normalizeQualify(body.qualify);
   if (typeof body.afterHoursMessage === "string") set.afterHoursMessage = body.afterHoursMessage.slice(0, 1000);
   if (body.alertPhone !== undefined) set.alertPhone = String(body.alertPhone || "").replace(/\D/g, "").slice(0, 20) || null;
+  if (body.pendingMaxHours !== undefined) set.pendingMaxHours = Math.max(1, Math.min(720, Math.round(Number(body.pendingMaxHours) || 24)));
   if (body.reminderMinutesBefore !== undefined) {
     set.reminderMinutesBefore = Math.max(0, Math.min(1440, Number(body.reminderMinutesBefore) || 0));
   }

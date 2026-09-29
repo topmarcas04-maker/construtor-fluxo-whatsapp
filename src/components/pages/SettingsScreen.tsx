@@ -53,6 +53,7 @@ interface AiSettings {
   reminderMinutesBefore: number;
   signMessages: boolean;
   alertPhone: string | null;
+  pendingMaxHours?: number;
   integration: {
     source: "OWN" | "PARENT" | "NONE";
     ownKeyHint: string | null;
@@ -620,6 +621,7 @@ function AiTab() {
 function WhatsAppPrefsTab() {
   const [sign, setSign] = useState<boolean | null>(null);
   const [phone, setPhone] = useState("");
+  const [maxHours, setMaxHours] = useState(24);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -629,6 +631,7 @@ function WhatsAppPrefsTab() {
       .then((s: AiSettings) => {
         setSign(s.signMessages !== false);
         setPhone(s.alertPhone || "");
+        setMaxHours(s.pendingMaxHours ?? 24);
       });
   }, []);
 
@@ -637,7 +640,7 @@ function WhatsAppPrefsTab() {
   const save = async () => {
     setError(null);
     try {
-      await api("/api/sdr/settings", "PUT", { signMessages: sign, alertPhone: phone });
+      await api("/api/sdr/settings", "PUT", { signMessages: sign, alertPhone: phone, pendingMaxHours: maxHours });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -666,10 +669,11 @@ function WhatsAppPrefsTab() {
       </div>
 
       <div className="rounded-xl border border-slate-200 p-5">
-        <p className="font-semibold text-slate-900">Alerta de WhatsApp desconectado</p>
+        <p className="font-semibold text-slate-900">Alertas (WhatsApp desconectado e IA parada)</p>
         <p className="mt-1 mb-3 text-sm text-slate-600">
-          Se o WhatsApp desta conta cair (celular sem internet, saiu pelo celular), enviamos um aviso para este número. O
-          aviso sai pelo WhatsApp de quem cadastrou esta conta. Além disso, aparece uma faixa vermelha no painel.
+          Se o WhatsApp desta conta cair (celular sem internet, saiu pelo celular) ou se a IA parar de responder (ex.: acabou o
+          crédito da chave), enviamos um aviso para este número e aparece uma faixa vermelha no painel. Quando a IA voltar,
+          avisamos de novo.
         </p>
         <Input
           className="max-w-sm"
@@ -677,6 +681,27 @@ function WhatsAppPrefsTab() {
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
         />
+      </div>
+
+      <div className="rounded-xl border border-slate-200 p-5">
+        <p className="font-semibold text-slate-900">Clientes que esperaram enquanto a IA estava parada</p>
+        <p className="mt-1 mb-3 text-sm text-slate-600">
+          Quem escrever com a IA parada entra numa fila. O sistema tenta de novo a cada 5 minutos e, quando a IA voltar, responde
+          todos automaticamente (começando com &quot;Desculpe a demora&quot;). Quem esperar mais do que o limite abaixo passa para a
+          equipe e aparece como não lida no painel.
+        </p>
+        <div className="flex items-center gap-2 text-sm text-slate-700">
+          Passar para a equipe depois de
+          <Input
+            type="number"
+            min={1}
+            max={720}
+            value={maxHours}
+            onChange={(e) => setMaxHours(Number(e.target.value) || 24)}
+            className="!w-24"
+          />
+          horas esperando
+        </div>
       </div>
 
       <ErrorNote message={error} />

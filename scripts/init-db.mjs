@@ -612,6 +612,13 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS fu_count integer NOT NULL DEFAULT 0;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS fu_last_at timestamptz;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS fu_id varchar(40);
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS cover_at timestamptz;
+-- IA parada (sem crédito etc.): clientes esperando resposta e aviso no painel
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_pending_at timestamptz;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_pending_tries integer NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS leads_ai_pending_idx ON leads (ai_pending_at) WHERE ai_pending_at IS NOT NULL;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ai_error text;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ai_error_at timestamptz;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS pending_max_hours integer NOT NULL DEFAULT 24;
 -- Histórico do recontato e da cobertura do vendedor (relatório)
 CREATE TABLE IF NOT EXISTS followup_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

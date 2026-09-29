@@ -31,6 +31,48 @@ function WhatsAppDownBanner({ user }: { user: CurrentUser }) {
   );
 }
 
+/** Faixa vermelha quando a IA parou (sem crédito, chave recusada, fora do ar) */
+function AiDownBanner({ user }: { user: CurrentUser }) {
+  const [st, setSt] = useState<{ error: string | null; since: string | null; pending: number; maxHours: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetch("/api/sdr/ai-status", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => alive && setSt(d))
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 60_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [user.account.id]);
+  if (!st?.error) return null;
+  const since = st.since
+    ? new Date(st.since).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
+    : null;
+  const canFix = user.modules.includes("configuracoes");
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-3 bg-red-600 px-4 py-2 text-sm text-white">
+      <span>
+        ⚠️ <b>A IA parou de responder</b> — {st.error}
+        {since ? ` (desde ${since})` : ""}.{" "}
+        {st.pending > 0
+          ? `${st.pending} ${st.pending === 1 ? "cliente esperando" : "clientes esperando"}: são respondidos quando a IA voltar; depois de ${st.maxHours}h vão para a equipe.`
+          : "Os clientes que escreverem serão respondidos quando ela voltar."}
+      </span>
+      {canFix ? (
+        <a href="/configuracoes" className="rounded-md bg-white px-3 py-1 text-xs font-semibold text-red-700">
+          Ver chave da IA
+        </a>
+      ) : (
+        <span className="text-xs opacity-80">Avise o administrador.</span>
+      )}
+    </div>
+  );
+}
+
 function Frame({
   branding,
   user,
@@ -81,6 +123,7 @@ function Frame({
       <div className="flex min-w-0 flex-1 flex-col">
         {!expanded && <TopBar title={user.account.name} user={user} onOpenMenu={() => setMobileOpen(true)} />}
         <WhatsAppDownBanner user={user} />
+        <AiDownBanner user={user} />
         <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>

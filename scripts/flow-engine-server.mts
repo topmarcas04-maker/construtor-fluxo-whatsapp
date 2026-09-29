@@ -1394,6 +1394,158 @@ async function loadAccount(id: string) {
   return db.query.accounts.findFirst({ where: eq(accounts.id, id) });
 }
 
+// ============================================================================
+// IA PARADA (sem crédito, chave inválida, fora do ar): fila de quem ficou esperando
+// ============================================================================
+
+function friendlyAiError(msg: string) {
+  if (/credit|balance|billing|saldo|\b402\b/i.test(msg)) return "sem crédito na chave da IA";
+  if (/\b401\b|\b403\b|x-api-key|authentication|permission/i.test(msg)) return "a chave da IA foi recusada (inválida ou sem permissão)";
+  if (/\b429\b|rate.?limit/i.test(msg)) return "limite de uso da IA atingido";
+  if (/\b5\d\d\b|overloaded|timeout|ECONN|fetch failed/i.test(msg)) return "a IA está fora do ar no momento";
+  return "erro ao chamar a IA";
+}
+
+/** Aviso por WhatsApp para o telefone de alerta da conta (sai pelo WhatsApp da própria conta ou de uma conta acima) */
+async function sendAccountAlert(accountId: string, text: string) {
+  try {
+    const acc = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
+    if (!acc) return;
+    const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId), columns: { alertPhone: true } });
+    const target = (settings?.alertPhone || acc.phone || "").replace(/\D/g, "");
+    if (target.length < 10) return;
+    let senderSession: Session | undefined = connectedSession(accountId);
+    let senderId: string | null = acc.parentId;
+    for (let i = 0; !senderSession && senderId && i < 6; i++) {
+      senderSession = connectedSession(senderId);
+      const parent = await db.query.accounts.findFirst({ where: eq(accounts.id, senderId), columns: { parentId: true } });
+      senderId = parent?.parentId || null;
+    }
+    if (!senderSession?.sock) return;
+    const jid = `${target.length <= 11 ? "55" + target : target}@s.whatsapp.net`;
+    const r = await senderSession.sock.sendMessage(jid, { text });
+    if (r?.key?.id) rememberSent(r.key.id);
+  } catch (e) {
+    console.warn("[Alerta IA] falhou:", (e as Error)?.message || e);
+  }
+}
+
+/** A IA não conseguiu responder este lead: entra na fila e a conta fica marcada como "IA parada" */
+async function markAiFailure(accountId: string, leadId: string, err: unknown, keyOwner: string | null) {
+  const raw = (err as Error)?.message || String(err);
+  const reason = friendlyAiError(raw);
+  console.warn(`[IA ${accountId.slice(0, 8)}] não respondeu (${reason}): ${raw.slice(0, 200)}`);
+  await db
+    .update(leads)
+    .set({ aiPendingAt: sql`coalesce(${leads.aiPendingAt}, now())`, aiPendingTries: sql`${leads.aiPendingTries} + 1` })
+    .where(eq(leads.id, leadId));
+  // Marca a conta só na primeira falha (e avisa uma vez)
+  const marked = await db
+    .update(accounts)
+    .set({ aiError: reason.slice(0, 300), aiErrorAt: new Date() })
+    .where(and(eq(accounts.id, accountId), isNull(accounts.aiError)))
+    .returning({ name: accounts.name });
+  if (marked.length) {
+    const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId), columns: { pendingMaxHours: true } });
+    const whose = keyOwner && keyOwner !== marked[0].name ? ` (a chave usada é de ${keyOwner})` : "";
+    await sendAccountAlert(
+      accountId,
+      `⚠️ *${marked[0].name}*: a IA parou de responder — ${reason}${whose}.\n\n` +
+        `Os clientes que escreverem ficam numa fila. Assim que a IA voltar, eles são respondidos automaticamente. ` +
+        `Quem esperar mais de ${settings?.pendingMaxHours ?? 24}h passa para a equipe (aparece como não lida no painel).`
+    );
+  }
+}
+
+/** A IA respondeu: tira o lead da fila e, se a conta estava parada, marca como normal e avisa */
+async function clearAiFailure(accountId: string, leadId: string, wasPending: boolean) {
+  if (wasPending) await db.update(leads).set({ aiPendingAt: null, aiPendingTries: 0 }).where(eq(leads.id, leadId));
+  const back = await db
+    .update(accounts)
+    .set({ aiError: null, aiErrorAt: null })
+    .where(and(eq(accounts.id, accountId), sql`${accounts.aiError} is not null`))
+    .returning({ name: accounts.name });
+  if (back.length) {
+    console.log(`[IA ${accountId.slice(0, 8)}] voltou a responder`);
+    await sendAccountAlert(accountId, `✅ *${back[0].name}*: a IA voltou a responder. Os clientes que estavam esperando estão sendo respondidos agora.`);
+  }
+}
+
+let aiPendingRunning = false;
+
+/**
+ * A cada poucos minutos: tenta de novo quem ficou sem resposta.
+ * Com a conta marcada como parada, testa só 1 cliente por vez (se funcionar, os outros vão na próxima rodada).
+ * Quem passou do limite de horas vai para a equipe.
+ */
+async function processAiPending() {
+  if (aiPendingRunning) return;
+  aiPendingRunning = true;
+  try {
+    const accs = await db.execute(sql`SELECT DISTINCT account_id FROM leads WHERE ai_pending_at IS NOT NULL`);
+    for (const row of accs.rows as { account_id: string }[]) {
+      const accountId = row.account_id;
+      const acc = await loadAccount(accountId);
+      if (!acc || !acc.active) continue;
+      const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
+      const maxHours = settings?.pendingMaxHours ?? 24;
+      const pending = await db.query.leads.findMany({
+        where: and(eq(leads.accountId, accountId), sql`${leads.aiPendingAt} is not null`),
+        orderBy: (l, { asc }) => [asc(l.aiPendingAt)],
+        limit: 30,
+      });
+      let tried = 0;
+      const maxTries = acc.aiError ? 1 : 10;
+      for (const lead of pending) {
+        const conv = await db.query.conversations.findFirst({ where: eq(conversations.id, lead.conversationId) });
+        const last = conv
+          ? await db.query.messages.findFirst({ where: eq(messages.conversationId, conv.id), orderBy: [desc(messages.sentAt)], columns: { direction: true } })
+          : null;
+        const stillWaiting =
+          conv && !lead.closed && lead.stage !== "SALE" && !lead.aiPaused && (!lead.sellerId || lead.coverAt) && last?.direction === "IN";
+        if (!stillWaiting || !settings?.enabled) {
+          // Alguém da equipe respondeu, o cliente saiu do atendimento da IA ou a IA foi desligada
+          await db.update(leads).set({ aiPendingAt: null, aiPendingTries: 0 }).where(eq(leads.id, lead.id));
+          continue;
+        }
+        const hours = (Date.now() - new Date(lead.aiPendingAt!).getTime()) / 3600e3;
+        if (hours >= maxHours) {
+          await db
+            .update(leads)
+            .set({
+              aiPaused: true,
+              aiPendingAt: null,
+              aiPendingTries: 0,
+              lastAction: `IA parada: passou para a equipe (${Math.floor(hours)}h sem resposta)`.slice(0, 120),
+              lastActionAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(leads.id, lead.id));
+          await db.update(conversations).set({ markedUnread: true }).where(eq(conversations.id, conv!.id));
+          console.log(`[IA ${accountId.slice(0, 8)}] ${conv!.phoneJid}: esperou ${Math.floor(hours)}h — passou para a equipe`);
+          continue;
+        }
+        if (tried >= maxTries || (!connectedSession(accountId) && conv!.channel === "WHATSAPP")) continue;
+        if (aiRunning.has(conv!.id)) continue;
+        tried++;
+        aiRunning.add(conv!.id);
+        try {
+          await runAi(accountId, conv!.id);
+        } catch (err) {
+          console.error(`[IA ${accountId.slice(0, 8)}] nova tentativa falhou:`, (err as Error)?.message || err);
+        } finally {
+          aiRunning.delete(conv!.id);
+        }
+        await pause(SELFTEST ? 100 : 1500);
+      }
+    }
+  } catch (err) {
+    console.error("[IA pendente] erro:", (err as Error)?.message || err);
+  } finally {
+    aiPendingRunning = false;
+  }
+}
+
 /** depth: quantas trocas de agente já houve nesta rodada (evita ficar passando de um para o outro) */
 async function runAi(accountId: string, conversationId: string, force = false, depth = 0) {
   const settings = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId) });
@@ -1576,8 +1728,16 @@ async function runAi(accountId: string, conversationId: string, force = false, d
       columns: ruleColumns.map((c) => ({ name: c.name, rule: c.aiRule!.trim() })),
   });
   const aiOpts = { apiKey: key.apiKey, model: settings.model || "claude-sonnet-4-5", baseUrl: process.env.ANTHROPIC_BASE_URL };
-  let decision = await runSdrAgent(agentInput(pending), aiOpts);
+  let decision: Awaited<ReturnType<typeof runSdrAgent>>;
+  try {
+    decision = await runSdrAgent(agentInput(pending), aiOpts);
+  } catch (err) {
+    // Sem crédito, chave recusada, IA fora do ar: o cliente entra na fila e é respondido quando voltar
+    await markAiFailure(accountId, lead.id, err, key.providerAccountName);
+    return;
+  }
   if (!decision) return;
+  await clearAiFailure(accountId, lead.id, Boolean(lead.aiPendingAt));
   await logUsage(accountId, agent.id, aiOpts.model, "REPLY", decision.usage);
 
   // Dados de qualificação (endereço, uso, campos criados pela empresa...) e transferência automática:
@@ -1701,6 +1861,12 @@ async function runAi(accountId: string, conversationId: string, force = false, d
     await logAgentEvent(accountId, lead.id, agent, "ACTION", action.name);
   }
 
+  // Cliente ficou esperando porque a IA estava parada: pede desculpas pela demora
+  if (lead.aiPendingAt && Date.now() - new Date(lead.aiPendingAt).getTime() > 10 * 60e3 && decision.reply.trim()) {
+    const first = ((lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conversation.leadName) || "").trim().split(/\s+/)[0];
+    const hi = first && first !== "Lead" ? `Desculpe a demora, ${first}! 🙏` : "Desculpe a demora! 🙏";
+    decision.reply = `${hi}\n\n${decision.reply}`;
+  }
   const parts = decision.reply
     .split(/\n\s*\n/)
     .map((p) => p.trim())
@@ -1720,7 +1886,7 @@ async function runAi(accountId: string, conversationId: string, force = false, d
       orderBy: [desc(messages.sentAt)],
     });
     const still = await db.query.leads.findFirst({ where: eq(leads.id, lead.id) });
-    if (!still || still.aiPaused || still.sellerId) return;
+    if (!still || still.aiPaused || (still.sellerId && !still.coverAt)) return;
     if (newer && newer.direction === "IN" && newer.id !== lastIn.id) {
       scheduleAi(accountId, conversationId);
       return;
@@ -3202,6 +3368,7 @@ async function main() {
   setInterval(() => processReminders(), SELFTEST ? 3_000 : 30_000);
   setInterval(() => processFollowups(), SELFTEST ? 3_000 : 60_000);
   setInterval(() => processCover(), SELFTEST ? 3_000 : 60_000);
+  setInterval(() => processAiPending(), SELFTEST ? 3_000 : 5 * 60_000);
   setInterval(() => processBroadcasts(), SELFTEST ? 2_000 : 10_000);
 
   const shutdown = async () => {

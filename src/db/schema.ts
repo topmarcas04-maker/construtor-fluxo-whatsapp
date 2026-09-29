@@ -127,6 +127,9 @@ export const accounts = pgTable(
     waStateAt: timestamp("wa_state_at", { withTimezone: true }),
     /** Última vez que o motor viu o WhatsApp conectado (para recuperar mensagens perdidas) */
     waLastSeenAt: timestamp("wa_last_seen_at", { withTimezone: true }),
+    /** IA parada (ex.: sem crédito na chave): motivo e desde quando. Vazio = funcionando */
+    aiError: text("ai_error"),
+    aiErrorAt: timestamp("ai_error_at", { withTimezone: true }),
     /** Nome do WhatsApp 1 (ex.: "Vendas"), aparece quando a conta tem mais de um número */
     waLabel: varchar("wa_label", { length: 60 }),
     /** Cliente pode editar os cards dos leads (definido por quem cadastrou) */
@@ -404,6 +407,9 @@ export const leads = pgTable(
     fuId: varchar("fu_id", { length: 40 }),
     /** Cobertura: quando o agente assumiu porque o vendedor não respondeu */
     coverAt: timestamp("cover_at", { withTimezone: true }),
+    /** IA falhou ao responder (ex.: sem crédito): desde quando o cliente espera e quantas tentativas */
+    aiPendingAt: timestamp("ai_pending_at", { withTimezone: true }),
+    aiPendingTries: integer("ai_pending_tries").notNull().default(0),
     /** Quando o cliente informou os dados da qualificação (libera preço e detalhes para a IA) */
     qualifiedAt: timestamp("qualified_at", { withTimezone: true }),
     /** Dados de qualificação coletados pela IA (endereço, uso, campos criados pela empresa…) */
@@ -662,6 +668,8 @@ export const aiSettings = pgTable("ai_settings", {
   rotationEnabled: boolean("rotation_enabled").notNull().default(false),
   rotationBatch: integer("rotation_batch").notNull().default(1),
   rotationState: jsonb("rotation_state").$type<import("../lib/ai/distribution").RotationState>(),
+  /** IA parada: depois de quantas horas esperando o cliente passa para a equipe (em vez da IA responder) */
+  pendingMaxHours: integer("pending_max_hours").notNull().default(24),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
