@@ -26,11 +26,11 @@ export function bodyHeight(s: BotStep) {
 }
 
 /** Linhas com bolinha de saída: as opções do menu ou uma linha "Depois" */
-export function portRows(s: BotStep): { key: PortKey; label: string; next: BotNext; to: string | null }[] {
+export function portRows(s: BotStep): { key: PortKey; label: string; next: BotNext; to: string | null; agentId: string | null }[] {
   if (stepKind(s) === "MENU" && s.options.length) {
-    return s.options.map((o) => ({ key: o.id, label: o.label, next: o.next, to: o.next === "STEP" ? o.stepId : null }));
+    return s.options.map((o) => ({ key: o.id, label: o.label, next: o.next, to: o.next === "STEP" ? o.stepId : null, agentId: o.agentId || null }));
   }
-  return [{ key: "next", label: "Depois", next: s.next, to: s.next === "STEP" ? s.nextStepId || null : null }];
+  return [{ key: "next", label: "Depois", next: s.next, to: s.next === "STEP" ? s.nextStepId || null : null, agentId: s.agentId || null }];
 }
 
 export function nodeHeight(s: BotStep) {

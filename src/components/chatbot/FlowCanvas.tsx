@@ -53,6 +53,7 @@ export function FlowCanvas({
   onSetEnd,
   onCreate,
   onAutoLayout,
+  agents,
 }: {
   draft: Draft;
   selected: string | null;
@@ -62,8 +63,10 @@ export function FlowCanvas({
   onMove: (id: string, pos: Pos) => void;
   onConnect: (from: LinkFrom, to: string) => void;
   onDisconnect: (from: LinkFrom) => void;
-  onSetEnd: (from: LinkFrom, next: Exclude<BotNext, "STEP">) => void;
+  onSetEnd: (from: LinkFrom, next: Exclude<BotNext, "STEP">, agentId?: string | null) => void;
   onCreate: (kind: StepKind, pos: Pos, from?: LinkFrom) => void;
+  /** Agentes de IA (para escolher quem assume) */
+  agents: { id: string; name: string; isPrimary: boolean }[];
   onAutoLayout: () => void;
 }) {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -341,7 +344,8 @@ export function FlowCanvas({
               drag.current = { kind: "node", id: s.id, sx: e.clientX, sy: e.clientY, nx: p.x, ny: p.y, moved: false };
             }}
             onLinkStart={(e, port) => startLink(e, { stepId: s.id, port })}
-            onSetEnd={(port, next) => onSetEnd({ stepId: s.id, port }, next)}
+            onSetEnd={(port, next, agentId) => onSetEnd({ stepId: s.id, port }, next, agentId)}
+            agents={agents}
           />
         ))}
       </div>
@@ -455,6 +459,7 @@ function FlowNode({
   onPointerDown,
   onLinkStart,
   onSetEnd,
+  agents,
 }: {
   step: BotStep;
   pos: Pos;
@@ -465,7 +470,8 @@ function FlowNode({
   linking: boolean;
   onPointerDown: (e: React.PointerEvent) => void;
   onLinkStart: (e: React.PointerEvent, port: PortKey) => void;
-  onSetEnd: (port: PortKey, next: Exclude<BotNext, "STEP">) => void;
+  onSetEnd: (port: PortKey, next: Exclude<BotNext, "STEP">, agentId?: string | null) => void;
+  agents: { id: string; name: string; isPrimary: boolean }[];
 }) {
   const kind = kindOfStep(step);
   const M = KIND_META[kind];
@@ -562,16 +568,30 @@ function FlowNode({
                 <span className="absolute flex items-center" style={{ left: NODE_W - 8 + 18 }} onPointerDown={(e) => e.stopPropagation()}>
                   <EndIcon size={12} className="pointer-events-none absolute left-2 text-slate-500" />
                   <select
-                    value={r.next}
-                    onChange={(e) => onSetEnd(r.key, e.target.value as Exclude<BotNext, "STEP">)}
-                    className="cursor-pointer appearance-none rounded-full border border-slate-200 bg-white py-1 pl-6 pr-2.5 text-[11px] font-semibold text-slate-600 shadow-sm outline-none hover:border-slate-300"
+                    value={r.next === "AI" && r.agentId && agents.some((a) => a.id === r.agentId) ? `AI:${r.agentId}` : r.next}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v.startsWith("AI:")) onSetEnd(r.key, "AI", v.slice(3));
+                      else onSetEnd(r.key, v as Exclude<BotNext, "STEP">, null);
+                    }}
+                    className={`max-w-[190px] cursor-pointer appearance-none truncate rounded-full border py-1 pl-6 pr-2.5 text-[11px] font-semibold shadow-sm outline-none ${
+                      r.next === "AI" ? "border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                    }`}
                     title="O que acontece se não ligar a outro bloco"
                   >
-                    {END_OPTIONS.map((x) => (
+                    {END_OPTIONS.filter((x) => x.value !== "AI").map((x) => (
                       <option key={x.value} value={x.value}>
                         {x.label.replace(/^\S+\s/, "")}
                       </option>
                     ))}
+                    <optgroup label="Passar para a IA">
+                      <option value="AI">IA (agente normal)</option>
+                      {agents.map((a) => (
+                        <option key={a.id} value={`AI:${a.id}`}>
+                          IA: {a.name}
+                        </option>
+                      ))}
+                    </optgroup>
                   </select>
                 </span>
               )}

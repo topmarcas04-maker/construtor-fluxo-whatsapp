@@ -47,14 +47,14 @@ function newDraft(): Draft {
 
 export function ChatbotScreen() {
   const [bots, setBots] = useState<Chatbot[] | null>(null);
-  const [refs, setRefs] = useState<Refs>({ tags: [], sellers: [], funnels: [], aiEnabled: false, storageReady: false });
+  const [refs, setRefs] = useState<Refs>({ tags: [], sellers: [], funnels: [], aiEnabled: false, storageReady: false, agents: [] });
   const [editing, setEditing] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const d = await api("/api/chatbot", "GET");
     setBots(d.bots);
-    setRefs({ tags: d.tags, sellers: d.sellers, funnels: d.funnels, aiEnabled: d.aiEnabled, storageReady: Boolean(d.storageReady) });
+    setRefs({ tags: d.tags, sellers: d.sellers, funnels: d.funnels, aiEnabled: d.aiEnabled, storageReady: Boolean(d.storageReady), agents: d.agents || [] });
   }, []);
   useEffect(() => {
     load().catch((e) => setError((e as Error).message));
@@ -264,13 +264,14 @@ function BotEditor({
         }),
       };
     });
-  const onSetEnd = (from: LinkFrom, next: Exclude<BotNext, "STEP">) =>
+  const onSetEnd = (from: LinkFrom, next: Exclude<BotNext, "STEP">, agentId?: string | null) =>
     change((x) => ({
       ...x,
       steps: x.steps.map((s) => {
         if (s.id !== from.stepId) return s;
-        if (from.port === "next") return { ...s, next, nextStepId: null };
-        return { ...s, options: s.options.map((o) => (o.id === from.port ? { ...o, next, stepId: null } : o)) };
+        const a = next === "AI" ? agentId || null : null;
+        if (from.port === "next") return { ...s, next, nextStepId: null, agentId: a };
+        return { ...s, options: s.options.map((o) => (o.id === from.port ? { ...o, next, stepId: null, agentId: a } : o)) };
       }),
     }));
 
@@ -435,6 +436,7 @@ function BotEditor({
             onDisconnect={onDisconnect}
             onSetEnd={onSetEnd}
             onCreate={onCreate}
+            agents={refs.agents}
             onAutoLayout={() => {
               const pos = autoLayout(d.steps);
               change((x) => ({ ...x, steps: x.steps.map((s) => ({ ...s, pos: pos[s.id] || s.pos })) }));

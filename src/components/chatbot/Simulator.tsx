@@ -52,7 +52,8 @@ export function Simulator({ bot, refs, onActive }: { bot: Draft; refs: Refs; onA
     scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: "smooth" });
   }, [lines]);
 
-  const finish = (next: Exclude<BotNext, "STEP">, out: Line[]) => {
+  const finish = (next: Exclude<BotNext, "STEP">, out: Line[], agentId?: string | null) => {
+    const agent = agentId ? refs.agents.find((a) => a.id === agentId)?.name : null;
     out.push({
       from: "sys",
       tone: "info",
@@ -61,7 +62,7 @@ export function Simulator({ bot, refs, onActive }: { bot: Draft; refs: Refs; onA
           ? "👤 Passado para a equipe — o chatbot para aqui"
           : next === "AI"
           ? refs.aiEnabled
-            ? "✨ Passado para a IA — ela continua a conversa"
+            ? `✨ Passado para a IA${agent ? ` (agente ${agent})` : ""} — ela continua a conversa`
             : "✨ Passaria para a IA (a IA desta conta está desligada)"
           : "⏹ Chatbot encerrado",
     });
@@ -85,7 +86,7 @@ export function Simulator({ bot, refs, onActive }: { bot: Draft; refs: Refs; onA
       return;
     }
     if (s.next === "STEP" && s.nextStepId && depth < 15) return enter(s.nextStepId, out, depth + 1);
-    finish(s.next === "STEP" ? "END" : s.next, out);
+    finish(s.next === "STEP" ? "END" : s.next, out, s.agentId);
   };
 
   const reset = () => {
@@ -144,7 +145,7 @@ export function Simulator({ bot, refs, onActive }: { bot: Draft; refs: Refs; onA
       if (o.sellerId)
         out.push({ from: "sys", text: `👤 Vendedor: ${o.sellerId === "AUTO" ? "pelas regras de distribuição" : refs.sellers.find((x) => x.id === o.sellerId)?.name || "—"}` });
       if (o.next === "STEP" && o.stepId) enter(o.stepId, out);
-      else finish(o.next === "STEP" ? "HUMAN" : o.sellerId && o.next !== "END" ? "HUMAN" : o.next, out);
+      else finish(o.next === "STEP" ? "HUMAN" : o.sellerId && o.next !== "END" ? "HUMAN" : o.next, out, o.agentId);
     }
     setLines((l) => [...l, ...out]);
   };

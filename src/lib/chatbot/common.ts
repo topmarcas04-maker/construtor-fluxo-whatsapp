@@ -28,6 +28,8 @@ export interface BotOption {
   next: BotNext;
   /** Quando next = STEP */
   stepId: string | null;
+  /** Quando next = AI: agente que assume (vazio = o agente normal do lead) */
+  agentId?: string | null;
 }
 
 /** Tipo do bloco: mensagem/menu ou mídia (foto, áudio, vídeo, PDF) */
@@ -51,6 +53,8 @@ export interface BotStep {
   next: BotNext;
   /** Quando next = STEP (bloco sem opções) */
   nextStepId?: string | null;
+  /** Quando next = AI: agente que assume (vazio = o agente normal do lead) */
+  agentId?: string | null;
   /** Vazio = MENU */
   kind?: StepKind;
   media?: BotMedia | null;

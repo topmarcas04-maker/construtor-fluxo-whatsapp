@@ -22,6 +22,8 @@ export interface BotRefs {
   sellerIds: Set<string>;
   /** Arquivos do Drive da conta (id → dados) para os blocos de mídia */
   files: Map<string, { name: string; mime: string; size: number; kind: string }>;
+  /** Agentes de IA da conta */
+  agentIds: Set<string>;
 }
 
 const KINDS: StepKind[] = ["MENU", "IMAGE", "AUDIO", "VIDEO", "DOCUMENT"];
@@ -97,6 +99,7 @@ export function chatbotValues(body: Record<string, unknown>, refs: BotRefs): { e
         sellerId: sellerRaw === "AUTO" ? "AUTO" : sellerRaw && refs.sellerIds.has(sellerRaw) ? sellerRaw : null,
         next,
         stepId,
+        agentId: next === "AI" && o.agentId && refs.agentIds.has(String(o.agentId)) ? String(o.agentId) : null,
       });
     }
     let stepNext: BotNext = NEXTS.includes(raw.next as BotNext) ? (raw.next as BotNext) : "END";
@@ -108,7 +111,8 @@ export function chatbotValues(body: Record<string, unknown>, refs: BotRefs): { e
     const px = Number((raw.pos as { x?: unknown } | null)?.x);
     const py = Number((raw.pos as { y?: unknown } | null)?.y);
     const pos = Number.isFinite(px) && Number.isFinite(py) ? { x: Math.round(px), y: Math.round(py) } : null;
-    steps.push({ id, name: blockName, message, options: opts, next: stepNext, nextStepId, kind, media, pos });
+    const agentId = stepNext === "AI" && raw.agentId && refs.agentIds.has(String(raw.agentId)) ? String(raw.agentId) : null;
+    steps.push({ id, name: blockName, message, options: opts, next: stepNext, nextStepId, agentId, kind, media, pos });
   }
 
   return {

@@ -2268,7 +2268,14 @@ async function routeIncoming(accountId: string, conversationId: string, ctx: Inc
 }
 
 /** Tira o lead do chatbot. next: HUMAN (equipe assume), AI (IA continua) ou END */
-async function endBot(accountId: string, leadId: string, conversationId: string, next: "HUMAN" | "AI" | "END", botId: string) {
+async function endBot(
+  accountId: string,
+  leadId: string,
+  conversationId: string,
+  next: "HUMAN" | "AI" | "END",
+  botId: string,
+  agentId?: string | null
+) {
   const set: Record<string, unknown> = {
     botId: null,
     botStep: null,
@@ -2279,7 +2286,14 @@ async function endBot(accountId: string, leadId: string, conversationId: string,
   };
   if (next === "HUMAN") set.aiPaused = true;
   if (next === "AI") set.aiPaused = false;
+  // Chatbot escolheu o agente que assume
+  let agent: { id: string; name: string } | null = null;
+  if (next === "AI" && agentId) {
+    agent = (await ensureAgents(db, accountId)).find((a) => a.id === agentId && a.active) || null;
+    if (agent) set.agentId = agent.id;
+  }
   await db.update(leads).set(set).where(eq(leads.id, leadId));
+  if (agent) await logAgentEvent(accountId, leadId, agent, "ROUTED", `Chatbot passou para ${agent.name}`);
   if (next === "AI") {
     const st = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId), columns: { enabled: true } });
     if (st?.enabled) scheduleAi(accountId, conversationId, true);
@@ -2323,7 +2337,7 @@ async function enterStep(
   if (step.next === "STEP" && step.nextStepId && depth < 15) {
     return enterStep(accountId, bot, step.nextStepId, lead, conv, depth + 1);
   }
-  return endBot(accountId, lead.id, conv.id, step.next === "STEP" ? "END" : step.next, bot.id);
+  return endBot(accountId, lead.id, conv.id, step.next === "STEP" ? "END" : step.next, bot.id, step.agentId);
 }
 
 /** Move o card para a coluna (coluna fixa muda o estágio; personalizada guarda a coluna) */
@@ -2398,7 +2412,7 @@ async function applyBotOption(
   if (option.next === "STEP") return enterStep(accountId, bot, option.stepId, fresh, conv);
   // Com vendedor definido, a conversa fica com a equipe
   const next = fresh.sellerId && option.next !== "END" ? "HUMAN" : option.next;
-  return endBot(accountId, lead.id, conv.id, next, bot.id);
+  return endBot(accountId, lead.id, conv.id, next, bot.id, option.agentId);
 }
 
 /** Decide se o chatbot atende esta mensagem. Devolve true se atendeu. */

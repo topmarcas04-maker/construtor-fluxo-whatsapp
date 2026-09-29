@@ -16,6 +16,7 @@ export interface Refs {
   funnels: { id: string; name: string; columns: { id: string; name: string }[] }[];
   aiEnabled: boolean;
   storageReady: boolean;
+  agents: { id: string; name: string; isPrimary: boolean }[];
 }
 
 export type Draft = Omit<Chatbot, "id" | "sort"> & { id?: string };
