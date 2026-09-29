@@ -618,6 +618,9 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_pending_tries integer NOT NULL DEF
 CREATE INDEX IF NOT EXISTS leads_ai_pending_idx ON leads (ai_pending_at) WHERE ai_pending_at IS NOT NULL;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ai_error text;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ai_error_at timestamptz;
+-- Login automático pelo RossIA Partners ("Meus sistemas")
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS sso_ref varchar(80);
+CREATE INDEX IF NOT EXISTS accounts_sso_ref_idx ON accounts (sso_ref);
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS pending_max_hours integer NOT NULL DEFAULT 24;
 -- Histórico do recontato e da cobertura do vendedor (relatório)
 CREATE TABLE IF NOT EXISTS followup_events (

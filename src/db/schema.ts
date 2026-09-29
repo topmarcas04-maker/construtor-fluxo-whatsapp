@@ -130,6 +130,8 @@ export const accounts = pgTable(
     /** IA parada (ex.: sem crédito na chave): motivo e desde quando. Vazio = funcionando */
     aiError: text("ai_error"),
     aiErrorAt: timestamp("ai_error_at", { withTimezone: true }),
+    /** Conta criada pelo login automático do RossIA Partners (id do parceiro lá) */
+    ssoRef: varchar("sso_ref", { length: 80 }),
     /** Nome do WhatsApp 1 (ex.: "Vendas"), aparece quando a conta tem mais de um número */
     waLabel: varchar("wa_label", { length: 60 }),
     /** Cliente pode editar os cards dos leads (definido por quem cadastrou) */
