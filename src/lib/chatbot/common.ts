@@ -30,14 +30,51 @@ export interface BotOption {
   stepId: string | null;
 }
 
+/** Tipo do bloco: mensagem/menu ou mídia (foto, áudio, vídeo, PDF) */
+export type StepKind = "MENU" | "IMAGE" | "AUDIO" | "VIDEO" | "DOCUMENT";
+
+/** Arquivo do bloco de mídia (guardado no Drive da conta) */
+export interface BotMedia {
+  fileId: string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
 export interface BotStep {
   id: string;
   name: string;
+  /** Texto da mensagem (no bloco de mídia é a legenda; áudio não tem) */
   message: string;
   options: BotOption[];
-  /** Passo sem opções: o que fazer depois de mandar a mensagem */
-  next: Exclude<BotNext, "STEP">;
+  /** Bloco sem opções: o que fazer depois de mandar (STEP = seguir para outro bloco) */
+  next: BotNext;
+  /** Quando next = STEP (bloco sem opções) */
+  nextStepId?: string | null;
+  /** Vazio = MENU */
+  kind?: StepKind;
+  media?: BotMedia | null;
+  /** Posição no desenho do fluxo */
+  pos?: { x: number; y: number } | null;
 }
+
+export const STEP_KIND_LABEL: Record<StepKind, string> = {
+  MENU: "Mensagem",
+  IMAGE: "Foto",
+  AUDIO: "Áudio",
+  VIDEO: "Vídeo",
+  DOCUMENT: "PDF / documento",
+};
+
+/** Tipos de arquivo aceitos em cada bloco */
+export const STEP_KIND_ACCEPT: Record<Exclude<StepKind, "MENU">, string> = {
+  IMAGE: "image/jpeg,image/png,image/webp",
+  AUDIO: "audio/*",
+  VIDEO: "video/mp4,video/3gpp,video/quicktime",
+  DOCUMENT: "application/pdf,.pdf,.doc,.docx,.xls,.xlsx",
+};
+
+export const stepKind = (s: Pick<BotStep, "kind">): StepKind => s.kind || "MENU";
 
 export interface Chatbot {
   id: string;
@@ -223,4 +260,41 @@ export function triggerSummary(bot: Pick<Chatbot, "trigger" | "keywords" | "tagI
   if (bot.trigger === "KEYWORD") return `Palavra-chave: ${bot.keywords.join(", ") || "—"}`;
   if (bot.trigger === "TAG") return `Etiqueta: ${bot.tagIds.map(tagName).join(", ") || "—"}`;
   return `Início de conversa (volta após ${bot.restartHours}h)`;
+}
+
+/** Qual palavra-chave apareceu na mensagem (ou null) */
+export function matchedKeyword(keywords: string[], message: string) {
+  const text = ` ${normalize(message)} `;
+  return keywords.find((k) => {
+    const n = normalize(k);
+    return n.length > 0 && text.includes(` ${n} `);
+  }) || null;
+}
+
+/**
+ * O chatbot começaria com esta mensagem? Mesma regra do motor (usada no testador da tela).
+ * isNew = conversa nova ou cliente que voltou depois de "restartHours" sem conversa.
+ */
+export function botStartCheck(
+  bot: Pick<Chatbot, "trigger" | "keywords" | "tagIds" | "skipTagIds" | "restartHours">,
+  ctx: { message: string; isNew: boolean; leadTagIds: string[] },
+  tagName: (id: string) => string = () => "etiqueta"
+): { ok: boolean; reason: string } {
+  const block = bot.skipTagIds.find((t) => ctx.leadTagIds.includes(t));
+  if (block) return { ok: false, reason: `O lead tem a etiqueta "${tagName(block)}", que está em "Não começar se tiver a etiqueta".` };
+  if (bot.trigger === "KEYWORD") {
+    const kw = matchedKeyword(bot.keywords, ctx.message);
+    if (kw) return { ok: true, reason: `Começou pela palavra-chave "${kw}".` };
+    return {
+      ok: false,
+      reason: `A mensagem não tem nenhuma palavra-chave (${bot.keywords.join(", ") || "nenhuma cadastrada"}). Vale a palavra ou frase inteira, sem diferença de acento.`,
+    };
+  }
+  if (bot.trigger === "TAG") {
+    const t = bot.tagIds.find((x) => ctx.leadTagIds.includes(x));
+    if (t) return { ok: true, reason: `Começou porque o lead tem a etiqueta "${tagName(t)}".` };
+    return { ok: false, reason: `O lead não tem a etiqueta que inicia este chatbot (${bot.tagIds.map(tagName).join(", ") || "nenhuma escolhida"}).` };
+  }
+  if (ctx.isNew) return { ok: true, reason: "Começou porque é uma conversa nova." };
+  return { ok: false, reason: `Não é conversa nova. Este chatbot só começa em lead novo ou que volta depois de ${bot.restartHours}h sem conversa.` };
 }

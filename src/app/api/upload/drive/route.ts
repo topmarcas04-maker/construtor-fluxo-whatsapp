@@ -19,7 +19,9 @@ import { DRIVE_MAX_FILE, kindOf, safeFileName } from "@/lib/drive/common";
  * POST /api/upload/drive?folderId=...&name=... (corpo = o arquivo; Content-Type = tipo do arquivo)
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireUser("drive");
+  // Chatbot também envia (foto, áudio, vídeo e PDF dos blocos): vão para a pasta "Chatbot" do Drive
+  const fromBot = req.nextUrl.searchParams.get("folder") === "chatbot";
+  const auth = await requireUser(fromBot ? ["drive", "chatbot"] : "drive");
   if (auth.error) return auth.error;
   if (!storageReady()) {
     return NextResponse.json({ error: "O armazenamento de arquivos não está configurado no servidor (bucket)." }, { status: 400 });
@@ -34,6 +36,12 @@ export async function POST(req: NextRequest) {
   if (folderId) {
     const folder = await db.query.driveFolders.findFirst({ where: and(eq(driveFolders.id, folderId), eq(driveFolders.accountId, auth.accountId)) });
     if (!folder) folderId = null;
+  }
+  if (fromBot) {
+    const found = await db.query.driveFolders.findFirst({
+      where: and(eq(driveFolders.accountId, auth.accountId), eq(driveFolders.name, "Chatbot")),
+    });
+    folderId = found?.id || (await db.insert(driveFolders).values({ accountId: auth.accountId, name: "Chatbot" }).returning({ id: driveFolders.id }))[0].id;
   }
   const mime = (req.headers.get("content-type") || "application/octet-stream").split(";")[0].trim().slice(0, 120);
 

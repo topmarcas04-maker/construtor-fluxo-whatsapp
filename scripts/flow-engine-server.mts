@@ -1861,7 +1861,15 @@ async function sendProductPhoto(
 
 /** Vídeo do produto (guardado no bucket) */
 /** Envia um arquivo do Drive (foto, vídeo, áudio ou documento) */
-async function sendDriveFile(accountId: string, phoneJid: string, fileId: string, sender: Sender, authorName: string | null) {
+async function sendDriveFile(
+  accountId: string,
+  phoneJid: string,
+  fileId: string,
+  sender: Sender,
+  authorName: string | null,
+  opts: { caption?: string | null; ptt?: boolean } = {}
+) {
+  const caption = opts.caption?.trim() || undefined;
   const f = await db.query.driveFiles.findFirst({ where: and(eq(driveFiles.id, fileId), eq(driveFiles.accountId, accountId)) });
   if (!f) return { error: "Arquivo do Drive não encontrado" };
   if (!storageReady()) return { error: "Armazenamento de arquivos não configurado" };
@@ -1881,19 +1889,25 @@ async function sendDriveFile(accountId: string, phoneJid: string, fileId: string
         await db.update(messages).set({ whatsappMessageId: mid }).where(eq(messages.id, row.id));
       }
       await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
+      // Instagram/Messenger não tem legenda: vai como texto logo depois
+      if (caption) await sendText(accountId, phoneJid, caption, sender, authorName);
       return { success: true, messageId: mid };
     }
     const s = await sessionFor(accountId, phoneJid);
     if (!s?.sock || s.state !== "connected") return { error: "WhatsApp desta conta não está conectado" };
-    const buffer = await getObject(f.storageKey);
+    let buffer: Buffer = await getObject(f.storageKey);
     let content: any;
     let type = f.kind;
-    if (f.kind === "image") content = { image: buffer, mimetype: f.mimeType };
-    else if (f.kind === "video" && f.size <= WHATSAPP_VIDEO_MAX) content = { video: buffer, mimetype: f.mimeType };
-    else if (f.kind === "audio") content = { audio: buffer, mimetype: f.mimeType, ptt: false };
+    if (f.kind === "image") content = { image: buffer, mimetype: f.mimeType, caption };
+    else if (f.kind === "video" && f.size <= WHATSAPP_VIDEO_MAX) content = { video: buffer, mimetype: f.mimeType, caption };
+    else if (f.kind === "audio" && opts.ptt) {
+      // Chega como áudio gravado na hora (com a bolinha de ouvir)
+      if (!/ogg/.test(f.mimeType)) buffer = await toOggOpus(buffer);
+      content = { audio: buffer, mimetype: "audio/ogg; codecs=opus", ptt: true };
+    } else if (f.kind === "audio") content = { audio: buffer, mimetype: f.mimeType, ptt: false };
     else {
       type = "document";
-      content = { document: buffer, mimetype: f.mimeType, fileName: f.name };
+      content = { document: buffer, mimetype: f.mimeType, fileName: f.name, caption };
     }
     const response = await s.sock.sendMessage(phoneJid, content);
     if (response?.key?.id) rememberSent(response.key.id);
@@ -1904,7 +1918,7 @@ async function sendDriveFile(accountId: string, phoneJid: string, fileId: string
       await db.insert(messages).values({
         conversationId: conv.id,
         direction: "OUT",
-        body: type === "document" ? `[documento] ${f.name}` : `[${type === "image" ? "imagem" : type === "video" ? "vídeo" : "áudio"}]`,
+        body: caption || (type === "document" ? `[documento] ${f.name}` : `[${type === "image" ? "imagem" : type === "video" ? "vídeo" : "áudio"}]`),
         messageType: type,
         whatsappMessageId: response?.key?.id,
         sentAt: new Date(),
@@ -2278,21 +2292,38 @@ async function enterStep(
   bot: Chatbot,
   stepId: string | null,
   lead: typeof leads.$inferSelect,
-  conv: typeof conversations.$inferSelect
-) {
+  conv: typeof conversations.$inferSelect,
+  depth = 0
+): Promise<void> {
   const step = bot.steps.find((x) => x.id === stepId) || null;
   if (!step) return endBot(accountId, lead.id, conv.id, "HUMAN", bot.id);
   const nome = lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conv.leadName;
-  const text = renderStep(step, { nome });
-  if (text) {
-    await pause(700);
-    await sendText(accountId, conv.phoneJid, text, "BOT");
+  const kind = step.kind || "MENU";
+  if (kind !== "MENU" && step.media?.fileId) {
+    // Bloco de mídia: foto, áudio (como gravado na hora), vídeo ou PDF, com legenda
+    await pause(kind === "AUDIO" ? 1200 : 800);
+    const caption = kind === "AUDIO" ? null : fillBotText(step.message || "", { nome }) || null;
+    const r = await sendDriveFile(accountId, conv.phoneJid, step.media.fileId, "BOT", null, { caption, ptt: kind === "AUDIO" });
+    if ("error" in r && r.error) console.warn(`[Chatbot ${accountId.slice(0, 8)}] mídia não enviada (${step.name}):`, r.error);
+  } else {
+    const text = renderStep(step, { nome });
+    if (text) {
+      await pause(700);
+      await sendText(accountId, conv.phoneJid, text, "BOT");
+    }
   }
-  if (!step.options.length) return endBot(accountId, lead.id, conv.id, step.next, bot.id);
-  await db
-    .update(leads)
-    .set({ botId: bot.id, botStep: step.id, botTries: 0, botAt: new Date(), updatedAt: new Date() })
-    .where(eq(leads.id, lead.id));
+  if (kind === "MENU" && step.options.length) {
+    await db
+      .update(leads)
+      .set({ botId: bot.id, botStep: step.id, botTries: 0, botAt: new Date(), updatedAt: new Date() })
+      .where(eq(leads.id, lead.id));
+    return;
+  }
+  // Sem opções: segue direto para o próximo bloco (ex.: foto → áudio → menu)
+  if (step.next === "STEP" && step.nextStepId && depth < 15) {
+    return enterStep(accountId, bot, step.nextStepId, lead, conv, depth + 1);
+  }
+  return endBot(accountId, lead.id, conv.id, step.next === "STEP" ? "END" : step.next, bot.id);
 }
 
 /** Move o card para a coluna (coluna fixa muda o estágio; personalizada guarda a coluna) */

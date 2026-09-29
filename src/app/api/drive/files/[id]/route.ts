@@ -12,7 +12,7 @@ async function own(accountId: string, id: string) {
 
 /** Abre/baixa o arquivo (link temporário do bucket). ?download=1 força o download */
 export async function GET(req: NextRequest, c: { params: Promise<{ id: string }> }) {
-  const auth = await requireUser(["drive", "leads", "disparos"]);
+  const auth = await requireUser(["drive", "leads", "disparos", "chatbot"]);
   if (auth.error) return auth.error;
   const { id } = await c.params;
   const f = await own(auth.accountId, id);
