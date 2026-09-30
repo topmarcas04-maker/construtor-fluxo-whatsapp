@@ -1198,6 +1198,29 @@ export const productCategories = pgTable(
   (table) => [index("product_categories_account_idx").on(table.accountId)]
 );
 
+/** Simulador de cartão: taxas de cada maquininha. O Master cadastra as dele e todas as contas abaixo
+ *  enxergam como "tabela padrão"; cada conta pode cadastrar as próprias. */
+export const cardMachines = pgTable(
+  "card_machines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 80 }).notNull(),
+    /** Cor do cartão na tela (hex) */
+    color: varchar("color", { length: 20 }).notNull().default("#0f172a"),
+    /** Taxa do débito em % */
+    debitRate: doublePrecision("debit_rate"),
+    /** Taxas do crédito em %: posição 0 = à vista (1x), 1 = 2x … até 21x */
+    rates: jsonb("rates").$type<(number | null)[]>().notNull().default([]),
+    sort: integer("sort").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("card_machines_account_idx").on(t.accountId)]
+);
+
 export const products = pgTable(
   "products",
   {

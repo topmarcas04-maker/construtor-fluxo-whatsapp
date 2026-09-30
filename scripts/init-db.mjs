@@ -899,6 +899,19 @@ FROM ai_settings s
 JOIN accounts a ON a.id::text = s.id
 WHERE NOT EXISTS (SELECT 1 FROM ai_agents g WHERE g.account_id = a.id);
 
+CREATE TABLE IF NOT EXISTS card_machines (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name varchar(80) NOT NULL,
+  color varchar(20) NOT NULL DEFAULT '#0f172a',
+  debit_rate double precision,
+  rates jsonb NOT NULL DEFAULT '[]'::jsonb,
+  sort integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS card_machines_account_idx ON card_machines (account_id);
+
 -- Migrações que rodam uma única vez
 CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());
 DO $$ BEGIN
@@ -919,6 +932,15 @@ DO $$ BEGIN
     UPDATE conversations c SET last_read_at = now(),
       read_in_count = (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'IN');
     INSERT INTO app_migrations (key) VALUES ('read-count-v1');
+  END IF;
+  -- Simulador de cartão: a conta Master começa com a maquininha Mastercard já preenchida
+  IF NOT EXISTS (SELECT 1 FROM app_migrations WHERE key = 'seed-card-machine-v1') THEN
+    INSERT INTO card_machines (account_id, name, color, debit_rate, rates)
+    SELECT a.id, 'Mastercard', '#0f172a', 0.82,
+      '[3.15,4.44,5.27,6.11,6.94,7.77,8.85,9.68,10.51,11.34,12.18,13.01,13.84,14.67,15.50,16.33,17.16,17.99,18.83,19.66,20.49]'::jsonb
+    FROM accounts a WHERE a.type = 'MASTER'
+      AND NOT EXISTS (SELECT 1 FROM card_machines c WHERE c.account_id = a.id);
+    INSERT INTO app_migrations (key) VALUES ('seed-card-machine-v1');
   END IF;
 END $$;
 `;
