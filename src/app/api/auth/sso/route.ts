@@ -89,7 +89,8 @@ export async function GET(req: NextRequest) {
   }
 
   await db.update(appUsers).set({ lastLoginAt: new Date() }).where(eq(appUsers.id, user!.id));
-  const res = NextResponse.redirect(new URL("/", req.url));
+  // Endereço relativo: atrás do Railway o req.url é o endereço interno (localhost:8080)
+  const res = new NextResponse(null, { status: 303, headers: { Location: "/" } });
   res.cookies.set(SESSION_COOKIE, createSessionToken(user!.id), sessionCookieOptions);
   res.cookies.set(ACTING_COOKIE, "", { path: "/", maxAge: 0 });
   res.cookies.set(VIEW_AS_COOKIE, "", { path: "/", maxAge: 0 });
