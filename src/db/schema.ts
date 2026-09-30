@@ -132,6 +132,8 @@ export const accounts = pgTable(
     aiErrorAt: timestamp("ai_error_at", { withTimezone: true }),
     /** Conta criada pelo login automático do RossIA Partners (id do parceiro lá) */
     ssoRef: varchar("sso_ref", { length: 80 }),
+    /** Simulador de cartão: imposto sobre o valor da nota, em %. Master e Parceiro definem; Cliente usa o do Parceiro */
+    simTaxRate: doublePrecision("sim_tax_rate"),
     /** Nome do WhatsApp 1 (ex.: "Vendas"), aparece quando a conta tem mais de um número */
     waLabel: varchar("wa_label", { length: 60 }),
     /** Cliente pode editar os cards dos leads (definido por quem cadastrou) */

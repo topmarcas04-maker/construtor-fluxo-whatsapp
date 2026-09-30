@@ -31,14 +31,25 @@ export interface SimRow {
   installment: number;
   /** Taxa em reais */
   fee: number;
-  /** Quanto cai na conta */
+  /** Quanto cai na conta (depois da taxa da maquininha) */
   net: number;
+  /** Imposto sobre a nota (valor passado na maquininha) */
+  tax: number;
+  /** O que sobra de verdade: depois da taxa e do imposto */
+  liquid: number;
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-export function simulate(machine: Pick<CardMachine, "debitRate" | "rates">, value: number, mode: SimMode): SimRow[] {
+/**
+ * taxRate = imposto em % sobre o valor total da nota (o que o cliente paga).
+ * RECEBER: "value" é o preço à vista (já com o imposto embutido). O simulador acha quanto cobrar no cartão
+ *   para sobrar o mesmo líquido da venda à vista: cobrado = value × (1 − imposto) ÷ (1 − taxa − imposto).
+ * COBRAR: "value" é o valor passado na maquininha; mostra quanto sobra depois da taxa e do imposto.
+ */
+export function simulate(machine: Pick<CardMachine, "debitRate" | "rates">, value: number, mode: SimMode, taxRate = 0): SimRow[] {
   if (!(value > 0)) return [];
+  const t = Math.max(0, taxRate || 0) / 100;
   const rows: { key: string; label: string; n: number; rate: number }[] = [];
   if (machine.debitRate != null) rows.push({ key: "debito", label: "Débito", n: 1, rate: machine.debitRate });
   machine.rates.slice(0, MAX_INSTALLMENTS).forEach((r, i) => {
@@ -46,13 +57,23 @@ export function simulate(machine: Pick<CardMachine, "debitRate" | "rates">, valu
     rows.push({ key: `c${i + 1}`, label: i === 0 ? "Crédito à vista" : `${i + 1}x`, n: i + 1, rate: r });
   });
   return rows
-    .filter((r) => r.rate >= 0 && r.rate < 100)
+    .filter((r) => r.rate >= 0 && r.rate / 100 + t < 1)
     .map(({ key, label, n, rate }) => {
       const f = rate / 100;
-      const charged = round2(mode === "RECEBER" ? value / (1 - f) : value);
-      const net = round2(mode === "RECEBER" ? value : value * (1 - f));
-      return { key, label, installments: n, rate, charged, installment: round2(charged / n), fee: round2(charged - net), net };
+      const charged = round2(mode === "RECEBER" ? (value * (1 - t)) / (1 - f - t) : value);
+      const fee = round2(charged * f);
+      const tax = round2(charged * t);
+      const net = round2(charged - fee);
+      return { key, label, installments: n, rate, charged, installment: round2(charged / n), fee, net, tax, liquid: round2(net - tax) };
     });
+}
+
+/** Validação do imposto (%) */
+export function taxValue(v: unknown): { error: string } | { value: number | null } {
+  if (v === null || v === undefined || v === "") return { value: null };
+  const n = typeof v === "number" ? v : Number(String(v).replace(",", "."));
+  if (!Number.isFinite(n) || n < 0 || n >= 50) return { error: "Imposto inválido (use de 0 a 49,99%)" };
+  return { value: Math.round(n * 100) / 100 };
 }
 
 export const brl = (n: number) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });

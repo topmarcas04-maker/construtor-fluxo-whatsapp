@@ -911,6 +911,7 @@ CREATE TABLE IF NOT EXISTS card_machines (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS card_machines_account_idx ON card_machines (account_id);
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS sim_tax_rate double precision;
 
 -- Migrações que rodam uma única vez
 CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());

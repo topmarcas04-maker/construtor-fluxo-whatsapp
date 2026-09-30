@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, Copy, CreditCard, Pencil, Plus, Trash2, Wifi, Layers, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import { Check, Copy, CreditCard, Pencil, Plus, Trash2, Wifi, Layers, ArrowDownToLine, ArrowUpFromLine, Landmark } from "lucide-react";
 import { Page, PageHeader, Button, Modal, ErrorNote, EmptyState } from "@/components/ui";
 import {
   MACHINE_COLORS,
@@ -17,6 +17,9 @@ import {
 interface Data {
   machines: CardMachine[];
   canEdit: boolean;
+  taxRate: number;
+  taxSource: string | null;
+  canEditTax: boolean;
 }
 
 interface Draft {
@@ -55,6 +58,7 @@ export function SimuladorScreen() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [taxEdit, setTaxEdit] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/simulador");
@@ -69,7 +73,9 @@ export function SimuladorScreen() {
 
   const machine = data?.machines.find((m) => m.id === machineId) || null;
   const value = moneyFromDigits(digits);
-  const rows = useMemo(() => (machine ? simulate(machine, value, mode) : []), [machine, value, mode]);
+  const taxRate = data?.taxRate || 0;
+  const hasTax = taxRate > 0;
+  const rows = useMemo(() => (machine ? simulate(machine, value, mode, taxRate) : []), [machine, value, mode, taxRate]);
   const focused = rows.find((r) => r.key === focus) || rows.find((r) => r.installments === 12) || rows[rows.length - 1];
 
   const togglePick = (k: string) => setPicked((p) => (p.includes(k) ? p.filter((x) => x !== k) : [...p, k]));
@@ -95,6 +101,13 @@ export function SimuladorScreen() {
     if (!res.ok) return setError(out.error || "Não foi possível salvar");
     setDraft(null);
     if (out.id) setMachineId(out.id);
+    load();
+  };
+  const saveTax = async () => {
+    if (taxEdit === null) return;
+    const res = await fetch("/api/simulador", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ taxRate: taxEdit }) });
+    if (!res.ok) return alert((await res.json()).error || "Não foi possível salvar");
+    setTaxEdit(null);
     load();
   };
   const remove = async (m: CardMachine) => {
@@ -170,7 +183,7 @@ export function SimuladorScreen() {
                       ))}
                     </div>
                     <p className="mt-4 text-[12px] font-semibold uppercase tracking-wider text-slate-500">
-                      {mode === "RECEBER" ? "Valor à vista que você quer receber" : "Valor da venda"}
+                      {mode === "RECEBER" ? (hasTax ? "Preço à vista (já com imposto)" : "Valor à vista que você quer receber") : "Valor passado na maquininha"}
                     </p>
                     <input
                       inputMode="numeric"
@@ -191,11 +204,14 @@ export function SimuladorScreen() {
                               <b className="text-slate-900">{brl(focused.charged)}</b>
                             </div>
                             <div className="rounded-lg bg-white/70 px-3 py-2">
-                              <span className="block text-[11px] text-slate-500">Você recebe</span>
-                              <b className="text-emerald-700">{brl(focused.net)}</b>
+                              <span className="block text-[11px] text-slate-500">{hasTax ? "Líquido (após imposto)" : "Você recebe"}</span>
+                              <b className="text-emerald-700">{brl(hasTax ? focused.liquid : focused.net)}</b>
                             </div>
                           </div>
-                          <p className="mt-2 text-[12px] text-slate-500">Taxa {pct(focused.rate)} · {brl(focused.fee)}</p>
+                          <p className="mt-2 text-[12px] text-slate-500">
+                            Maquininha {pct(focused.rate)} · {brl(focused.fee)}
+                            {hasTax && <> · Imposto {pct(taxRate)} · {brl(focused.tax)}</>}
+                          </p>
                         </>
                       ) : (
                         <p className="text-sm text-slate-500">Digite um valor.</p>
@@ -246,8 +262,31 @@ export function SimuladorScreen() {
                     <span className="flex h-9 w-9 items-center justify-center rounded-xl text-white" style={{ background: machine.color }}><Layers size={17} /></span>
                     <div>
                       <p className="font-semibold text-slate-900">{machine.name}</p>
-                      <p className="text-[12px] text-slate-500">{mode === "RECEBER" ? "Taxa repassada ao cliente" : "Taxa descontada de você"}</p>
+                      <p className="text-[12px] text-slate-500">
+                        {mode === "RECEBER" ? (hasTax ? "Taxa e imposto repassados ao cliente" : "Taxa repassada ao cliente") : "Taxa e imposto descontados de você"}
+                      </p>
                     </div>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-[13px]">
+                    <Landmark size={15} className="text-slate-500" />
+                    {taxEdit === null ? (
+                      <>
+                        <span className="text-slate-600">Imposto sobre a nota</span>
+                        <b className="font-mono text-slate-900">{pct(taxRate)}</b>
+                        {data.canEditTax ? (
+                          <button onClick={() => setTaxEdit(String(taxRate).replace(".", ","))} className="rounded-md p-1 text-slate-500 hover:bg-white hover:text-slate-800" title="Alterar imposto"><Pencil size={13} /></button>
+                        ) : data.taxSource ? (
+                          <span className="text-[11px] text-slate-400">definido por {data.taxSource}</span>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        <input autoFocus inputMode="decimal" value={taxEdit} onChange={(e) => setTaxEdit(e.target.value.replace(/[^0-9.,]/g, ""))} onKeyDown={(e) => e.key === "Enter" && saveTax()} className="w-16 rounded-md border border-slate-300 bg-white px-2 py-0.5 text-right font-mono outline-none focus:border-[var(--accent)]" />
+                        <span className="text-slate-500">%</span>
+                        <button onClick={saveTax} className="rounded-md bg-[var(--accent)] px-2 py-0.5 text-[12px] font-semibold text-white">Salvar</button>
+                        <button onClick={() => setTaxEdit(null)} className="text-[12px] text-slate-500">Cancelar</button>
+                      </>
+                    )}
                   </div>
                   <div className="ml-auto flex flex-wrap gap-2">
                     {data.canEdit && machine.own && (
@@ -263,7 +302,7 @@ export function SimuladorScreen() {
                   </div>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[640px] text-[14px]">
+                  <table className="w-full min-w-[720px] text-[14px]">
                     <thead>
                       <tr className="bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                         <th className="w-10 px-4 py-3" />
@@ -272,7 +311,8 @@ export function SimuladorScreen() {
                         <th className="px-3 py-3 text-right">Parcela</th>
                         <th className="px-3 py-3 text-right">Cliente paga</th>
                         <th className="px-3 py-3 text-right">Taxa R$</th>
-                        <th className="px-4 py-3 text-right">Você recebe</th>
+                        {hasTax && <th className="px-3 py-3 text-right">Imposto R$</th>}
+                        <th className="px-4 py-3 text-right">{hasTax ? "Líquido" : "Você recebe"}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -298,7 +338,8 @@ export function SimuladorScreen() {
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-900">{r.installments > 1 ? `${r.installments}x ${brl(r.installment)}` : brl(r.installment)}</td>
                             <td className="px-3 py-2.5 text-right font-mono text-slate-800">{brl(r.charged)}</td>
                             <td className="px-3 py-2.5 text-right font-mono text-rose-600">−{brl(r.fee)}</td>
-                            <td className="px-4 py-2.5 text-right font-mono font-bold text-emerald-700">{brl(r.net)}</td>
+                            {hasTax && <td className="px-3 py-2.5 text-right font-mono text-rose-600">−{brl(r.tax)}</td>}
+                            <td className="px-4 py-2.5 text-right font-mono font-bold text-emerald-700">{brl(hasTax ? r.liquid : r.net)}</td>
                           </tr>
                         );
                       })}

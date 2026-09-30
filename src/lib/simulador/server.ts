@@ -31,3 +31,15 @@ export async function listMachines(accountId: string): Promise<CardMachine[]> {
       own: r.accountId === accountId,
     }));
 }
+
+/** Imposto da conta: Master e Parceiro usam o próprio; Cliente usa o do Parceiro (ou de quem estiver acima) */
+export async function effectiveTax(accountId: string) {
+  let acc = await getAccount(accountId);
+  let fromParent = false;
+  for (let i = 0; acc && i < 8; i++) {
+    if (acc.type !== "CLIENT") return { taxRate: acc.simTaxRate ?? 0, source: fromParent ? acc.name : null };
+    acc = await getAccount(acc.parentId);
+    fromParent = true;
+  }
+  return { taxRate: 0, source: null };
+}
