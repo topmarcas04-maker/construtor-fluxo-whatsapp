@@ -104,7 +104,7 @@ import { parseFollowupConfig, fillName, type FollowupItem } from "../src/lib/fol
 import { generateFollowup } from "../src/lib/ai/followup";
 import { replyDelayMs, typingMs } from "../src/lib/ai/style";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "../src/lib/ai/hours";
-import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff, type QualifyData } from "../src/lib/ai/qualify";
+import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff, autoHandoffReason, type QualifyData } from "../src/lib/ai/qualify";
 import { sellerPool, chooseSeller, type RotationState } from "../src/lib/ai/distribution";
 import { loadCatalogFor } from "../src/lib/ai/catalog";
 import { normalizeWaConfig, type WaNumberConfig } from "../src/lib/whatsapp/config";
@@ -1672,6 +1672,8 @@ async function runAi(accountId: string, conversationId: string, force = false, d
   const qualify = normalizeQualify(agent.qualify ?? settings.qualify);
   const leadTexts = history.filter((m) => m.direction === "IN").map((m) => m.transcript || m.body || "");
   const pending = qualifyPending(qualify, { qualifiedAt: lead.qualifiedAt, leadMessages: leadTexts.length });
+  // "Só transferir, sem passar valor": o preço e as parcelas ficam com o vendedor (vale também na transferência por pontuação)
+  if (onlyHandoff(qualify)) for (const c of catalog) c.ai = restrictCatalogItem(c.ai, { ...perms, price: false, installments: false });
   // Colunas com regra para a IA (ex.: "Ligação") de todos os funis; a do funil do lead tem preferência
   const funnelList = await ensureFunnels(db, accountId);
   const allColumns = (await Promise.all(funnelList.map((f) => ensureColumns(db, accountId, f.id)))).flat();
@@ -1752,7 +1754,9 @@ async function runAi(accountId: string, conversationId: string, force = false, d
     data: qData,
     leadTexts,
   });
-  const autoComplete = Boolean(missingReq && missingReq.length === 0);
+  // Transferência automática: por respostas, por pontuação ou o que vier primeiro
+  const autoReason = perms.handoffSeller ? autoHandoffReason(qualify, missingReq, decision.score) : null;
+  const autoComplete = Boolean(autoReason);
   // "Só transferir": com os dados completos a IA não passa preço, foto nem vídeo — só a transferência
   const silentHandoff = autoComplete && onlyHandoff(qualify);
   if (silentHandoff) {
@@ -1843,7 +1847,7 @@ async function runAi(accountId: string, conversationId: string, force = false, d
 
   if (autoComplete && !decision.handoff) {
     decision.handoff = true;
-    decision.handoffReason = decision.handoffReason || "Dados da qualificação completos";
+    decision.handoffReason = decision.handoffReason || autoReason || "Dados da qualificação completos";
   }
 
   // Só o que este agente tem permissão de fazer (fotos, vídeo, agenda, funil, etiquetas, vendedor)

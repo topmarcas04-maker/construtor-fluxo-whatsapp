@@ -46,7 +46,22 @@ export interface QualifySettings {
    * ONLY_HANDOFF = só transfere, sem preço — e no modo "Antes de informar" o preço nunca é liberado pela IA.
    */
   handoffReply: "ANSWER" | "ONLY_HANDOFF";
+  /**
+   * O que dispara a transferência automática:
+   * DATA = respostas (campos obrigatórios) · SCORE = nota do lead · ANY = o que vier primeiro
+   */
+  handoffBy: HandoffBy;
+  /** Nota mínima (0-100) para transferir quando handoffBy é SCORE ou ANY */
+  handoffScore: number;
 }
+
+export type HandoffBy = "DATA" | "SCORE" | "ANY";
+
+export const HANDOFF_BY: { key: HandoffBy; label: string }[] = [
+  { key: "DATA", label: "Por respostas" },
+  { key: "SCORE", label: "Por pontuação" },
+  { key: "ANY", label: "O que vier primeiro" },
+];
 
 export const DEFAULT_QUALIFY: QualifySettings = {
   mode: "OFF",
@@ -56,6 +71,8 @@ export const DEFAULT_QUALIFY: QualifySettings = {
   required: [],
   autoHandoff: false,
   handoffReply: "ANSWER",
+  handoffBy: "DATA",
+  handoffScore: 70,
 };
 
 export const MAX_CUSTOM_FIELDS = 12;
@@ -107,6 +124,8 @@ export function normalizeQualify(v: unknown): QualifySettings {
     required,
     autoHandoff: o.autoHandoff === true,
     handoffReply: o.handoffReply === "ONLY_HANDOFF" ? "ONLY_HANDOFF" : "ANSWER",
+    handoffBy: o.handoffBy === "SCORE" || o.handoffBy === "ANY" ? o.handoffBy : "DATA",
+    handoffScore: Number.isFinite(Number(o.handoffScore)) ? Math.min(100, Math.max(1, Math.round(Number(o.handoffScore)))) : DEFAULT_QUALIFY.handoffScore,
   };
 }
 
@@ -133,7 +152,33 @@ export function qualifyPending(q: QualifySettings, s: { qualifiedAt?: Date | str
 
 /** Transferência automática no modo "só transferir, sem passar valor" */
 export function onlyHandoff(q: QualifySettings) {
-  return q.mode !== "OFF" && q.autoHandoff && q.required.length > 0 && q.handoffReply === "ONLY_HANDOFF";
+  return q.autoHandoff && q.handoffReply === "ONLY_HANDOFF" && handoffConfigured(q);
+}
+
+/** A transferência por respostas está montada (qualificação ligada e com campos obrigatórios) */
+function dataHandoffReady(q: QualifySettings) {
+  return q.mode !== "OFF" && q.required.length > 0;
+}
+
+/** A transferência automática tem como disparar? */
+export function handoffConfigured(q: QualifySettings) {
+  if (!q.autoHandoff) return false;
+  if (q.handoffBy === "DATA") return dataHandoffReady(q);
+  return true; // SCORE e ANY: a nota sempre existe quando a IA responde
+}
+
+/**
+ * Transferência automática: devolve o motivo quando é hora de passar para o vendedor (ou null).
+ * missingReq vem de missingForHandoff (lista vazia = respostas completas); score é a nota que a IA acabou de dar.
+ */
+export function autoHandoffReason(q: QualifySettings, missingReq: string[] | null, score: number | null | undefined): string | null {
+  if (!q.autoHandoff) return null;
+  const byData = q.handoffBy !== "SCORE" && Boolean(missingReq && missingReq.length === 0);
+  const byScore = q.handoffBy !== "DATA" && typeof score === "number" && score >= q.handoffScore;
+  if (byData && byScore) return `Dados completos e nota ${score}/100`;
+  if (byData) return "Dados da qualificação completos";
+  if (byScore) return `Nota ${score}/100 (mínimo ${q.handoffScore})`;
+  return null;
 }
 
 /**
@@ -166,7 +211,7 @@ export function missingForHandoff(
   q: QualifySettings,
   s: { name?: string | null; city?: string | null; data?: QualifyData | null; leadTexts: string[] }
 ): string[] | null {
-  if (q.mode === "OFF" || !q.autoHandoff || !q.required.length) return null;
+  if (q.mode === "OFF" || !q.autoHandoff || !q.required.length || q.handoffBy === "SCORE") return null;
   return q.required.filter((k) => {
     if (k === "name") return !nameSaidByLead(s.name, s.leadTexts);
     if (k === "city") return !(s.city || "").trim();

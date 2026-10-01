@@ -17,7 +17,7 @@ import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "@
 import { ensureAgents } from "@/lib/agents/shared";
 import { agentSystemPrompt, restrictCatalogItem, restrictDecision, toProfile, agentByKeyword, agentScope, type AgentProfile } from "@/lib/agents/common";
 import { routeWithAi } from "@/lib/ai/router";
-import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff } from "@/lib/ai/qualify";
+import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff, autoHandoffReason } from "@/lib/ai/qualify";
 
 /**
  * POST — conversa de teste com a IA (nada é salvo nem enviado).
@@ -136,6 +136,7 @@ export async function POST(req: NextRequest) {
     // Qualificação "Antes de informar": o teste guarda se o cliente já informou (body.qualified)
     const offerVideo = (fromAgentScreen ? agent.offerVideo : typeof body.draft?.offerVideo === "boolean" ? (body.draft.offerVideo as boolean) : settings.offerVideo) && perms.videos;
     const qualify = normalizeQualify(fromAgentScreen ? agent.qualify : (body.draft?.qualify ?? settings.qualify));
+    if (onlyHandoff(qualify)) for (const c of catalog) c.ai = restrictCatalogItem(c.ai, { ...perms, price: false, installments: false });
     const basePrompt = (draft.systemPrompt ?? settings.systemPrompt) || `Você é a atendente virtual da ${account?.name || "empresa"}.`;
     const leadTexts = msgs.filter((m) => m.from === "lead").map((m) => String(m.text || ""));
     const pending = qualifyPending(qualify, { qualifiedAt: body.qualified ? new Date() : null, leadMessages: leadTexts.length });
@@ -187,7 +188,8 @@ export async function POST(req: NextRequest) {
     }
     // Transferência automática (igual ao atendimento real); "só transferir" não passa preço nem foto
     const missingFirst = missingForHandoff(qualify, { name: d.name, city: d.city, data: mergeQualifyData(qualify, null, d.data), leadTexts });
-    const silentHandoff = Boolean(missingFirst && missingFirst.length === 0 && onlyHandoff(qualify));
+    const autoReason = autoHandoffReason(qualify, missingFirst, d.score);
+    const silentHandoff = Boolean(autoReason && onlyHandoff(qualify));
     if (silentHandoff) {
       d.reply = String(draft.handoffMessage ?? settings.handoffMessage ?? "").trim()
         ? ""
@@ -203,7 +205,7 @@ export async function POST(req: NextRequest) {
     }
     // Transferência automática quando os dados obrigatórios chegaram (igual ao atendimento real)
     const missingReq = missingForHandoff(qualify, { name: d.name, city: d.city, data: mergeQualifyData(qualify, null, d.data), leadTexts });
-    if (missingReq && missingReq.length === 0) d.handoff = true;
+    if (perms.handoffSeller && autoHandoffReason(qualify, missingReq, d.score)) d.handoff = true;
     restrictDecision(d, perms);
     const unlocked = !pending || qualified;
     const parts = d.reply.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).slice(0, 3);

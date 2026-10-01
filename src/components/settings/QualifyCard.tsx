@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ClipboardList, Plus, X, UserCheck } from "lucide-react";
 import { Input, Textarea, Toggle } from "@/components/ui";
-import { MAX_CUSTOM_FIELDS, QUALIFY_MODES, allQualifyFields, type QualifySettings } from "@/lib/ai/qualify";
+import { HANDOFF_BY, MAX_CUSTOM_FIELDS, QUALIFY_MODES, allQualifyFields, type QualifySettings } from "@/lib/ai/qualify";
 
 /** O que a IA pergunta ao cliente e se pergunta antes de passar o preço */
 export function QualifyCard({ q, onChange }: { q: QualifySettings; onChange: (q: QualifySettings) => void }) {
@@ -126,21 +126,59 @@ export function QualifyCard({ q, onChange }: { q: QualifySettings; onChange: (q:
             )}
           </div>
 
-          <div className="mt-4 rounded-lg bg-slate-50 p-3">
-            <p className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-              <UserCheck size={16} /> Passar para o vendedor quando tiver os dados
+          <div className="mt-4">
+            <p className="mb-1.5 text-sm font-semibold text-slate-800">Outras perguntas (opcional)</p>
+            <Textarea
+              rows={2}
+              value={q.custom}
+              onChange={(e) => onChange({ ...q, custom: e.target.value })}
+              placeholder='Ex.: "se já tem CNH", "se tem veículo para dar na troca"'
+            />
+          </div>
+          {q.mode === "BEFORE_PRICE" && (
+            <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              Exemplo: o cliente chega do anúncio com &quot;quero mais informações da FX2&quot; → a IA responde &quot;Oi! Que bom que gostou da FX2 😊 Já te passo tudo! Qual seu
+              nome e de qual cidade você fala?&quot;. Se o cliente insistir sem responder, a IA passa as informações para não perder a venda.
             </p>
-            <div className="mt-2">
-              <Toggle
-                checked={q.autoHandoff}
-                onChange={(v) => onChange({ ...q, autoHandoff: v })}
-                label={q.autoHandoff ? "Sim, transferir sozinho" : "Não, a IA decide quando transferir"}
-              />
+          )}
+        </>
+      )}
+
+      <div className="mt-4 rounded-lg bg-slate-50 p-3">
+        <p className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+          <UserCheck size={16} /> Passar para o vendedor automaticamente
+        </p>
+        <div className="mt-2">
+          <Toggle
+            checked={q.autoHandoff}
+            onChange={(v) => onChange({ ...q, autoHandoff: v })}
+            label={q.autoHandoff ? "Sim, transferir sozinho" : "Não, a IA decide quando transferir"}
+          />
+        </div>
+        {q.autoHandoff && (
+          <>
+            <p className="mt-3 mb-1.5 text-xs font-semibold text-slate-600">Transferir por:</p>
+            <div className="inline-flex flex-wrap gap-1 rounded-xl bg-white p-1">
+              {HANDOFF_BY.map((o) => (
+                <button
+                  key={o.key}
+                  type="button"
+                  onClick={() => onChange({ ...q, handoffBy: o.key })}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
+                    q.handoffBy === o.key ? "bg-[var(--accent)] text-white" : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
             </div>
-            {q.autoHandoff && (
+
+            {q.handoffBy !== "SCORE" && (
               <>
-                <p className="mt-3 mb-1.5 text-xs font-semibold text-slate-600">Transferir assim que o cliente informar:</p>
-                {selected.length === 0 ? (
+                <p className="mt-3 mb-1.5 text-xs font-semibold text-slate-600">Respostas: transferir assim que o cliente informar</p>
+                {q.mode === "OFF" ? (
+                  <p className="text-xs text-amber-700">Escolha acima &quot;Pedir junto&quot; ou &quot;Antes de informar&quot; para a IA perguntar os dados.</p>
+                ) : selected.length === 0 ? (
                   <p className="text-xs text-slate-500">Marque acima o que a IA deve perguntar.</p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
@@ -162,57 +200,85 @@ export function QualifyCard({ q, onChange }: { q: QualifySettings; onChange: (q:
                     })}
                   </div>
                 )}
-                <p className="mt-3 mb-1.5 text-xs font-semibold text-slate-600">Ao completar os dados:</p>
-                <div className="inline-flex flex-wrap gap-1 rounded-xl bg-white p-1">
+              </>
+            )}
+
+            {q.handoffBy !== "DATA" && (
+              <>
+                <p className="mt-3 mb-1.5 text-xs font-semibold text-slate-600">Pontuação: transferir quando a nota do lead chegar a</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={q.handoffScore}
+                    onChange={(e) => onChange({ ...q, handoffScore: Math.min(100, Math.max(1, Math.round(Number(e.target.value) || 1))) })}
+                    className="w-20 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-center text-sm font-bold outline-none focus:border-[var(--accent)]"
+                  />
+                  <span className="text-sm text-slate-500">/ 100</span>
                   {(
                     [
-                      ["ONLY_HANDOFF", "Só transferir, sem passar valor"],
-                      ["ANSWER", "Responder e depois transferir"],
+                      [61, "Quente"],
+                      [70, "Quente+"],
+                      [81, "Pronto p/ comprar"],
                     ] as const
-                  ).map(([key, label]) => (
+                  ).map(([v, l]) => (
                     <button
-                      key={key}
+                      key={v}
                       type="button"
-                      onClick={() => onChange({ ...q, handoffReply: key })}
-                      className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
-                        q.handoffReply === key ? "bg-[var(--accent)] text-white" : "text-slate-500 hover:text-slate-800"
+                      onClick={() => onChange({ ...q, handoffScore: v })}
+                      className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
+                        q.handoffScore === v ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
                       }`}
                     >
-                      {label}
+                      {v} · {l}
                     </button>
                   ))}
                 </div>
                 <p className="mt-1.5 text-xs text-slate-500">
-                  {q.handoffReply === "ONLY_HANDOFF"
-                    ? "A IA nunca passa preço, parcelas nem promoções: quem passa é o vendedor. Com os dados completos, o cliente recebe só a mensagem de transferência. Combine com \"Antes de informar\" para o preço nem chegar à IA."
-                    : "A IA ainda responde o que o cliente pediu (pode incluir o preço) e em seguida transfere."}
-                </p>
-                <p className="mt-2 text-xs text-slate-500">
-                  {q.required.length
-                    ? "Com todos esses dados, a IA para de responder e o lead vai para o próximo vendedor da fila (rodízio em Distribuição), com a mensagem de transferência."
-                    : "Escolha pelo menos um dado para a transferência automática funcionar."}
+                  A nota é dada pela IA a cada resposta: 0-30 curiosidade · 31-60 interessado · 61-80 quente (pede preço/condições) · 81-100 pronto para comprar.
                 </p>
               </>
             )}
-          </div>
 
-          <div className="mt-4">
-            <p className="mb-1.5 text-sm font-semibold text-slate-800">Outras perguntas (opcional)</p>
-            <Textarea
-              rows={2}
-              value={q.custom}
-              onChange={(e) => onChange({ ...q, custom: e.target.value })}
-              placeholder='Ex.: "se já tem CNH", "se tem veículo para dar na troca"'
-            />
-          </div>
-          {q.mode === "BEFORE_PRICE" && (
-            <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-              Exemplo: o cliente chega do anúncio com &quot;quero mais informações da FX2&quot; → a IA responde &quot;Oi! Que bom que gostou da FX2 😊 Já te passo tudo! Qual seu
-              nome e de qual cidade você fala?&quot;. Se o cliente insistir sem responder, a IA passa as informações para não perder a venda.
+            <p className="mt-3 mb-1.5 text-xs font-semibold text-slate-600">Na transferência:</p>
+            <div className="inline-flex flex-wrap gap-1 rounded-xl bg-white p-1">
+              {(
+                [
+                  ["ONLY_HANDOFF", "Só transferir, sem passar valor"],
+                  ["ANSWER", "Responder e depois transferir"],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => onChange({ ...q, handoffReply: key })}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
+                    q.handoffReply === key ? "bg-[var(--accent)] text-white" : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-xs text-slate-500">
+              {q.handoffReply === "ONLY_HANDOFF"
+                ? "A IA nunca passa preço, parcelas nem promoções: quem passa é o vendedor. Na hora da transferência o cliente recebe só a mensagem de transferência."
+                : "A IA ainda responde o que o cliente pediu (pode incluir o preço) e em seguida transfere."}
             </p>
-          )}
-        </>
-      )}
+            <p className="mt-2 text-xs text-slate-500">
+              {q.handoffBy === "SCORE"
+                ? `Quando a nota chegar a ${q.handoffScore}, a IA para de responder e o lead vai para o próximo vendedor da fila (rodízio em Distribuição), com a mensagem de transferência.`
+                : q.handoffBy === "ANY"
+                  ? `Transfere no que acontecer primeiro: os dados marcados completos${q.required.length ? "" : " (nenhum marcado)"} ou a nota ${q.handoffScore}. O lead vai para o próximo vendedor da fila, com a mensagem de transferência.`
+                  : q.required.length && q.mode !== "OFF"
+                    ? "Com todos esses dados, a IA para de responder e o lead vai para o próximo vendedor da fila (rodízio em Distribuição), com a mensagem de transferência."
+                    : "Escolha pelo menos um dado para a transferência automática funcionar."}
+            </p>
+            <p className="mt-1 text-xs text-slate-400">Precisa da permissão &quot;Passar para vendedor&quot; ligada neste agente.</p>
+          </>
+        )}
+      </div>
     </div>
   );
 }
