@@ -17,7 +17,7 @@ import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "@
 import { ensureAgents } from "@/lib/agents/shared";
 import { agentSystemPrompt, restrictCatalogItem, restrictDecision, toProfile, agentByKeyword, agentScope, type AgentProfile } from "@/lib/agents/common";
 import { routeWithAi } from "@/lib/ai/router";
-import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff, autoHandoffReason } from "@/lib/ai/qualify";
+import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff, autoHandoffReason, blockAiHandoff } from "@/lib/ai/qualify";
 
 /**
  * POST — conversa de teste com a IA (nada é salvo nem enviado).
@@ -188,6 +188,10 @@ export async function POST(req: NextRequest) {
     }
     // Transferência automática (igual ao atendimento real); "só transferir" não passa preço nem foto
     const missingFirst = missingForHandoff(qualify, { name: d.name, city: d.city, data: mergeQualifyData(qualify, null, d.data), leadTexts });
+    if (d.handoff && blockAiHandoff(qualify, d.score, d.handoffReason)) {
+      d.handoff = false;
+      d.handoffReason = null;
+    }
     const autoReason = autoHandoffReason(qualify, missingFirst, d.score);
     const silentHandoff = Boolean(autoReason && onlyHandoff(qualify));
     if (silentHandoff) {

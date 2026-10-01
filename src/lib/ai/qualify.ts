@@ -237,13 +237,44 @@ export function maskCatalogItem<T extends { price: string; description: string |
   return { ...item, price: "(liberado depois que souber os dados do cliente)", description: null, installments: [], details: [], hasVideo: false, hasPhoto: false, photoLabels: [] };
 }
 
+/** Transferência só pela nota: a IA não transfere por conta própria só porque o cliente deu os dados */
+function scoreOnly(q: QualifySettings) {
+  return q.autoHandoff && q.handoffBy === "SCORE";
+}
+
+/** Instruções da transferência por pontuação (valem mesmo com "Não pedir" dados) */
+function scoreLines(q: QualifySettings) {
+  if (!q.autoHandoff || q.handoffBy === "DATA") return [];
+  const out = [
+    q.handoffBy === "SCORE"
+      ? `- NÃO transfira para o consultor só porque o cliente informou nome, cidade ou outros dados. Continue o atendimento: entenda o que ele procura, tire dúvidas e mantenha a "pontuacao" atualizada com sinceridade. A transferência acontece sozinha quando o lead esquentar. Só use "transferir" se o cliente pedir para falar com uma pessoa ou fizer uma reclamação.`
+      : `- A transferência acontece sozinha quando o lead esquentar ou quando os dados marcados estiverem completos. Mantenha a "pontuacao" atualizada com sinceridade.`,
+  ];
+  if (onlyHandoff(q)) out.push(`- NUNCA informe preço, valores, parcelas ou promoções: quem passa isso é o consultor. Se o cliente pedir, diga com simpatia que o consultor vai passar valores e condições.`);
+  return out;
+}
+
+/**
+ * Transferência só por pontuação e a nota ainda não chegou: a IA não pode transferir por conta própria
+ * (só quando o cliente pede uma pessoa ou reclama).
+ */
+export function blockAiHandoff(q: QualifySettings, score: number | null | undefined, reason: string | null | undefined) {
+  if (!scoreOnly(q)) return false;
+  if (typeof score === "number" && score >= q.handoffScore) return false;
+  return !/atendente|humano|pessoa|reclama/i.test(reason || "");
+}
+
 /** Bloco do prompt da IA */
 export function qualifyBlock(
   q: QualifySettings | undefined,
   known: { name?: string | null; city?: string | null; data?: QualifyData | null },
   pending = false
 ) {
-  if (!q || q.mode === "OFF") return "";
+  if (!q) return "";
+  if (q.mode === "OFF") {
+    const extra = scoreLines(q);
+    return extra.length ? `\n\nTRANSFERÊNCIA PARA O CONSULTOR\n${extra.join("\n")}` : "";
+  }
   // O nome que vem do perfil do WhatsApp pode ser apelido, empresa ou emoji: a IA confere na conversa.
   // A cidade só é preenchida quando o cliente informa, então essa é confiável.
   const missing = allQualifyFields(q)
@@ -251,7 +282,7 @@ export function qualifyBlock(
     .filter((f) => !(f.key === "city" && known.city))
     .filter((f) => !(known.data?.[f.key]?.value || "").trim());
   const custom = q.custom.trim();
-  if (!missing.length && !custom) return "";
+  if (!missing.length && !custom && !scoreLines(q).length) return "";
   const list = [missing.length ? missing.map((f) => f.ask).join("; ") : null, custom ? `e também: ${custom}` : null].filter(Boolean).join("; ");
   // Antes de passar as informações bastam até 2 dados principais (nome, cidade, endereço, uso); pagamento e prazo vêm depois
   const essentials = missing.filter((f) => ["name", "city", "address", "use"].includes(f.key)).slice(0, 2);
@@ -270,10 +301,12 @@ export function qualifyBlock(
         ? `- Na primeira resposta: cumprimente, mostre que entendeu qual produto ele quer (uma frase curta, sem detalhes técnicos) e peça ${need}, dizendo que é para um consultor passar a melhor condição pra ele. Ex.: "Oi! Que bom que gostou da FX2 😊 Pra um consultor te passar a melhor condição, qual seu nome e de qual cidade você fala?". NÃO mande foto nem vídeo ainda.`
         : `- Na primeira resposta: cumprimente, mostre que entendeu qual produto ele quer (uma frase curta, sem detalhes técnicos) e peça ${need}, dizendo que é para passar as informações e a melhor condição pra ele. Ex.: "Oi! Que bom que gostou da FX2 😊 Já te passo tudo! Qual seu nome e de qual cidade você fala?". NÃO mande foto nem vídeo ainda.`,
       onlyHandoff(q)
-        ? `- Se o cliente pedir o preço de novo sem responder, NÃO passe valores: explique com simpatia que o consultor passa valores e condições assim que ele informar ${need}.`
+        ? `- Se o cliente pedir o preço de novo sem responder, NÃO passe valores: explique com simpatia que o consultor passa valores e condições${scoreOnly(q) ? "" : ` assim que ele informar ${need}`}.`
         : `- Se o cliente pedir as informações ou o preço de novo sem responder, não trave a conversa: passe o que ele pediu e continue pedindo o que falta.`,
       onlyHandoff(q)
-        ? `- Depois que souber: o atendimento passa para o consultor, que envia valores e condições.`
+        ? scoreOnly(q)
+          ? `- Depois que souber: continue o atendimento sem passar valores — tire dúvidas sobre o produto e entenda o interesse. O consultor entra quando o lead esquentar.`
+          : `- Depois que souber: o atendimento passa para o consultor, que envia valores e condições.`
         : `- Depois que souber: responda SOMENTE o que o cliente pediu, de forma curta (ex.: pediu "mais informações" → 2 ou 3 destaques principais; pediu preço → o preço e as parcelas). Não despeje ficha técnica, preço, parcelas e fotos de uma vez.`,
       `- Fotos e vídeo: envie só quando o cliente pedir para ver ou quando ele escolher um modelo/cor. Pode oferecer ("quer que eu te mande a foto?").`,
       `- As outras perguntas podem vir depois, junto com a conversa.`
@@ -292,12 +325,13 @@ export function qualifyBlock(
     lines.push(
       `- Sempre que o cliente informar algum destes dados, preencha em "dados" (repita os que já sabe): ${dataFields.map((f) => `${f.key} = ${f.label}`).join("; ")}.`
     );
-  if (q.autoHandoff && q.required.length) {
+  if (q.autoHandoff && q.required.length && q.handoffBy !== "SCORE") {
     const req = allQualifyFields(q).filter((f) => q.required.includes(f.key));
     lines.push(
       `- Assim que o cliente informar ${req.map((f) => f.ask).join(", ")}, o atendimento passa automaticamente para um consultor. Priorize conseguir esses dados, sem pressionar.`
     );
     if (onlyHandoff(q)) lines.push(`- NUNCA informe preço, valores, parcelas ou promoções: quem passa isso é o consultor.`);
   }
+  lines.push(...scoreLines(q));
   return `\n\nQUALIFICAÇÃO DO LEAD\n${lines.join("\n")}`;
 }

@@ -104,7 +104,7 @@ import { parseFollowupConfig, fillName, type FollowupItem } from "../src/lib/fol
 import { generateFollowup } from "../src/lib/ai/followup";
 import { replyDelayMs, typingMs } from "../src/lib/ai/style";
 import { normalizeSellerHours, sellerAvailability, DEFAULT_AFTER_HOURS } from "../src/lib/ai/hours";
-import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff, autoHandoffReason, type QualifyData } from "../src/lib/ai/qualify";
+import { normalizeQualify, qualifyPending, isQualified, maskCatalogItem, mergeQualifyData, missingForHandoff, onlyHandoff, autoHandoffReason, blockAiHandoff, type QualifyData } from "../src/lib/ai/qualify";
 import { sellerPool, chooseSeller, type RotationState } from "../src/lib/ai/distribution";
 import { loadCatalogFor } from "../src/lib/ai/catalog";
 import { normalizeWaConfig, type WaNumberConfig } from "../src/lib/whatsapp/config";
@@ -1741,6 +1741,12 @@ async function runAi(accountId: string, conversationId: string, force = false, d
   if (!decision) return;
   await clearAiFailure(accountId, lead.id, Boolean(lead.aiPendingAt));
   await logUsage(accountId, agent.id, aiOpts.model, "REPLY", decision.usage);
+  // Transferência só por pontuação: abaixo da nota mínima a IA não passa para o vendedor por conta própria
+  if (decision.handoff && blockAiHandoff(qualify, decision.score, decision.handoffReason)) {
+    console.log(`[IA ${accountId.slice(0, 8)}] transferência segurada: nota ${decision.score} abaixo do mínimo ${qualify.handoffScore}`);
+    decision.handoff = false;
+    decision.handoffReason = null;
+  }
 
   // Dados de qualificação (endereço, uso, campos criados pela empresa...) e transferência automática:
   // com os campos obrigatórios preenchidos, o lead vai para o próximo vendedor da fila.
