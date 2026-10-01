@@ -161,10 +161,10 @@ export function ApiTab() {
         <div>
           <p className="mb-1 text-sm font-semibold text-slate-800">3. Criar ou atualizar lead (ex.: cliente novo do rastreamento)</p>
           <CopyBox
-            text={`curl -X POST ${base}/api/v1/leads \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "phone": "16999998888",\n    "name": "João Silva",\n    "city": "Itápolis",\n    "note": "Plano Rastreamento 24h - placa ABC-1234",\n    "tags": ["Rastreamento", "Cliente ativo"],\n    "column": "Lead quente",\n    "ia": true\n  }'`}
+            text={`curl -X POST ${base}/api/v1/leads \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "phone": "16999998888",\n    "name": "João Silva",\n    "city": "Itápolis",\n    "note": "Plano Rastreamento 24h - placa ABC-1234",\n    "tags": ["Rastreamento", "Cliente ativo"],\n    "funnel": "Funil principal",\n    "column": "Lead quente",\n    "ia": true\n  }'`}
           />
           <p className="mt-2 text-xs text-slate-600">
-            O mesmo telefone não duplica: a chamada atualiza o lead. <b>column</b> é o nome de uma coluna do funil; <b>tags</b> que não existem são criadas.
+            O mesmo telefone não duplica: a chamada atualiza o lead. <b>funnel</b> é o nome do funil (o lead entra na 1ª coluna dele, ou na <b>column</b> indicada); <b>column</b> é o nome de uma coluna do funil; <b>tags</b> que não existem são criadas.
           </p>
         </div>
       </div>

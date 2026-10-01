@@ -6,7 +6,7 @@ import { resolveWhatsappNumber } from "@/lib/services/whatsapp/engineClient";
 
 /**
  * POST /api/v1/leads — cria ou atualiza um lead (aparece em Leads/Funil).
- * { phone, name?, city?, note?, tags?: string[], column?: "Nome da coluna", ia?: boolean }
+ * { phone, name?, city?, note?, tags?: string[], column?: "Nome da coluna", funnel?: "Nome do funil", ia?: boolean }
  */
 export async function POST(req: NextRequest) {
   const a = await requireApiKey(req);

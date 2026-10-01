@@ -9,6 +9,8 @@ export interface LeadInput {
   tags?: string[];
   /** Nome da coluna do funil */
   column?: string | null;
+  /** Nome do funil (vazio = procura a coluna em qualquer funil) */
+  funnel?: string | null;
   /** false = IA pausada (a equipe responde) */
   ia?: boolean;
 }
@@ -40,13 +42,33 @@ export async function upsertLead(accountId: string, phoneJid: string, phone: str
   if (input.city) set.city = String(input.city).slice(0, 120);
   if (input.note) set.note = String(input.note).slice(0, 5000);
   if (typeof input.ia === "boolean") set.aiPaused = !input.ia;
-  if (input.column) {
+  const kinds = ["FIRST_CONTACT", "SECOND_CONTACT", "HOT_LEAD", "SALE"];
+  const place = (col: typeof funnelColumns.$inferSelect, f: typeof funnels.$inferSelect | null | undefined) => {
+    set.columnId = col.id;
+    set.funnelId = f && !f.isDefault ? f.id : null;
+    if (kinds.includes(col.kind)) set.stage = col.kind;
+  };
+  let placed = false;
+  if (input.funnel) {
+    const fs = await db.select().from(funnels).where(eq(funnels.accountId, accountId));
+    const f = fs.find((x) => norm(x.name) === norm(String(input.funnel)));
+    if (f) {
+      const cols = (await db.select().from(funnelColumns).where(and(eq(funnelColumns.accountId, accountId), eq(funnelColumns.funnelId, f.id)))).sort(
+        (a, b) => a.sort - b.sort
+      );
+      const col = (input.column && cols.find((c) => norm(c.name) === norm(String(input.column)))) || cols.find((c) => c.kind === "FIRST_CONTACT") || cols[0];
+      if (col) {
+        place(col, f);
+        placed = true;
+      }
+    }
+  }
+  if (!placed && input.column) {
     const cols = await db.select().from(funnelColumns).where(eq(funnelColumns.accountId, accountId));
     const col = cols.find((c) => norm(c.name) === norm(String(input.column)));
     if (col) {
       const f = col.funnelId ? await db.query.funnels.findFirst({ where: eq(funnels.id, col.funnelId) }) : null;
-      set.columnId = col.id;
-      set.funnelId = f && !f.isDefault ? f.id : null;
+      place(col, f);
     }
   }
 
