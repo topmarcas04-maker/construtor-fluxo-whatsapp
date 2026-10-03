@@ -154,6 +154,7 @@ export async function PUT(req: NextRequest) {
   if (typeof body.systemPrompt === "string") set.systemPrompt = body.systemPrompt;
   if (typeof body.enabled === "boolean") set.enabled = body.enabled;
   if (typeof body.notifySeller === "boolean") set.notifySeller = body.notifySeller;
+  if (body.sellerReminderMinutes !== undefined) set.sellerReminderMinutes = Math.max(0, Math.min(1440, Math.round(Number(body.sellerReminderMinutes) || 0)));
   if (typeof body.schedulingEnabled === "boolean") set.schedulingEnabled = body.schedulingEnabled;
   if (typeof body.model === "string" && body.model.trim()) set.model = body.model.trim().slice(0, 80);
   if (typeof body.handoffMessage === "string") set.handoffMessage = body.handoffMessage;

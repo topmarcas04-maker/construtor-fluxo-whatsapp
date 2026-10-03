@@ -1619,6 +1619,8 @@ async function runAi(accountId: string, conversationId: string, force = false, d
       .set({ agentId: agent.id, ...(routedBy ? { lastAction: `Encaminhado para ${agent.name} (${routedBy})`.slice(0, 120), lastActionAt: new Date() } : {}) })
       .where(eq(leads.id, lead.id));
     await logAgentEvent(accountId, lead.id, agent, "ROUTED", routedBy ? `Encaminhado para ${agent.name} (${routedBy})` : `${agent.name} começou a atender`);
+    // Funil do agente: a conversa veio para ele, o card vai para o funil dele
+    await moveToAgentFunnel(accountId, lead, (agent as { routing?: { funnelId?: string | null } }).routing?.funnelId || null);
   }
   // Na cobertura o agente não passa para a fila de vendedores: o vendedor do lead continua depois
   const perms = covering ? { ...agent.permissions, handoffSeller: false } : agent.permissions;
@@ -2259,12 +2261,14 @@ async function saveAiAppointment(
         ...(durationMinutes ? { durationMinutes } : {}),
         reminderSentAt: null,
         reminderError: null,
+        sellerReminderSentAt: null,
         updatedAt: new Date(),
       })
       .where(eq(appointments.id, existingId));
+    await notifySellerAppointment(accountId, existingId, true);
     return;
   }
-  await db.insert(appointments).values({
+  const [created] = await db.insert(appointments).values({
     accountId,
     leadId,
     sellerId: lead?.sellerId || null,
@@ -2274,7 +2278,62 @@ async function saveAiAppointment(
     reminderMessage: settings.reminderMessage,
     reminderMinutesBefore: settings.reminderMinutesBefore,
     createdBy: "AI",
-  });
+  }).returning({ id: appointments.id });
+  if (created) await notifySellerAppointment(accountId, created.id, false);
+}
+
+/** Leva o card para o funil do agente (se ele tiver um e o lead ainda não fechou) */
+async function moveToAgentFunnel(accountId: string, lead: { id: string; funnelId: string | null; stage: string }, funnelId: string | null) {
+  if (!funnelId || normalizeStage(lead.stage) === "SALE") return;
+  try {
+    const list = await ensureFunnels(db, accountId);
+    const f = list.find((x) => x.id === funnelId);
+    if (!f) return;
+    const target = f.isDefault ? null : f.id;
+    if ((lead.funnelId || null) === target) return;
+    await db.update(leads).set({ funnelId: target, columnId: null, updatedAt: new Date() }).where(eq(leads.id, lead.id));
+    lead.funnelId = target;
+  } catch (err) {
+    console.warn(`[IA ${accountId.slice(0, 8)}] não consegui mover para o funil do agente:`, (err as Error)?.message || err);
+  }
+}
+
+/** Vendedores que podem receber o lead: os do funil dele; se o funil não tiver, os do WhatsApp em que chegou */
+async function allowedSellers(accountId: string, leadId: string, jid: string) {
+  const l = await db.query.leads.findFirst({ where: eq(leads.id, leadId), columns: { funnelId: true } });
+  const list = await ensureFunnels(db, accountId);
+  const f = (l?.funnelId && list.find((x) => x.id === l.funnelId)) || list.find((x) => x.isDefault);
+  if (f && Array.isArray(f.sellerIds) && f.sellerIds.length) return f.sellerIds;
+  return (await configForJid(accountId, jid)).sellerIds;
+}
+
+/** Avisa o vendedor no WhatsApp quando a IA marca (ou remarca) um horário */
+async function notifySellerAppointment(accountId: string, appointmentId: string, moved: boolean) {
+  try {
+    const st = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId), columns: { notifySeller: true } });
+    if (st?.notifySeller === false) return;
+    const appt = await db.query.appointments.findFirst({ where: eq(appointments.id, appointmentId) });
+    if (!appt?.sellerId || !appt.leadId) return;
+    const seller = await db.query.sellers.findFirst({ where: eq(sellers.id, appt.sellerId) });
+    const jid = sellerJid(seller?.phone || null);
+    if (!jid) return;
+    const lead = await db.query.leads.findFirst({ where: eq(leads.id, appt.leadId), with: { conversation: true } });
+    const phone = lead?.phone || (lead?.conversation?.phoneJid?.endsWith("@s.whatsapp.net") ? lead.conversation.phoneJid.split("@")[0] : null);
+    const lines = [
+      moved ? `🔁 *Horário remarcado*` : `📅 *Novo horário marcado pela IA*`,
+      `*Cliente:* ${lead?.cardName || lead?.conversation?.leadName || "sem nome"}`,
+      `*Quando:* ${formatSpDate(appt.startsAt)} às ${formatSpTime(appt.startsAt)}`,
+      `*Assunto:* ${appt.title}`,
+      lead?.city ? `*Cidade:* ${lead.city}` : null,
+      lead?.interest ? `*Interesse:* ${lead.interest}` : null,
+      appt.notes ? `\n${appt.notes}` : null,
+      phone ? `\nFalar com o cliente: https://wa.me/${phone}` : null,
+    ].filter(Boolean);
+    const r = await sendText(accountId, jid, lines.join("\n"), "AI");
+    if (!("error" in r)) await db.update(appointments).set({ sellerNotifiedAt: new Date() }).where(eq(appointments.id, appt.id));
+  } catch (err) {
+    console.warn("[Agenda] não consegui avisar o vendedor:", (err as Error)?.message || err);
+  }
 }
 
 /** Escolhe o vendedor: regras + turno de cada um + rodízio entre os empatados (guarda a vez) */
@@ -2339,7 +2398,7 @@ async function handoffToSeller(
   const current = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
   const city = d.city || current?.city || null;
   const saleType = d.saleType !== "ANY" ? d.saleType : current?.saleType || "ANY";
-  const sellerId = await assignSeller(accountId, rules, city, saleType, (await configForJid(accountId, leadJid)).sellerIds);
+  const sellerId = await assignSeller(accountId, rules, city, saleType, await allowedSellers(accountId, leadId, leadJid));
   const seller = sellerId ? await db.query.sellers.findFirst({ where: eq(sellers.id, sellerId) }) : null;
 
   await db
@@ -2349,7 +2408,7 @@ async function handoffToSeller(
   if (seller) {
     await db
       .update(appointments)
-      .set({ sellerId: seller.id })
+      .set({ sellerId: seller.id, ...(settings.notifySeller ? { sellerNotifiedAt: new Date() } : {}) })
       .where(and(eq(appointments.leadId, leadId), isNull(appointments.sellerId)));
   }
 
@@ -2563,7 +2622,7 @@ async function applyBotOption(
         where: eq(schema.distributionRules.accountId, accountId),
         with: { seller: true },
       });
-      sellerId = await assignSeller(accountId, rules, lead.city, lead.saleType, (await configForJid(accountId, conv.phoneJid)).sellerIds);
+      sellerId = await assignSeller(accountId, rules, lead.city, lead.saleType, await allowedSellers(accountId, lead.id, conv.phoneJid));
     }
     const seller = sellerId ? await db.query.sellers.findFirst({ where: and(eq(sellers.id, sellerId), eq(sellers.accountId, accountId)) }) : null;
     if (seller) {
@@ -2984,7 +3043,7 @@ async function onFollowupReply(accountId: string, conversationId: string, phoneJ
         where: eq(schema.distributionRules.accountId, accountId),
         with: { seller: true },
       });
-      const id = await assignSeller(accountId, rules, lead.city, lead.saleType, (await configForJid(accountId, phoneJid)).sellerIds);
+      const id = await assignSeller(accountId, rules, lead.city, lead.saleType, await allowedSellers(accountId, lead.id, phoneJid));
       seller = id ? (await db.query.sellers.findFirst({ where: eq(sellers.id, id) })) || null : seller;
     }
     if (seller) {
@@ -3137,6 +3196,42 @@ async function processCover() {
 // LEMBRETES DA AGENDA
 // ============================================================================
 
+/** Lembrete para o vendedor antes do horário (minutos em Configurações; 0 = desligado) */
+async function processSellerReminders(now: Date) {
+  const due = await db
+    .select()
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.status, "SCHEDULED"),
+        sql`${appointments.sellerId} is not null`,
+        isNull(appointments.sellerReminderSentAt),
+        gte(appointments.startsAt, new Date(now.getTime() - 10 * 60e3)),
+        sql`coalesce((select s.seller_reminder_minutes from ai_settings s where s.id = ${appointments.accountId}), 30) > 0`,
+        sql`${appointments.startsAt} - make_interval(mins => coalesce((select s.seller_reminder_minutes from ai_settings s where s.id = ${appointments.accountId}), 30)) <= ${now}`
+      )
+    )
+    .limit(50);
+  for (const appt of due) {
+    // marca antes de enviar para nunca mandar duas vezes
+    await db.update(appointments).set({ sellerReminderSentAt: now }).where(eq(appointments.id, appt.id));
+    const seller = appt.sellerId ? await db.query.sellers.findFirst({ where: eq(sellers.id, appt.sellerId) }) : null;
+    const jid = sellerJid(seller?.phone || null);
+    if (!jid) continue;
+    const lead = appt.leadId ? await db.query.leads.findFirst({ where: eq(leads.id, appt.leadId), with: { conversation: true } }) : null;
+    const phone = lead?.phone || (lead?.conversation?.phoneJid?.endsWith("@s.whatsapp.net") ? lead.conversation.phoneJid.split("@")[0] : null);
+    const mins = Math.max(0, Math.round((appt.startsAt.getTime() - now.getTime()) / 60e3));
+    const lines = [
+      `⏰ *${mins > 0 ? `Em ${mins} min` : "Agora"}:* ${appt.title}`,
+      `*Cliente:* ${lead?.cardName || lead?.conversation?.leadName || "sem nome"} · ${formatSpTime(appt.startsAt)}`,
+      lead?.interest ? `*Interesse:* ${lead.interest}` : null,
+      phone ? `\nLigar / chamar: https://wa.me/${phone}` : null,
+    ].filter(Boolean);
+    const r = await sendText(appt.accountId, jid, lines.join("\n"), "AI");
+    if ("error" in r) console.warn("[Agenda] lembrete do vendedor falhou:", r.error);
+  }
+}
+
 let remindersRunning = false;
 
 async function processReminders() {
@@ -3203,6 +3298,7 @@ async function processReminders() {
         console.log(`[Agenda ${appt.accountId.slice(0, 8)}] lembrete enviado: ${appt.title}`);
       }
     }
+    await processSellerReminders(now);
   } catch (err) {
     console.error("[Agenda] erro nos lembretes:", err);
   } finally {

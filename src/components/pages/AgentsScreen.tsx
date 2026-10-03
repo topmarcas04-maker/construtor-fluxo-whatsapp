@@ -28,6 +28,7 @@ interface Data {
   options: {
     products: { id: string; name: string; categoryId: string | null; active: boolean }[];
     categories: { id: string; name: string }[];
+    funnels?: { id: string; name: string; isDefault: boolean }[];
     actions: { id: string; name: string; active: boolean }[];
   };
 }
@@ -302,6 +303,24 @@ function AgentEditor({
           </Field>
           )}
         </div>
+        {!isTemplate && (data.options.funnels || []).length > 1 && (
+          <div className="mt-4">
+            <Field label="Funil deste agente" hint="Quando a conversa vier para este agente (palavra-chave, roteador ou transferência), o card vai para este funil.">
+              <select
+                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                value={routing.funnelId || ""}
+                onChange={(e) => setRouting({ funnelId: e.target.value || null })}
+              >
+                <option value="">Não mudar o funil</option>
+                {(data.options.funnels || []).map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+        )}
         {a.isPrimary && (
           <div className="mt-4 rounded-lg bg-violet-50/70 p-3">
             <Toggle checked={routing.router} onChange={(v) => setRouting({ router: v })} label="Agente Principal encaminha as conversas novas" />

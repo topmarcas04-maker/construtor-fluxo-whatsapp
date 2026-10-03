@@ -15,6 +15,7 @@ const funnelFields = {
   name: schema.funnels.name,
   isDefault: schema.funnels.isDefault,
   sort: schema.funnels.sort,
+  sellerIds: schema.funnels.sellerIds,
 };
 
 const columnFields = {

@@ -632,6 +632,8 @@ export const aiSettings = pgTable("ai_settings", {
   handoffMessage: text("handoff_message"),
   /** Avisar o vendedor no WhatsApp dele quando receber um lead */
   notifySeller: boolean("notify_seller").notNull().default(true),
+  /** Lembrete para o vendedor X minutos antes do agendamento (0 = desligado) */
+  sellerReminderMinutes: integer("seller_reminder_minutes").notNull().default(30),
   /** A IA pode marcar horários na agenda */
   schedulingEnabled: boolean("scheduling_enabled").notNull().default(true),
   /** Horários de atendimento (texto livre, vai para a IA) */
@@ -1146,6 +1148,8 @@ export const funnels = pgTable(
       .references(() => accounts.id, { onDelete: "cascade" }),
     name: varchar("name", { length: 80 }).notNull(),
     isDefault: boolean("is_default").notNull().default(false),
+    /** Vendedores que atendem os leads deste funil (vazio = todos) */
+    sellerIds: jsonb("seller_ids").$type<string[]>().notNull().default([]),
     sort: integer("sort").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1317,6 +1321,9 @@ export const appointments = pgTable(
     reminderMinutesBefore: integer("reminder_minutes_before").notNull().default(0),
     reminderSentAt: timestamp("reminder_sent_at", { withTimezone: true }),
     reminderError: text("reminder_error"),
+    /** Aviso ao vendedor: quando o horário foi marcado e o lembrete antes do horário */
+    sellerNotifiedAt: timestamp("seller_notified_at", { withTimezone: true }),
+    sellerReminderSentAt: timestamp("seller_reminder_sent_at", { withTimezone: true }),
     /** AI | HUMAN */
     createdBy: varchar("created_by", { length: 10 }).notNull().default("HUMAN"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

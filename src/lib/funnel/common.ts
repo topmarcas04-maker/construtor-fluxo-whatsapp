@@ -18,6 +18,8 @@ export interface Funnel {
   name: string;
   isDefault: boolean;
   sort: number;
+  /** Vendedores que atendem este funil (vazio = todos) */
+  sellerIds: string[];
 }
 
 export interface FunnelWithColumns extends Funnel {

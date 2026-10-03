@@ -102,9 +102,11 @@ export interface AgentRouting {
   router: boolean;
   /** Para quais agentes pode transferir (vazio = todos) */
   transferTo: string[];
+  /** Funil para onde o card vai quando a conversa é dele (vazio = não muda) */
+  funnelId: string | null;
 }
 
-export const EMPTY_ROUTING: AgentRouting = { intents: [], hint: "", keywords: [], router: false, transferTo: [] };
+export const EMPTY_ROUTING: AgentRouting = { intents: [], hint: "", keywords: [], router: false, transferTo: [], funnelId: null };
 
 export function normalizeRouting(raw: unknown): AgentRouting {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
@@ -116,6 +118,7 @@ export function normalizeRouting(raw: unknown): AgentRouting {
     keywords: list(r.keywords, 30, 80),
     router: r.router === true,
     transferTo: list(r.transferTo, 50, 64),
+    funnelId: typeof r.funnelId === "string" && /^[0-9a-f-]{36}$/i.test(r.funnelId) ? r.funnelId : null,
   };
 }
 

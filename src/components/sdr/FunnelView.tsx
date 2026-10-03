@@ -181,21 +181,30 @@ function currency(value: number) {
 /** Criar / renomear / apagar funil */
 function FunnelEditor({
   funnel,
+  sellers,
   onClose,
   onSaved,
 }: {
   funnel: FunnelWithColumns | null;
+  sellers: Seller[];
   onClose: () => void;
   onSaved: (list: FunnelWithColumns[]) => void;
 }) {
   const [name, setName] = useState(funnel?.name || "");
+  const [sellerIds, setSellerIds] = useState<string[]>(funnel?.sellerIds || []);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const save = async () => {
     setSaving(true);
     setError(null);
     try {
-      onSaved(funnel ? await api(`/api/sdr/funnels/${funnel.id}`, "PATCH", { name }) : await api("/api/sdr/funnels", "POST", { name }));
+      if (funnel) {
+        onSaved(await api(`/api/sdr/funnels/${funnel.id}`, "PATCH", { name, sellerIds }));
+      } else {
+        const list: FunnelWithColumns[] = await api("/api/sdr/funnels", "POST", { name });
+        const added = list.find((f) => f.name === name.trim() && !f.isDefault && !(f.sellerIds || []).length);
+        onSaved(added && sellerIds.length ? await api(`/api/sdr/funnels/${added.id}`, "PATCH", { sellerIds }) : list);
+      }
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -233,6 +242,31 @@ function FunnelEditor({
               className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
             />
           </label>
+          <div>
+            <span className="text-sm font-medium text-slate-700">Vendedores deste funil</span>
+            <p className="text-xs text-slate-500">Os leads deste funil só são passados para os vendedores marcados (em rodízio). Nenhum marcado = qualquer vendedor.</p>
+            <div className="mt-2 flex max-h-40 flex-wrap gap-1.5 overflow-y-auto">
+              {sellers.length ? (
+                sellers.map((s) => {
+                  const on = sellerIds.includes(s.id);
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setSellerIds(on ? sellerIds.filter((x) => x !== s.id) : [...sellerIds, s.id])}
+                      className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
+                        on ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]" : "border-slate-200 text-slate-500 hover:border-slate-300"
+                      } ${s.active ? "" : "opacity-50"}`}
+                    >
+                      {s.name}
+                    </button>
+                  );
+                })
+              ) : (
+                <span className="text-xs text-slate-400">Nenhum vendedor cadastrado.</span>
+              )}
+            </div>
+          </div>
           {!funnel && (
             <p className="text-xs text-slate-500">
               O funil novo começa com as etapas Primeiro contato, Interessado, Lead quente e Vendas. Depois você cria as colunas que quiser.
@@ -511,6 +545,7 @@ export function FunnelView({
       )}
       {editingFunnel && (
         <FunnelEditor
+          sellers={sellers}
           funnel={editingFunnel === "new" ? null : editingFunnel}
           onClose={() => setEditingFunnel(null)}
           onSaved={(list) => {

@@ -47,6 +47,7 @@ interface AiSettings {
   model: string;
   handoffMessage: string;
   notifySeller: boolean;
+  sellerReminderMinutes?: number;
   schedulingEnabled: boolean;
   businessHours: string | null;
   reminderMessage: string;
@@ -525,6 +526,21 @@ function AiTab() {
           <div className="pt-2">
             <Toggle checked={s.notifySeller} onChange={(v) => setS({ ...s, notifySeller: v })} label={s.notifySeller ? "Sim, avisar no WhatsApp dele" : "Não avisar"} />
           </div>
+        </Field>
+        <Field label="Lembrete do vendedor antes do horário" hint="Avisa o vendedor no WhatsApp antes de cada ligação/visita da Agenda. Ele também recebe aviso quando a IA marca ou remarca um horário.">
+          <select
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+            value={String(s.sellerReminderMinutes ?? 30)}
+            onChange={(e) => setS({ ...s, sellerReminderMinutes: Number(e.target.value) })}
+          >
+            <option value="0">Não lembrar</option>
+            <option value="10">10 minutos antes</option>
+            <option value="15">15 minutos antes</option>
+            <option value="30">30 minutos antes</option>
+            <option value="60">1 hora antes</option>
+            <option value="120">2 horas antes</option>
+            <option value="1440">1 dia antes</option>
+          </select>
         </Field>
         <Field label="Vídeo dos produtos" hint='Quando o cliente se interessa por um produto com vídeo, a IA pergunta "quer ver um vídeo dela?" e envia se ele aceitar.'>
           <div className="pt-2">

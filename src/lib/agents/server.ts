@@ -1,6 +1,6 @@
 import { and, asc, eq, ne, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { accounts, aiAgents, aiSettings, leads, productCategories, products, waNumbers } from "@/db/schema";
+import { accounts, aiAgents, aiSettings, funnels, leads, productCategories, products, waNumbers } from "@/db/schema";
 import { STYLE_PRESETS, LENGTH_OPTIONS, EMOJI_OPTIONS } from "@/lib/ai/style";
 import { normalizeQualify } from "@/lib/ai/qualify";
 import { ensureActions } from "@/lib/actions/shared";
@@ -34,7 +34,7 @@ export async function activeLimitError(accountId: string, exceptId?: string) {
 /** Lista para a tela: agentes, números de conversas, canais vinculados e opções de produtos/ações */
 export async function agentsPayload(accountId: string) {
   const agents = await ensureAgents(db, accountId);
-  const [counts, numberRows, labels, prods, cats, actions, limit] = await Promise.all([
+  const [counts, numberRows, labels, prods, cats, funnelRows, actions, limit] = await Promise.all([
     db
       .select({ agentId: leads.agentId, n: sql<number>`count(*)::int` })
       .from(leads)
@@ -48,6 +48,7 @@ export async function agentsPayload(accountId: string) {
       .where(eq(products.accountId, accountId))
       .orderBy(asc(products.sort), asc(products.name)),
     db.select({ id: productCategories.id, name: productCategories.name }).from(productCategories).where(eq(productCategories.accountId, accountId)),
+    db.select({ id: funnels.id, name: funnels.name, isDefault: funnels.isDefault }).from(funnels).where(eq(funnels.accountId, accountId)).orderBy(asc(funnels.sort)),
     ensureActions(db, accountId),
     agentLimit(accountId),
   ]);
@@ -82,6 +83,7 @@ export async function agentsPayload(accountId: string) {
     options: {
       products: prods,
       categories: cats,
+      funnels: funnelRows,
       actions: actions.map((x) => ({ id: x.id, name: x.name, active: x.active })),
     },
   };
