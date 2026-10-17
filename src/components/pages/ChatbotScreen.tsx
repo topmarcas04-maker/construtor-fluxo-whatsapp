@@ -54,7 +54,7 @@ export function ChatbotScreen() {
   const load = useCallback(async () => {
     const d = await api("/api/chatbot", "GET");
     setBots(d.bots);
-    setRefs({ tags: d.tags, sellers: d.sellers, funnels: d.funnels, aiEnabled: d.aiEnabled, storageReady: Boolean(d.storageReady), agents: d.agents || [] });
+    setRefs({ tags: d.tags, sellers: d.sellers, funnels: d.funnels, aiEnabled: d.aiEnabled, storageReady: Boolean(d.storageReady), agents: d.agents || [], products: d.products || [] });
   }, []);
   useEffect(() => {
     load().catch((e) => setError((e as Error).message));
