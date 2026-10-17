@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS messages (
   direction message_direction NOT NULL,
   body text NOT NULL,
   message_type varchar(40),
-  whatsapp_message_id varchar(100),
+  whatsapp_message_id varchar(255),
   sent_at timestamptz NOT NULL DEFAULT now(),
   media_data_url text,
   media_mime_type varchar(100),
@@ -385,6 +385,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS agent_template_ids jsonb NOT NULL 
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS sign_messages boolean NOT NULL DEFAULT true;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS alert_phone varchar(40);
 CREATE INDEX IF NOT EXISTS messages_whatsapp_message_id_idx ON messages (whatsapp_message_id);
+ALTER TABLE messages ALTER COLUMN whatsapp_message_id TYPE varchar(255);
 
 -- Catálogo de produtos
 CREATE TABLE IF NOT EXISTS product_categories (

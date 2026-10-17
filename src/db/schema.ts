@@ -327,7 +327,7 @@ export const messages = pgTable(
     direction: messageDirectionEnum("direction").notNull(),
     body: text("body").notNull(),
     messageType: varchar("message_type", { length: 40 }),
-    whatsappMessageId: varchar("whatsapp_message_id", { length: 100 }),
+    whatsappMessageId: varchar("whatsapp_message_id", { length: 255 }),
     sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
     mediaDataUrl: text("media_data_url"),
     mediaMimeType: varchar("media_mime_type", { length: 100 }),
