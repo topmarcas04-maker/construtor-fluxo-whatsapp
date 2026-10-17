@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
-import { aiSettings, driveFiles, sellers, tags } from "@/db/schema";
+import { aiSettings, driveFiles, productImages, products, sellers, tags } from "@/db/schema";
 import { storageReady } from "@/lib/storage/s3";
 import { ensureAgents } from "@/lib/agents/shared";
 import { funnelsWithColumns } from "@/lib/funnel/shared";
@@ -8,7 +8,7 @@ import type { BotRefs } from "@/lib/chatbot/validate";
 
 /** Etiquetas, vendedores e colunas da conta (para a tela e para validar) */
 export async function chatbotRefs(accountId: string) {
-  const [tagRows, sellerRows, funnels, ai, fileRows, agents] = await Promise.all([
+  const [tagRows, sellerRows, funnels, ai, fileRows, agents, productRows] = await Promise.all([
     db.select({ id: tags.id, name: tags.name, color: tags.color }).from(tags).where(eq(tags.accountId, accountId)),
     db.select({ id: sellers.id, name: sellers.name, active: sellers.active }).from(sellers).where(eq(sellers.accountId, accountId)),
     funnelsWithColumns(db, accountId),
@@ -18,12 +18,21 @@ export async function chatbotRefs(accountId: string) {
       .from(driveFiles)
       .where(eq(driveFiles.accountId, accountId)),
     ensureAgents(db, accountId),
+    db.select().from(products).where(eq(products.accountId, accountId)).orderBy(asc(products.sort), asc(products.name)),
   ]);
+  const imgRows = productRows.length
+    ? await db
+        .select({ id: productImages.id, productId: productImages.productId, label: productImages.label, active: productImages.active, availability: productImages.availability, leadTimeDays: productImages.leadTimeDays })
+        .from(productImages)
+        .where(inArray(productImages.productId, productRows.map((p) => p.id)))
+        .orderBy(asc(productImages.sort))
+    : [];
   const refs: BotRefs = {
     tagIds: new Set(tagRows.map((t) => t.id)),
     sellerIds: new Set(sellerRows.map((s) => s.id)),
     columnIds: new Set(funnels.flatMap((f) => f.columns.map((c) => c.id))),
     agentIds: new Set(agents.map((a) => a.id)),
+    productIds: new Set(productRows.map((p) => p.id)),
     files: new Map(fileRows.map((f) => [f.id, { name: f.name, mime: f.mime, size: f.size, kind: f.kind }])),
   };
   return {
@@ -36,6 +45,23 @@ export async function chatbotRefs(accountId: string) {
       /** Bucket configurado (sem ele não dá para usar foto, áudio, vídeo e PDF) */
       storageReady: storageReady(),
       agents: agents.filter((a) => a.active).map((a) => ({ id: a.id, name: a.name, isPrimary: a.isPrimary })),
+      /** Produtos para o bloco de produto (sem as fotos em si: só os ids) */
+      products: productRows.map((p) => ({
+        id: p.id,
+        name: p.name,
+        active: p.active,
+        kind: p.kind,
+        price: p.price,
+        promoPrice: p.promoPrice,
+        pixPrice: p.pixPrice,
+        pixNote: p.pixNote,
+        billingPeriod: p.billingPeriod,
+        installments: p.installments || [],
+        availability: p.availability,
+        leadTimeDays: p.leadTimeDays,
+        description: p.description,
+        images: imgRows.filter((i) => i.productId === p.id).map(({ productId: _p, ...i }) => i),
+      })),
     },
   };
 }

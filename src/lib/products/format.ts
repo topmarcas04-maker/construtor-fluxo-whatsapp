@@ -15,6 +15,15 @@ export function cashPrice(p: { price: number | null; promoPrice: number | null }
   return p.promoPrice ?? p.price ?? null;
 }
 
+export const PIX_NOTE_DEFAULT = "enquanto durar o estoque";
+
+/** "Mega desconto no Pix: R$ 7.990,00 (enquanto durar o estoque)" — vazio se não houver */
+export function pixOfferText(p: { pixPrice?: number | null; pixNote?: string | null }) {
+  if (p.pixPrice == null) return "";
+  const note = (p.pixNote ?? "").trim() || PIX_NOTE_DEFAULT;
+  return `MEGA DESCONTO NO PIX: ${brl(p.pixPrice)} (${note})`;
+}
+
 export interface Installment {
   n: number;
   /** Total a prazo; vazio = mesmo valor à vista (sem juros) */
@@ -70,6 +79,8 @@ type PriceInfo = {
   kind?: string | null;
   price: number | null;
   promoPrice: number | null;
+  pixPrice?: number | null;
+  pixNote?: string | null;
   billingPeriod?: string | null;
 };
 
@@ -146,6 +157,7 @@ export function productCaption(product: CaptionProduct, img: CaptionImage | null
     const cash = cashPrice(product)!;
     if (product.promoPrice != null && product.price != null && product.price > product.promoPrice) lines.push(`De ~${brl(product.price)}~ por`);
     lines.push(`💰 *${brl(cash)} à vista*`);
+    if (product.pixPrice != null) lines.push(`⚡ *Mega desconto no Pix: ${brl(product.pixPrice)}*`, `_${(product.pixNote ?? "").trim() || PIX_NOTE_DEFAULT}_`);
   } else {
     lines.push(`💰 *${kindPriceLabel(product)}*`);
   }

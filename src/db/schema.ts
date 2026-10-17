@@ -1241,6 +1241,10 @@ export const products = pgTable(
     price: doublePrecision("price"),
     /** Preço promocional (opcional) */
     promoPrice: doublePrecision("promo_price"),
+    /** Mega desconto no Pix: preço especial à vista no Pix (opcional) */
+    pixPrice: doublePrecision("pix_price"),
+    /** Condição do desconto no Pix (ex.: "enquanto durar o estoque") */
+    pixNote: varchar("pix_note", { length: 200 }),
     code: varchar("code", { length: 60 }),
     active: boolean("active").notNull().default(true),
     /** PHYSICAL = produto físico | PLAN = plano/mensalidade | SERVICE = serviço */

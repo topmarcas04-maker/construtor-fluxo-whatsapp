@@ -432,6 +432,8 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS setup_fee double precision;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS commitment_months integer;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS trial_days integer;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS duration_minutes integer;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS pix_price double precision;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS pix_note varchar(200);
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS product_id uuid REFERENCES products(id) ON DELETE SET NULL;
 
 -- Funil com colunas personalizadas

@@ -18,13 +18,14 @@ export function productValues(body: Record<string, unknown>, partial: boolean) {
     const n = Number(clean.replace(/\./g, "").replace(",", "."));
     return Number.isFinite(n) && n >= 0 ? n : NaN;
   };
-  for (const f of ["price", "promoPrice"] as const) {
+  for (const f of ["price", "promoPrice", "pixPrice"] as const) {
     if (body[f] !== undefined) {
       const n = money(body[f]);
       if (Number.isNaN(n)) return { error: "Preço inválido" } as const;
       v[f] = n;
     }
   }
+  if (body.pixNote !== undefined) v.pixNote = String(body.pixNote || "").trim().slice(0, 200) || null;
   if (body.description !== undefined) v.description = String(body.description || "").slice(0, 5000) || null;
   if (body.code !== undefined) v.code = String(body.code || "").trim().slice(0, 60) || null;
   if (body.active !== undefined) v.active = Boolean(body.active);

@@ -13,6 +13,7 @@ import {
   effectiveAvailability,
   availabilityText,
   kindPriceLabel,
+  pixOfferText,
   kindDetails,
   KIND_LABEL,
 } from "../products/format";
@@ -53,6 +54,8 @@ export async function loadCatalogFor(db: Db, accountId: string, actions: AiActio
       description: products.description,
       price: products.price,
       promoPrice: products.promoPrice,
+      pixPrice: products.pixPrice,
+      pixNote: products.pixNote,
       availability: products.availability,
       leadTimeDays: products.leadTimeDays,
       installments: products.installments,
@@ -97,7 +100,8 @@ export async function loadCatalogFor(db: Db, accountId: string, actions: AiActio
       code: `P${i + 1}`,
       name: r.name,
       category: r.category,
-      price: kindPriceLabel(r),
+      // O desconto no Pix vai junto do preço: some quando o agente não pode falar de preço
+      price: [kindPriceLabel(r), r.kind === "PHYSICAL" ? pixOfferText(r) : ""].filter(Boolean).join(" · "),
       kind: KIND_LABEL[r.kind] || "Produto",
       actions: productActionNames(r, actions),
       details: kindDetails(r),

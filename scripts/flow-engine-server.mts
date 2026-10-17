@@ -2548,7 +2548,17 @@ async function enterStep(
   if (!step) return endBot(accountId, lead.id, conv.id, "HUMAN", bot.id);
   const nome = lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conv.leadName;
   const kind = step.kind || "MENU";
-  if (kind !== "MENU" && step.media?.fileId) {
+  if (kind === "PRODUCT" && step.product?.productId) {
+    // Bloco de produto: foto do cadastro com nome, preço, parcelas, Pix e entrega (sem arquivo no Drive)
+    const intro = fillBotText(step.message || "", { nome }).trim();
+    if (intro) {
+      await pause(700);
+      await sendText(accountId, conv.phoneJid, intro, "BOT");
+    }
+    await pause(900);
+    const r = await sendProductPhoto(accountId, conv.phoneJid, step.product.productId, "BOT", null, step.product.withDescription, { label: step.product.color });
+    if (r && "error" in r && r.error) console.warn(`[Chatbot ${accountId.slice(0, 8)}] produto não enviado (${step.name}):`, r.error);
+  } else if (kind !== "MENU" && kind !== "PRODUCT" && step.media?.fileId) {
     // Bloco de mídia: foto, áudio (como gravado na hora), vídeo ou PDF, com legenda
     await pause(kind === "AUDIO" ? 1200 : 800);
     const caption = kind === "AUDIO" ? null : fillBotText(step.message || "", { nome }) || null;

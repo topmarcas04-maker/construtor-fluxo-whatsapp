@@ -10,14 +10,16 @@ import {
   renderStep,
   type BotMedia,
   type BotNext,
-  type StepKind,
+  type MediaKind,
 } from "@/lib/chatbot/common";
-import { KIND_META, fileUrl, kindOfStep, tagTone, waBold, type Draft, type Refs } from "./shared";
+import { pickProductImage, productCaption } from "@/lib/products/format";
+import { KIND_META, fileUrl, kindOfStep, productImageUrl, tagTone, waBold, type Draft, type Refs } from "./shared";
 
 type Line =
   | { from: "lead"; text: string }
   | { from: "bot"; text: string }
-  | { from: "media"; kind: Exclude<StepKind, "MENU">; media: BotMedia | null; caption: string }
+  | { from: "media"; kind: MediaKind; media: BotMedia | null; caption: string }
+  | { from: "product"; imageUrl: string | null; caption: string }
   | { from: "sys"; text: string; tone?: "ok" | "warn" | "info" };
 
 export function Simulator({ bot, refs, onActive }: { bot: Draft; refs: Refs; onActive: (stepId: string | null) => void }) {
@@ -77,6 +79,14 @@ export function Simulator({ bot, refs, onActive }: { bot: Draft; refs: Refs; onA
     if (kind === "MENU") {
       const t = renderStep(s, vars);
       if (t) out.push({ from: "bot", text: t });
+    } else if (kind === "PRODUCT") {
+      if (s.message.trim()) out.push({ from: "bot", text: fillBotText(s.message, vars) });
+      const p = (refs.products || []).find((x) => x.id === s.product?.productId);
+      if (!p) out.push({ from: "sys", text: `“${s.name}”: escolha o produto do bloco`, tone: "warn" });
+      else {
+        const img = pickProductImage(p.images, { label: s.product?.color || null });
+        out.push({ from: "product", imageUrl: img ? productImageUrl(img.id) : null, caption: productCaption(p, img, Boolean(s.product?.withDescription)) });
+      }
     } else {
       out.push({ from: "media", kind, media: s.media || null, caption: kind === "AUDIO" ? "" : fillBotText(s.message || "", vars) });
     }
@@ -234,7 +244,17 @@ export function Simulator({ bot, refs, onActive }: { bot: Draft; refs: Refs; onA
                 <p className="mb-0.5 flex items-center gap-1 px-1 text-[10px] font-semibold text-teal-700">
                   <Workflow size={10} /> Chatbot
                 </p>
-                {l.from === "bot" ? <div className="whitespace-pre-wrap px-1 pb-0.5">{waBold(l.text)}</div> : <MediaBubble line={l} />}
+                {l.from === "bot" ? (
+                  <div className="whitespace-pre-wrap px-1 pb-0.5">{waBold(l.text)}</div>
+                ) : l.from === "product" ? (
+                  <div className="w-[230px]">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    {l.imageUrl && <img src={l.imageUrl} alt="" className="max-h-56 w-full rounded-xl bg-white object-contain" />}
+                    <p className="whitespace-pre-wrap px-1 pt-1 pb-0.5">{waBold(l.caption)}</p>
+                  </div>
+                ) : (
+                  <MediaBubble line={l} />
+                )}
               </div>
             </div>
           );

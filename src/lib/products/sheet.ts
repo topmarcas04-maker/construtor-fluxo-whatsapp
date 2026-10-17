@@ -10,6 +10,8 @@ export const SHEET_COLUMNS = [
   { key: "kind", header: "Tipo", width: 12, note: "Produto, Plano ou Serviço (vazio = Produto)." },
   { key: "price", header: "Preço", width: 12, note: "Preço à vista. Ex.: 10990 ou 10.990,00. Vazio = sob consulta." },
   { key: "promoPrice", header: "Preço promocional", width: 16, note: "Opcional." },
+  { key: "pixPrice", header: "Mega desconto Pix", width: 16, note: "Opcional. Preço especial no Pix que a IA informa junto com o preço." },
+  { key: "pixNote", header: "Condição Pix", width: 24, note: "Opcional. Vazio = enquanto durar o estoque." },
   { key: "n1", header: "Parcelas 1", width: 11, note: "Quantidade de parcelas. Ex.: 12" },
   { key: "t1", header: "Total a prazo 1", width: 15, note: "Total no cartão. Vazio = sem juros (mesmo valor à vista)." },
   { key: "n2", header: "Parcelas 2", width: 11, note: "" },
@@ -129,6 +131,8 @@ export function rowToBody(row: SheetRow) {
     kind,
     price: row.price ?? null,
     promoPrice: row.promoPrice ?? null,
+    pixPrice: kind === "PHYSICAL" ? row.pixPrice ?? null : null,
+    pixNote: row.pixNote ?? null,
     description: row.description ?? null,
     active: yes(row.active),
     availability: reserve ? "ORDER" : "READY",
@@ -165,6 +169,8 @@ export async function buildProductSheet(
     kind: string;
     price: number | null;
     promoPrice: number | null;
+    pixPrice?: number | null;
+    pixNote?: string | null;
     installments: { n: number; total: number | null }[];
     availability: string;
     leadTimeDays: number | null;
@@ -198,6 +204,8 @@ export async function buildProductSheet(
       kind: KIND[p.kind] || "Produto",
       price: p.price ?? "",
       promoPrice: p.promoPrice ?? "",
+      pixPrice: p.pixPrice ?? "",
+      pixNote: p.pixNote ?? "",
       n1: inst[0]?.n ?? "",
       t1: inst[0]?.total ?? "",
       n2: inst[1]?.n ?? "",
@@ -216,7 +224,7 @@ export async function buildProductSheet(
       durationMinutes: p.kind === "SERVICE" ? p.durationMinutes ?? "" : "",
     });
   }
-  for (const k of ["price", "promoPrice", "t1", "t2", "t3", "setupFee"]) ws.getColumn(k).numFmt = "#,##0.00";
+  for (const k of ["price", "promoPrice", "pixPrice", "t1", "t2", "t3", "setupFee"]) ws.getColumn(k).numFmt = "#,##0.00";
   ws.getColumn("description").alignment = { wrapText: true, vertical: "top" };
 
   // Aba de instruções

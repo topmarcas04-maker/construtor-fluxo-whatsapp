@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { FileText, Image as ImageIcon, MessageSquare, Mic, Tag as TagIcon, Video } from "lucide-react";
+import { FileText, Image as ImageIcon, MessageSquare, Mic, Package, Tag as TagIcon, Video } from "lucide-react";
 import type { BotStep, Chatbot, StepKind } from "@/lib/chatbot/common";
 import { stepKind } from "@/lib/chatbot/common";
 
@@ -17,7 +17,28 @@ export interface Refs {
   aiEnabled: boolean;
   storageReady: boolean;
   agents: { id: string; name: string; isPrimary: boolean }[];
+  products?: BotProductRef[];
 }
+
+export interface BotProductRef {
+  id: string;
+  name: string;
+  active: boolean;
+  kind: string;
+  price: number | null;
+  promoPrice: number | null;
+  pixPrice: number | null;
+  pixNote: string | null;
+  billingPeriod: string;
+  installments: { n: number; total: number | null }[];
+  availability: string;
+  leadTimeDays: number | null;
+  description: string | null;
+  images: { id: string; label: string | null; active: boolean; availability: string | null; leadTimeDays: number | null }[];
+}
+
+/** Foto do produto mostrada no painel */
+export const productImageUrl = (imageId: string) => `/api/products/image/${imageId}`;
 
 export type Draft = Omit<Chatbot, "id" | "sort"> & { id?: string };
 
@@ -39,6 +60,7 @@ export const KIND_META: Record<StepKind, { label: string; Icon: typeof ImageIcon
   AUDIO: { label: "Áudio", Icon: Mic, color: "#7c3aed", soft: "bg-violet-50", text: "text-violet-700" },
   VIDEO: { label: "Vídeo", Icon: Video, color: "#e11d48", soft: "bg-rose-50", text: "text-rose-700" },
   DOCUMENT: { label: "PDF", Icon: FileText, color: "#d97706", soft: "bg-amber-50", text: "text-amber-700" },
+  PRODUCT: { label: "Produto", Icon: Package, color: "#059669", soft: "bg-emerald-50", text: "text-emerald-700" },
 };
 
 export const kindOfStep = (s: BotStep) => stepKind(s);

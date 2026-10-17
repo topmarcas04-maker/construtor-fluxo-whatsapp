@@ -32,8 +32,19 @@ export interface BotOption {
   agentId?: string | null;
 }
 
-/** Tipo do bloco: mensagem/menu ou mídia (foto, áudio, vídeo, PDF) */
-export type StepKind = "MENU" | "IMAGE" | "AUDIO" | "VIDEO" | "DOCUMENT";
+/** Tipo do bloco: mensagem/menu, mídia (foto, áudio, vídeo, PDF) ou produto do catálogo */
+export type StepKind = "MENU" | "IMAGE" | "AUDIO" | "VIDEO" | "DOCUMENT" | "PRODUCT";
+/** Blocos que levam arquivo do Drive */
+export type MediaKind = Exclude<StepKind, "MENU" | "PRODUCT">;
+
+/** Bloco de produto: manda a foto do cadastro de Produtos com nome, preço, parcelas e Pix */
+export interface BotProduct {
+  productId: string;
+  /** Cor (nome da foto). Vazio = foto principal */
+  color: string | null;
+  /** Manda também a descrição do produto */
+  withDescription: boolean;
+}
 
 /** Arquivo do bloco de mídia (guardado no Drive da conta) */
 export interface BotMedia {
@@ -58,6 +69,8 @@ export interface BotStep {
   /** Vazio = MENU */
   kind?: StepKind;
   media?: BotMedia | null;
+  /** Bloco de produto */
+  product?: BotProduct | null;
   /** Posição no desenho do fluxo */
   pos?: { x: number; y: number } | null;
 }
@@ -68,10 +81,11 @@ export const STEP_KIND_LABEL: Record<StepKind, string> = {
   AUDIO: "Áudio",
   VIDEO: "Vídeo",
   DOCUMENT: "PDF / documento",
+  PRODUCT: "Produto",
 };
 
 /** Tipos de arquivo aceitos em cada bloco */
-export const STEP_KIND_ACCEPT: Record<Exclude<StepKind, "MENU">, string> = {
+export const STEP_KIND_ACCEPT: Record<MediaKind, string> = {
   IMAGE: "image/jpeg,image/png,image/webp",
   AUDIO: "audio/*",
   VIDEO: "video/mp4,video/3gpp,video/quicktime",

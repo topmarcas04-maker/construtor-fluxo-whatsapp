@@ -28,6 +28,8 @@ export async function GET(req: NextRequest) {
       kind: p.kind,
       price: p.price,
       promoPrice: p.promoPrice,
+      pixPrice: p.pixPrice,
+      pixNote: p.pixNote,
       installments: p.installments || [],
       availability: p.availability,
       leadTimeDays: p.leadTimeDays,

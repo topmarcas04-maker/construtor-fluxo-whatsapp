@@ -167,7 +167,7 @@ export function ChatbotScreen() {
               </div>
               <p className="mt-3 line-clamp-2 text-sm text-slate-600">{fillBotText(b.steps[0]?.message || "", {})}</p>
               <div className="mt-3 flex flex-wrap gap-1.5">
-                {(["MENU", "IMAGE", "AUDIO", "VIDEO", "DOCUMENT"] as StepKind[]).map((k) => {
+                {(["MENU", "PRODUCT", "IMAGE", "AUDIO", "VIDEO", "DOCUMENT"] as StepKind[]).map((k) => {
                   const n = b.steps.filter((x) => stepKind(x) === k).length;
                   if (!n) return null;
                   const M = KIND_META[k];
@@ -287,6 +287,7 @@ function BotEditor({
       nextStepId: null,
       kind,
       media: null,
+      product: kind === "PRODUCT" ? { productId: "", color: null, withDescription: false } : null,
       pos,
     };
     change((x) => {
@@ -363,11 +364,18 @@ function BotEditor({
   };
 
   const save = async () => {
-    const missing = d.steps.find((s) => stepKind(s) !== "MENU" && !s.media);
+    const missing = d.steps.find((s) => stepKind(s) !== "MENU" && stepKind(s) !== "PRODUCT" && !s.media);
     if (missing) {
       setSelected(missing.id);
       setTab("bloco");
       setError(`"${missing.name}": envie o arquivo do bloco (ou exclua o bloco).`);
+      return;
+    }
+    const noProduct = d.steps.find((s) => stepKind(s) === "PRODUCT" && !s.product?.productId);
+    if (noProduct) {
+      setSelected(noProduct.id);
+      setTab("bloco");
+      setError(`"${noProduct.name}": escolha o produto do bloco (ou exclua o bloco).`);
       return;
     }
     setSaving(true);
@@ -437,6 +445,7 @@ function BotEditor({
             onSetEnd={onSetEnd}
             onCreate={onCreate}
             agents={refs.agents}
+            products={refs.products || []}
             onAutoLayout={() => {
               const pos = autoLayout(d.steps);
               change((x) => ({ ...x, steps: x.steps.map((s) => ({ ...s, pos: pos[s.id] || s.pos })) }));

@@ -1,7 +1,7 @@
 /**
  * Validação do chatbot enviado pela tela. Sem dependências (roda no servidor).
  */
-import type { BotMedia, BotNext, BotOption, BotStep, BotTrigger, StepKind } from "./common";
+import type { BotMedia, BotNext, BotOption, BotProduct, BotStep, BotTrigger, MediaKind, StepKind } from "./common";
 
 const TRIGGERS: BotTrigger[] = ["START", "KEYWORD", "TAG"];
 const NEXTS: BotNext[] = ["STEP", "HUMAN", "AI", "END"];
@@ -24,10 +24,12 @@ export interface BotRefs {
   files: Map<string, { name: string; mime: string; size: number; kind: string }>;
   /** Agentes de IA da conta */
   agentIds: Set<string>;
+  /** Produtos da conta (para o bloco de produto) */
+  productIds: Set<string>;
 }
 
-const KINDS: StepKind[] = ["MENU", "IMAGE", "AUDIO", "VIDEO", "DOCUMENT"];
-const FILE_KIND: Record<Exclude<StepKind, "MENU">, string[]> = {
+const KINDS: StepKind[] = ["MENU", "IMAGE", "AUDIO", "VIDEO", "DOCUMENT", "PRODUCT"];
+const FILE_KIND: Record<MediaKind, string[]> = {
   IMAGE: ["image"],
   AUDIO: ["audio"],
   VIDEO: ["video"],
@@ -67,11 +69,17 @@ export function chatbotValues(body: Record<string, unknown>, refs: BotRefs): { e
     if (options.length > MAX_OPTIONS) return { error: `${blockName}: máximo de ${MAX_OPTIONS} opções` };
     if (kind === "MENU" && !message && !options.length) return { error: `${blockName}: escreva a mensagem` };
     let media: BotMedia | null = null;
-    if (kind !== "MENU") {
+    let product: BotProduct | null = null;
+    if (kind === "PRODUCT") {
+      const pr = (raw.product || {}) as Record<string, unknown>;
+      const pid = String(pr.productId || "");
+      if (!refs.productIds.has(pid)) return { error: `${blockName}: escolha o produto` };
+      product = { productId: pid, color: str(pr.color, 60) || null, withDescription: Boolean(pr.withDescription) };
+    } else if (kind !== "MENU") {
       const m = (raw.media || {}) as Record<string, unknown>;
       const f = refs.files.get(String(m.fileId || ""));
       if (!f) return { error: `${blockName}: envie o arquivo do bloco` };
-      if (!FILE_KIND[kind].includes(f.kind)) return { error: `${blockName}: o arquivo não é do tipo certo` };
+      if (!FILE_KIND[kind as MediaKind].includes(f.kind)) return { error: `${blockName}: o arquivo não é do tipo certo` };
       media = { fileId: String(m.fileId), name: f.name, mime: f.mime, size: f.size };
     }
     const keys = new Set<string>();
@@ -112,7 +120,7 @@ export function chatbotValues(body: Record<string, unknown>, refs: BotRefs): { e
     const py = Number((raw.pos as { y?: unknown } | null)?.y);
     const pos = Number.isFinite(px) && Number.isFinite(py) ? { x: Math.round(px), y: Math.round(py) } : null;
     const agentId = stepNext === "AI" && raw.agentId && refs.agentIds.has(String(raw.agentId)) ? String(raw.agentId) : null;
-    steps.push({ id, name: blockName, message, options: opts, next: stepNext, nextStepId, agentId, kind, media, pos });
+    steps.push({ id, name: blockName, message, options: opts, next: stepNext, nextStepId, agentId, kind, media, product, pos });
   }
 
   return {

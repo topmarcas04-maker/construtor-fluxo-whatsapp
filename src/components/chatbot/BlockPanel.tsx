@@ -13,9 +13,11 @@ import {
   type BotOption,
   type BotStep,
   type BotTrigger,
+  type MediaKind,
   type StepKind,
 } from "@/lib/chatbot/common";
-import { KIND_META, TagPicker, fileUrl, fmtBytes, kindOfStep, type Draft, type Refs, type TagRef } from "./shared";
+import { KIND_META, TagPicker, fileUrl, fmtBytes, kindOfStep, productImageUrl, type Draft, type Refs, type TagRef } from "./shared";
+import { brl, pickProductImage, pixOfferText, productCaption } from "@/lib/products/format";
 
 const MAX_BYTES = 100 * 1024 * 1024;
 
@@ -179,9 +181,11 @@ export function BlockPanel({
             )}
           </div>
         </>
+      ) : kind === "PRODUCT" ? (
+        <ProductField step={step} refs={refs} onChange={onChange} />
       ) : (
         <>
-          <MediaField kind={kind} media={step.media || null} storageReady={refs.storageReady} onChange={(media) => onChange({ media })} />
+          <MediaField kind={kind as MediaKind} media={step.media || null} storageReady={refs.storageReady} onChange={(media) => onChange({ media })} />
           {kind !== "AUDIO" && (
             <Field label="Legenda (opcional)" hint="Aparece junto com o arquivo. Use {nome} para o nome do cliente.">
               <Textarea rows={2} value={step.message} onChange={(e) => onChange({ message: e.target.value })} placeholder={kind === "DOCUMENT" ? "Ex.: Segue nosso catálogo completo 📄" : "Ex.: Olha que linda, {nome}! 😍"} />
@@ -198,6 +202,79 @@ export function BlockPanel({
 }
 
 // ============================================================================
+// PRODUTO DO CATÁLOGO (foto, preço, parcelas, Pix e descrição do cadastro)
+// ============================================================================
+
+function ProductField({ step, refs, onChange }: { step: BotStep; refs: Refs; onChange: (patch: Partial<BotStep>) => void }) {
+  const list = refs.products || [];
+  const cur = step.product || { productId: "", color: null, withDescription: false };
+  const set = (patch: Partial<typeof cur>) => onChange({ product: { ...cur, ...patch } });
+  const p = list.find((x) => x.id === cur.productId);
+  const colors = p ? p.images.filter((i) => i.active !== false && i.label?.trim()) : [];
+  const img = p ? pickProductImage(p.images, { label: cur.color }) : null;
+  const caption = p ? productCaption(p, img, cur.withDescription) : "";
+
+  if (!list.length) {
+    return <p className="rounded-xl bg-amber-50 px-3 py-3 text-sm text-amber-800">Você ainda não tem produtos cadastrados. Cadastre em Produtos e volte aqui.</p>;
+  }
+  return (
+    <div className="space-y-4">
+      <Field label="Produto" hint="Foto, nome, preço, parcelas, Pix e entrega saem do cadastro de Produtos — sem enviar arquivo.">
+        <Select value={cur.productId} onChange={(e) => set({ productId: e.target.value, color: null })}>
+          <option value="">Escolha o produto...</option>
+          {list.map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.name}
+              {x.price != null ? ` — ${brl(x.promoPrice ?? x.price)}` : ""}
+              {x.active ? "" : " (desligado)"}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      {p && colors.length > 0 && (
+        <Field label="Cor / foto" hint="Qual foto vai. Vazio = foto principal.">
+          <Select value={cur.color || ""} onChange={(e) => set({ color: e.target.value || null })}>
+            <option value="">Foto principal</option>
+            {colors.map((c) => (
+              <option key={c.id} value={c.label!}>
+                {c.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      )}
+      {p && (
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" checked={cur.withDescription} onChange={(e) => set({ withDescription: e.target.checked })} className="h-4 w-4 accent-[var(--accent)]" />
+          Mandar também a descrição do produto
+        </label>
+      )}
+      <Field label="Mensagem antes (opcional)" hint="Vai antes da foto. Use {nome} para o nome do cliente.">
+        <Textarea rows={2} value={step.message} onChange={(e) => onChange({ message: e.target.value })} placeholder="Ex.: Olha essa, {nome}! 😍" />
+      </Field>
+      {p && (
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-[#e5ddd5] p-2">
+          <div className="w-[240px] rounded-xl bg-white p-1.5 shadow-sm">
+            {img ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={productImageUrl(img.id)} alt="" className="max-h-48 w-full rounded-lg object-contain" />
+            ) : (
+              <p className="px-2 py-3 text-xs text-slate-400">Produto sem foto: vai só o texto.</p>
+            )}
+            <p className="whitespace-pre-wrap px-1 pt-1.5 text-[12px] leading-snug text-slate-800">{caption.replace(/\*/g, "")}</p>
+          </div>
+          {p.pixPrice == null && <p className="mt-2 text-[11px] text-slate-600">Dica: preencha o “Mega desconto no Pix” no cadastro do produto para ele aparecer aqui. {pixOfferText(p)}</p>}
+        </div>
+      )}
+      <p className="flex items-start gap-1.5 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+        <Info size={13} className="mt-0.5 shrink-0" />
+        Mudou preço ou foto no cadastro? O bloco já manda atualizado. Depois de enviar, o fluxo segue pela bolinha <b>Depois</b>.
+      </p>
+    </div>
+  );
+}
+
+// ============================================================================
 // ARQUIVO DO BLOCO (enviar ou gravar)
 // ============================================================================
 
@@ -207,7 +284,7 @@ function MediaField({
   storageReady,
   onChange,
 }: {
-  kind: Exclude<StepKind, "MENU">;
+  kind: MediaKind;
   media: BotMedia | null;
   storageReady: boolean;
   onChange: (m: BotMedia | null) => void;

@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Maximize2, Minus, Plus, Sparkles, UserRound, CircleStop, Zap, X, LayoutGrid, Tag as TagIcon, Columns3, MessageSquare, Play } from "lucide-react";
+import { Maximize2, Minus, Plus, Sparkles, UserRound, CircleStop, Zap, X, LayoutGrid, Tag as TagIcon, Columns3, MessageSquare, Play, Package } from "lucide-react";
 import type { BotNext, BotStep, StepKind } from "@/lib/chatbot/common";
 import { TRIGGER_LABEL, fillBotText } from "@/lib/chatbot/common";
-import { KIND_META, fileUrl, kindOfStep, type Draft } from "./shared";
+import { KIND_META, fileUrl, kindOfStep, productImageUrl, type BotProductRef, type Draft } from "./shared";
+import { pickProductImage } from "@/lib/products/format";
 import {
   CAPTION_H,
   HEADER_H,
@@ -40,7 +41,7 @@ const END_OPTIONS: { value: Exclude<BotNext, "STEP">; label: string }[] = [
 ];
 const END_ICON = { HUMAN: UserRound, AI: Sparkles, END: CircleStop } as const;
 
-const ADD_KINDS: StepKind[] = ["MENU", "IMAGE", "AUDIO", "VIDEO", "DOCUMENT"];
+const ADD_KINDS: StepKind[] = ["MENU", "PRODUCT", "IMAGE", "AUDIO", "VIDEO", "DOCUMENT"];
 
 export function FlowCanvas({
   draft,
@@ -54,8 +55,11 @@ export function FlowCanvas({
   onCreate,
   onAutoLayout,
   agents,
+  products = [],
 }: {
   draft: Draft;
+  /** Produtos (bloco de produto) */
+  products?: BotProductRef[];
   selected: string | null;
   /** Bloco em que o testador está agora (fica aceso) */
   activeId: string | null;
@@ -346,6 +350,7 @@ export function FlowCanvas({
             onLinkStart={(e, port) => startLink(e, { stepId: s.id, port })}
             onSetEnd={(port, next, agentId) => onSetEnd({ stepId: s.id, port }, next, agentId)}
             agents={agents}
+            products={products}
           />
         ))}
       </div>
@@ -460,7 +465,9 @@ function FlowNode({
   onLinkStart,
   onSetEnd,
   agents,
+  products,
 }: {
+  products: BotProductRef[];
   step: BotStep;
   pos: Pos;
   isFirst: boolean;
@@ -532,9 +539,15 @@ function FlowNode({
         </div>
       ) : (
         <div data-node-in={step.id} className="px-3 pt-2.5" style={{ height: MEDIA_H + CAPTION_H }}>
-          <MediaPreview step={step} />
+          {kind === "PRODUCT" ? <ProductPreview step={step} products={products} /> : <MediaPreview step={step} />}
           <p data-node-in={step.id} className="mt-1.5 truncate text-[12px] text-slate-500" style={{ height: CAPTION_H - 10 }}>
-            {kind === "AUDIO" ? "🎤 Chega como áudio gravado na hora" : step.message.trim() ? fillBotText(step.message, { nome: "Maria" }) : "Sem legenda"}
+            {kind === "PRODUCT"
+              ? products.find((p) => p.id === step.product?.productId)?.name || "Escolha o produto no painel →"
+              : kind === "AUDIO"
+              ? "🎤 Chega como áudio gravado na hora"
+              : step.message.trim()
+              ? fillBotText(step.message, { nome: "Maria" })
+              : "Sem legenda"}
           </p>
         </div>
       )}
@@ -611,6 +624,35 @@ function FlowNode({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function ProductPreview({ step, products }: { step: BotStep; products: BotProductRef[] }) {
+  const p = products.find((x) => x.id === step.product?.productId);
+  const img = p ? pickProductImage(p.images, { label: step.product?.color || null }) : null;
+  const box = "flex items-center justify-center overflow-hidden rounded-xl";
+  if (!p) {
+    return (
+      <div data-node-in={step.id} className={`${box} border-2 border-dashed border-emerald-200 bg-emerald-50/50 text-center text-xs text-emerald-700`} style={{ height: MEDIA_H }}>
+        <div>
+          <Package size={26} className="mx-auto mb-1 opacity-60" />
+          Escolha o produto no painel →
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div data-node-in={step.id} className={`${box} relative bg-white`} style={{ height: MEDIA_H }}>
+      {img ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img data-node-in={step.id} src={productImageUrl(img.id)} alt="" draggable={false} className="h-full w-full object-contain" />
+      ) : (
+        <Package size={30} className="text-slate-300" />
+      )}
+      <span className="absolute bottom-1.5 left-1.5 rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white">
+        foto + preço{step.product?.withDescription ? " + descrição" : ""}
+      </span>
     </div>
   );
 }

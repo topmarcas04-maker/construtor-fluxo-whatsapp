@@ -90,6 +90,8 @@ export interface Product {
   description: string | null;
   price: number | null;
   promoPrice: number | null;
+  pixPrice?: number | null;
+  pixNote?: string | null;
   code: string | null;
   active: boolean;
   kind?: string;
@@ -211,6 +213,8 @@ type Form = {
   categoryId: string;
   price: string;
   promoPrice: string;
+  pixPrice: string;
+  pixNote: string;
   code: string;
   description: string;
   active: boolean;
@@ -350,6 +354,8 @@ export function ProductsScreen() {
       categoryId: cat !== "all" && cat !== "none" ? cat : "",
       price: "",
       promoPrice: "",
+      pixPrice: "",
+      pixNote: "",
       code: "",
       description: "",
       active: true,
@@ -377,6 +383,8 @@ export function ProductsScreen() {
       categoryId: p.categoryId || "",
       price: toInput(p.price),
       promoPrice: toInput(p.promoPrice),
+      pixPrice: toInput(p.pixPrice ?? null),
+      pixNote: p.pixNote || "",
       code: p.code || "",
       description: p.description || "",
       active: p.active,
@@ -435,6 +443,8 @@ export function ProductsScreen() {
           categoryId: form.categoryId || null,
           price: form.price,
           promoPrice: form.promoPrice,
+          pixPrice: form.kind === "PHYSICAL" ? form.pixPrice : "",
+          pixNote: form.pixNote,
           code: form.code,
           description: form.description,
           active: form.active,
@@ -742,6 +752,9 @@ export function ProductsScreen() {
                     <Package size={40} />
                   </div>
                 )}
+                {p.pixPrice != null && (
+                  <span className="absolute left-3 top-10 rounded-full bg-amber-400 px-2.5 py-0.5 text-xs font-black text-slate-900">⚡ Mega Pix</span>
+                )}
                 {p.promoPrice != null && (
                   <span className="absolute left-3 top-3 rounded-full bg-emerald-600 px-2.5 py-0.5 text-xs font-bold text-white">Promoção</span>
                 )}
@@ -808,6 +821,9 @@ export function ProductsScreen() {
                   {(!p.kind || p.kind === "PHYSICAL") && <DeliveryBadge a={effectiveAvailability(p)} small />}
                 </div>
                 <PriceTag p={p} />
+                {p.pixPrice != null && (!p.kind || p.kind === "PHYSICAL") && (
+                  <p className="text-sm font-bold text-amber-600">⚡ Pix {brl(p.pixPrice)} <span className="text-xs font-medium text-slate-500">({p.pixNote || "enquanto durar o estoque"})</span></p>
+                )}
                 {p.kind && p.kind !== "PHYSICAL" && kindDetails(p).length > 0 && (
                   <p className="text-xs text-slate-500">{kindDetails(p).join(" · ")}</p>
                 )}
@@ -1088,6 +1104,18 @@ export function ProductsScreen() {
               </Field>
             </div>
             {form.kind === "PHYSICAL" && (
+              <div className="grid gap-4 rounded-xl border border-amber-200 bg-amber-50/60 p-4 md:grid-cols-3">
+                <Field label="⚡ Mega desconto no Pix (R$)" hint="Opcional. A IA informa esse valor junto com o preço.">
+                  <Input inputMode="decimal" placeholder="0,00" value={form.pixPrice} onChange={(e) => setForm({ ...form, pixPrice: e.target.value })} />
+                </Field>
+                <div className="md:col-span-2">
+                  <Field label="Condição do desconto no Pix" hint="Vazio = “enquanto durar o estoque”">
+                    <Input placeholder="enquanto durar o estoque" value={form.pixNote} onChange={(e) => setForm({ ...form, pixNote: e.target.value })} />
+                  </Field>
+                </div>
+              </div>
+            )}
+            {form.kind === "PHYSICAL" && (
             <div className="grid gap-4 md:grid-cols-2">
               <div className="rounded-xl border border-slate-200 p-4">
                 <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
@@ -1362,6 +1390,11 @@ export function ProductDetail({ p, category, actionNames }: { p: Product; catego
           <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${KIND_BADGE[p.kind]}`}>{KIND_LABEL[p.kind]}</span>
         )}
         <PriceTag p={p} big />
+        {p.pixPrice != null && (!p.kind || p.kind === "PHYSICAL") && (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm font-bold text-amber-700">
+            ⚡ Mega desconto no Pix: {brl(p.pixPrice)} <span className="font-medium">({p.pixNote || "enquanto durar o estoque"})</span>
+          </p>
+        )}
         {p.kind && p.kind !== "PHYSICAL" && kindDetails(p).length > 0 && (
           <div className="space-y-0.5 text-sm text-slate-600">
             {kindDetails(p).map((d) => (
