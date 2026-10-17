@@ -24,6 +24,8 @@ export function LeadsScreen() {
   const [view, setView] = useState<ViewMode>("conversas");
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  /** Filtro por etiqueta: "" = todas, "sem" = sem etiqueta, ou o id da etiqueta */
+  const [tagFilter, setTagFilter] = useState("");
   const [canEdit, setCanEdit] = useState(false);
   const [canManageColumns, setCanManageColumns] = useState(false);
   /** Filtro por vendedor: só administradores da conta Master e de Parceiros */
@@ -86,13 +88,18 @@ export function LeadsScreen() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return leads;
-    return leads.filter((l) =>
+    const byTag = !tagFilter
+      ? leads
+      : tagFilter === "sem"
+      ? leads.filter((l) => !l.tags?.length)
+      : leads.filter((l) => l.tags?.some((t) => t.id === tagFilter));
+    if (!q) return byTag;
+    return byTag.filter((l) =>
       [leadDisplayName(l), l.phone, l.city, l.interest, l.seller?.name, l.conversation.phoneJid, l.conversation.handle]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(q))
     );
-  }, [leads, search]);
+  }, [leads, search, tagFilter]);
 
   const counts = useMemo(
     () => ({
@@ -153,6 +160,24 @@ export function LeadsScreen() {
         </div>
 
         <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
+          {view !== "grupos" && tags.length > 0 && (
+            <select
+              value={tagFilter}
+              onChange={(e) => setTagFilter(e.target.value)}
+              title="Filtrar por etiqueta"
+              className={`max-w-[180px] rounded-lg border py-2 pl-3 pr-8 text-sm outline-none focus:border-[var(--accent)] ${
+                tagFilter ? "border-[var(--accent)] bg-[var(--accent)]/5 font-semibold text-[var(--accent)]" : "border-slate-200 bg-slate-50 text-slate-600"
+              }`}
+            >
+              <option value="">🏷 Todas as etiquetas</option>
+              <option value="sem">Sem etiqueta</option>
+              {[...tags].sort((a, b) => a.name.localeCompare(b.name)).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({leads.filter((l) => l.tags?.some((x) => x.id === t.id)).length})
+                </option>
+              ))}
+            </select>
+          )}
           <div className="relative flex-1 sm:flex-none">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
