@@ -1129,22 +1129,35 @@ async function metaSendText(accountId: string, phoneJid: string, text: string, s
 }
 
 /** Converte áudio para o formato aceito: Instagram = AAC, Messenger = MP3 */
-function convertAudio(input: Buffer, target: "aac" | "mp3"): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
+/**
+ * Converte o áudio para o formato aceito pela Meta.
+ * Instagram: M4A (AAC dentro de MP4) — o AAC "cru" (ADTS) costuma ser recusado. Messenger: MP3.
+ * O M4A precisa de arquivo temporário (o ffmpeg não grava MP4 normal pela saída padrão).
+ */
+async function convertAudio(input: Buffer, target: "m4a" | "mp3"): Promise<Buffer> {
+  const { mkdtemp, writeFile, readFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "aud-"));
+  const inFile = join(dir, "in");
+  const outFile = join(dir, target === "m4a" ? "out.m4a" : "out.mp3");
+  try {
+    await writeFile(inFile, input);
     const args =
-      target === "aac"
-        ? ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "64k", "-f", "adts", "pipe:1"]
-        : ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "64k", "-f", "mp3", "pipe:1"];
-    const p = spawn(ffmpegPath(), args);
-    const out: Buffer[] = [];
-    let err = "";
-    p.stdout.on("data", (d) => out.push(d));
-    p.stderr.on("data", (d) => (err += d));
-    p.on("error", reject);
-    p.on("close", (code) => (code === 0 ? resolve(Buffer.concat(out)) : reject(new Error(err || `ffmpeg saiu com ${code}`))));
-    p.stdin.on("error", () => {});
-    p.stdin.end(input);
-  });
+      target === "m4a"
+        ? ["-hide_banner", "-loglevel", "error", "-y", "-i", inFile, "-vn", "-ac", "1", "-ar", "44100", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", outFile]
+        : ["-hide_banner", "-loglevel", "error", "-y", "-i", inFile, "-vn", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "64k", outFile];
+    await new Promise<void>((resolve, reject) => {
+      const p = spawn(ffmpegPath(), args);
+      let err = "";
+      p.stderr.on("data", (d) => (err += d));
+      p.on("error", reject);
+      p.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err || `ffmpeg saiu com ${code}`))));
+    });
+    return await readFile(outFile);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /**
@@ -1161,9 +1174,9 @@ async function metaSendMedia(accountId: string, phoneJid: string, media: MediaPa
   let type: "image" | "audio" | "file" = media.kind === "image" ? "image" : media.kind === "audio" ? "audio" : "file";
   try {
     if (media.kind === "audio") {
-      const target = channel === "INSTAGRAM" ? "aac" : "mp3";
+      const target = channel === "INSTAGRAM" ? "m4a" : "mp3";
       buffer = await convertAudio(buffer, target);
-      mime = target === "aac" ? "audio/aac" : "audio/mpeg";
+      mime = target === "m4a" ? "audio/mp4" : "audio/mpeg";
     }
     if (buffer.length > MAX_STORED_MEDIA) return { error: "Arquivo grande demais" };
     const body = media.kind === "audio" ? "[áudio]" : media.caption?.trim() || (media.kind === "image" ? "[imagem]" : `[documento] ${media.fileName || ""}`.trim());
@@ -1183,7 +1196,9 @@ async function metaSendMedia(accountId: string, phoneJid: string, media: MediaPa
         transcript: media.transcript || null,
       })
       .returning({ id: messages.id });
-    const mid = await sendMetaAttachment(token, metaUserId(phoneJid), type, publicFileUrl("msg", row.id));
+    // Extensão no link ajuda a Meta a reconhecer o tipo do arquivo
+    const ext = media.kind === "audio" ? (channel === "INSTAGRAM" ? "m4a" : "mp3") : media.kind === "image" ? "jpg" : "bin";
+    const mid = await sendMetaAttachment(token, metaUserId(phoneJid), type, `${publicFileUrl("msg", row.id)}&f=arquivo.${ext}`);
     if (mid) {
       rememberSent(mid);
       await db.update(messages).set({ whatsappMessageId: mid }).where(eq(messages.id, row.id));
