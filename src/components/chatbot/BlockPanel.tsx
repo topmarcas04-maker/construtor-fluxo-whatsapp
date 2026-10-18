@@ -197,6 +197,24 @@ export function BlockPanel({
           </p>
         </>
       )}
+
+      {step.options.length === 0 && step.next === "HUMAN" && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+          <p className="text-sm font-semibold text-slate-800">👤 Passar para o atendente</p>
+          <p className="mb-2 mt-0.5 text-xs text-slate-500">Depois desta mensagem o chatbot para, a IA fica pausada e a conversa vai para a equipe.</p>
+          <Field label="Quem assume" hint="O atendente escolhido recebe um aviso no WhatsApp dele com o link do cliente.">
+            <Select value={step.sellerId || ""} onChange={(e) => onChange({ sellerId: e.target.value || null })}>
+              <option value="">Qualquer um da equipe (sem definir)</option>
+              <option value="AUTO">Pelas regras de distribuição (rodízio)</option>
+              {refs.sellers.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+      )}
     </div>
   );
 }

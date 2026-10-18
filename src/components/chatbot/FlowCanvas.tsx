@@ -68,7 +68,7 @@ export function FlowCanvas({
   onConnect: (from: LinkFrom, to: string) => void;
   onDisconnect: (from: LinkFrom) => void;
   onSetEnd: (from: LinkFrom, next: Exclude<BotNext, "STEP">, agentId?: string | null) => void;
-  onCreate: (kind: StepKind, pos: Pos, from?: LinkFrom) => void;
+  onCreate: (kind: StepKind, pos: Pos, from?: LinkFrom, preset?: "HANDOFF") => void;
   /** Agentes de IA (para escolher quem assume) */
   agents: { id: string; name: string; isPrimary: boolean }[];
   onAutoLayout: () => void;
@@ -199,12 +199,12 @@ export function FlowCanvas({
     fit();
   }, [steps.length, fit]);
 
-  const addAtCenter = (kind: StepKind) => {
+  const addAtCenter = (kind: StepKind, preset?: "HANDOFF") => {
     const r = canvasRef.current?.getBoundingClientRect();
     const v = viewRef.current;
     const x = r ? (r.width / 2 - v.x) / v.zoom - NODE_W / 2 : 400;
     const y = r ? (r.height / 2 - v.y) / v.zoom - 120 : 100;
-    onCreate(kind, { x: Math.round(x + Math.random() * 40), y: Math.round(y + Math.random() * 40) });
+    onCreate(kind, { x: Math.round(x + Math.random() * 40), y: Math.round(y + Math.random() * 40) }, undefined, preset);
   };
 
   const startLink = (e: React.PointerEvent, from: LinkFrom) => {
@@ -408,6 +408,17 @@ export function FlowCanvas({
             </button>
           );
         })}
+        <button
+          type="button"
+          onClick={() => addAtCenter("MENU", "HANDOFF")}
+          className="flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-[13px] font-semibold text-slate-700 transition hover:bg-slate-100"
+          title="Novo bloco: manda uma mensagem e passa a conversa para um atendente"
+        >
+          <span className="grid h-6 w-6 place-items-center rounded-lg bg-slate-700 text-white">
+            <UserRound size={13} />
+          </span>
+          <span className="hidden md:inline">Atendente</span>
+        </button>
       </div>
 
       {/* Zoom */}

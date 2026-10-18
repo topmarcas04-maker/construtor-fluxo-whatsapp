@@ -120,7 +120,9 @@ export function chatbotValues(body: Record<string, unknown>, refs: BotRefs): { e
     const py = Number((raw.pos as { y?: unknown } | null)?.y);
     const pos = Number.isFinite(px) && Number.isFinite(py) ? { x: Math.round(px), y: Math.round(py) } : null;
     const agentId = stepNext === "AI" && raw.agentId && refs.agentIds.has(String(raw.agentId)) ? String(raw.agentId) : null;
-    steps.push({ id, name: blockName, message, options: opts, next: stepNext, nextStepId, agentId, kind, media, product, pos });
+    const stepSellerRaw = stepNext === "HUMAN" && raw.sellerId ? String(raw.sellerId) : null;
+    const sellerId = stepSellerRaw === "AUTO" ? "AUTO" : stepSellerRaw && refs.sellerIds.has(stepSellerRaw) ? stepSellerRaw : null;
+    steps.push({ id, name: blockName, message, options: opts, next: stepNext, nextStepId, agentId, sellerId, kind, media, product, pos });
   }
 
   return {

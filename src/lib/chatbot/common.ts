@@ -66,6 +66,8 @@ export interface BotStep {
   nextStepId?: string | null;
   /** Quando next = AI: agente que assume (vazio = o agente normal do lead) */
   agentId?: string | null;
+  /** Quando next = HUMAN: atendente que assume (id, "AUTO" = regras de distribuição, vazio = não definir) */
+  sellerId?: string | null;
   /** Vazio = MENU */
   kind?: StepKind;
   media?: BotMedia | null;

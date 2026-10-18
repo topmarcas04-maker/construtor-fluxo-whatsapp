@@ -2550,6 +2550,44 @@ async function endBot(
   }
 }
 
+/** Chatbot passa o lead para um atendente (id ou "AUTO" = regras de distribuição) e avisa no WhatsApp dele */
+async function botAssignSeller(
+  accountId: string,
+  wanted: string,
+  lead: typeof leads.$inferSelect,
+  conv: typeof conversations.$inferSelect,
+  label: string
+) {
+  const nome = lead.cardName && lead.cardName !== "Lead" ? lead.cardName : conv.leadName;
+  {
+    let sellerId: string | null = wanted;
+    if (sellerId === "AUTO") {
+      const rules = await db.query.distributionRules.findMany({
+        where: eq(schema.distributionRules.accountId, accountId),
+        with: { seller: true },
+      });
+      sellerId = await assignSeller(accountId, rules, lead.city, lead.saleType, await allowedSellers(accountId, lead.id, conv.phoneJid));
+    }
+    const seller = sellerId ? await db.query.sellers.findFirst({ where: and(eq(sellers.id, sellerId), eq(sellers.accountId, accountId)) }) : null;
+    if (seller) {
+      await db.update(leads).set({ sellerId: seller.id, aiPaused: true }).where(eq(leads.id, lead.id));
+      const st = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId), columns: { notifySeller: true } });
+      const jid = sellerJid(seller.phone);
+      if (jid && st?.notifySeller !== false) {
+        const leadPhone = lead.phone || (conv.phoneJid.endsWith("@s.whatsapp.net") ? conv.phoneJid.split("@")[0] : null);
+        const lines = [
+          `🔔 *Novo lead para você* (chatbot)`,
+          `*Cliente:* ${nome || "sem nome"}`,
+          `*Escolheu:* ${label}`,
+          leadPhone ? `\nFalar com o cliente: https://wa.me/${leadPhone}` : `\nAbra o painel em Leads para continuar.`,
+        ];
+        const r = await sendText(accountId, jid, lines.join("\n"), "AUTO");
+        if ("error" in r) console.warn("[Chatbot] Não consegui avisar o vendedor:", r.error);
+      }
+    }
+  }
+}
+
 /** Mostra um passo; passo sem opções manda a mensagem e encerra */
 async function enterStep(
   accountId: string,
@@ -2597,6 +2635,8 @@ async function enterStep(
   if (step.next === "STEP" && step.nextStepId && depth < 15) {
     return enterStep(accountId, bot, step.nextStepId, lead, conv, depth + 1);
   }
+  // Bloco "Passar para atendente": escolhe quem assume (ou pelas regras de distribuição) e avisa
+  if (step.next === "HUMAN" && step.sellerId && !lead.sellerId) await botAssignSeller(accountId, step.sellerId, lead, conv, step.name || "Atendimento");
   return endBot(accountId, lead.id, conv.id, step.next === "STEP" ? "END" : step.next, bot.id, step.agentId);
 }
 
@@ -2640,33 +2680,7 @@ async function applyBotOption(
   await db.update(leads).set({ lastAction: option.label.slice(0, 120), lastActionAt: new Date() }).where(eq(leads.id, lead.id));
 
   // Vendedor escolhido (ou pelas regras de distribuição)
-  if (option.sellerId) {
-    let sellerId: string | null = option.sellerId;
-    if (sellerId === "AUTO") {
-      const rules = await db.query.distributionRules.findMany({
-        where: eq(schema.distributionRules.accountId, accountId),
-        with: { seller: true },
-      });
-      sellerId = await assignSeller(accountId, rules, lead.city, lead.saleType, await allowedSellers(accountId, lead.id, conv.phoneJid));
-    }
-    const seller = sellerId ? await db.query.sellers.findFirst({ where: and(eq(sellers.id, sellerId), eq(sellers.accountId, accountId)) }) : null;
-    if (seller) {
-      await db.update(leads).set({ sellerId: seller.id, aiPaused: true }).where(eq(leads.id, lead.id));
-      const st = await db.query.aiSettings.findFirst({ where: eq(aiSettings.id, accountId), columns: { notifySeller: true } });
-      const jid = sellerJid(seller.phone);
-      if (jid && st?.notifySeller !== false) {
-        const leadPhone = lead.phone || (conv.phoneJid.endsWith("@s.whatsapp.net") ? conv.phoneJid.split("@")[0] : null);
-        const lines = [
-          `🔔 *Novo lead para você* (chatbot)`,
-          `*Cliente:* ${nome || "sem nome"}`,
-          `*Escolheu:* ${option.label}`,
-          leadPhone ? `\nFalar com o cliente: https://wa.me/${leadPhone}` : `\nAbra o painel em Leads para continuar.`,
-        ];
-        const r = await sendText(accountId, jid, lines.join("\n"), "AUTO");
-        if ("error" in r) console.warn("[Chatbot] Não consegui avisar o vendedor:", r.error);
-      }
-    }
-  }
+  if (option.sellerId) await botAssignSeller(accountId, option.sellerId, lead, conv, option.label);
 
   const fresh = (await db.query.leads.findFirst({ where: eq(leads.id, lead.id) })) || lead;
   if (option.next === "STEP") return enterStep(accountId, bot, option.stepId, fresh, conv);

@@ -275,15 +275,17 @@ function BotEditor({
       }),
     }));
 
-  const onCreate = (kind: StepKind, pos: Pos, from?: LinkFrom) => {
+  const onCreate = (kind: StepKind, pos: Pos, from?: LinkFrom, preset?: "HANDOFF") => {
     const id = newId();
     const count = d.steps.filter((s) => stepKind(s) === kind).length + 1;
+    const handoff = preset === "HANDOFF";
     const step: BotStep = {
       id,
-      name: `${KIND_META[kind].label} ${count}`,
-      message: "",
+      name: handoff ? "Passar para atendente" : `${KIND_META[kind].label} ${count}`,
+      message: handoff ? "Olá, {nome}! 👋 Já vou te passar para um dos nossos atendentes. É só um instante!" : "",
       options: [],
-      next: "END",
+      next: handoff ? "HUMAN" : "END",
+      sellerId: handoff ? "AUTO" : null,
       nextStepId: null,
       kind,
       media: null,
