@@ -271,6 +271,8 @@ export function verifyFileSignature(kind: string, id: string, sig: string | null
 
 /** kind: "msg" (arquivo de uma mensagem) ou "img" (foto de produto) */
 export function publicFileUrl(kind: "msg" | "img", id: string) {
+  // A Meta baixa o arquivo pelo endereço público do site: sem ele, o envio falha com "should represent a valid URL"
+  if (!publicAppUrl()) throw new Error("Falta a variável PUBLIC_APP_URL no serviço do motor no Railway (endereço do site, ex.: https://seusite.up.railway.app).");
   return `${publicAppUrl()}/api/public/file/${kind}/${id}?s=${signFile(kind, id)}`;
 }
 

@@ -48,27 +48,51 @@ function AiDownBanner({ user }: { user: CurrentUser }) {
       clearInterval(t);
     };
   }, [user.account.id]);
-  if (!st?.error) return null;
+  // "Ocultar" esconde a faixa por 6 horas neste navegador (ela volta se a IA continuar parada)
+  const [hiddenUntil, setHiddenUntil] = useState(0);
+  useEffect(() => {
+    try {
+      setHiddenUntil(Number(localStorage.getItem("ai-banner-hide") || 0));
+    } catch {}
+  }, []);
+  const [open, setOpen] = useState(false);
+  if (!st?.error || hiddenUntil > Date.now()) return null;
+  const hide = () => {
+    const until = Date.now() + 6 * 3600_000;
+    setHiddenUntil(until);
+    try {
+      localStorage.setItem("ai-banner-hide", String(until));
+    } catch {}
+  };
   const since = st.since
     ? new Date(st.since).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
     : null;
   const canFix = user.modules.includes("configuracoes");
   return (
-    <div className="flex flex-wrap items-center justify-center gap-3 bg-red-600 px-4 py-2 text-sm text-white">
-      <span>
-        ⚠️ <b>A IA parou de responder</b> — {st.error}
-        {since ? ` (desde ${since})` : ""}.{" "}
-        {st.pending > 0
-          ? `${st.pending} ${st.pending === 1 ? "cliente esperando" : "clientes esperando"}: são respondidos quando a IA voltar; depois de ${st.maxHours}h vão para a equipe.`
-          : "Os clientes que escreverem serão respondidos quando ela voltar."}
-      </span>
+    <div className="flex items-center gap-2 bg-red-600 px-3 py-1 text-xs text-white">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="min-w-0 flex-1 text-left" title="Ver detalhes">
+        <span className={open ? "" : "block truncate"}>
+          ⚠️ <b>IA parada</b> — {st.error}
+          {since ? ` (desde ${since})` : ""}
+          {open
+            ? `. ${
+                st.pending > 0
+                  ? `${st.pending} ${st.pending === 1 ? "cliente esperando" : "clientes esperando"}: são respondidos quando a IA voltar; depois de ${st.maxHours}h vão para a equipe.`
+                  : "Os clientes que escreverem serão respondidos quando ela voltar."
+              }`
+            : ""}
+        </span>
+      </button>
       {canFix ? (
-        <a href="/configuracoes" className="rounded-md bg-white px-3 py-1 text-xs font-semibold text-red-700">
-          Ver chave da IA
+        <a href="/configuracoes" className="shrink-0 rounded bg-white px-2 py-0.5 text-[11px] font-semibold text-red-700">
+          Ver chave
         </a>
       ) : (
-        <span className="text-xs opacity-80">Avise o administrador.</span>
+        <span className="hidden shrink-0 text-[11px] opacity-80 sm:inline">Avise o administrador.</span>
       )}
+      <button type="button" onClick={hide} aria-label="Ocultar aviso por 6 horas" title="Ocultar por 6 horas" className="shrink-0 rounded px-1.5 text-base leading-none hover:bg-red-700">
+        ×
+      </button>
     </div>
   );
 }
