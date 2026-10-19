@@ -758,6 +758,60 @@ async function listGroups(accountId: string) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// De qual anúncio o lead veio
+// ---------------------------------------------------------------------------
+type AdSource = { channel: string; adId?: string | null; title?: string | null; body?: string | null; url?: string | null; photo?: string | null; at: string };
+
+/** Anúncio "clique para o WhatsApp": vem no contextInfo.externalAdReply da primeira mensagem */
+function waAdSource(message: any): AdSource | null {
+  if (!message || typeof message !== "object") return null;
+  for (const v of Object.values(message) as any[]) {
+    const ctx = v && typeof v === "object" ? v.contextInfo : null;
+    const ad = ctx?.externalAdReply;
+    if (ad && (ad.sourceType === "ad" || ad.sourceId || ctx?.conversionSource)) {
+      return {
+        channel: "WHATSAPP",
+        adId: ad.sourceId ? String(ad.sourceId) : null,
+        title: ad.title ? String(ad.title).slice(0, 200) : null,
+        body: ad.body ? String(ad.body).slice(0, 400) : null,
+        url: ad.sourceUrl ? String(ad.sourceUrl).slice(0, 500) : null,
+        photo: ad.thumbnailUrl || ad.originalImageUrl ? String(ad.thumbnailUrl || ad.originalImageUrl).slice(0, 800) : null,
+        at: new Date().toISOString(),
+      };
+    }
+  }
+  return null;
+}
+
+/** Anúncio do Facebook/Instagram: vem no "referral" da mensagem, do clique no botão ou do evento de referência */
+function metaAdSource(channel: string, ev: any): AdSource | null {
+  const ref = ev?.referral || ev?.message?.referral || ev?.postback?.referral;
+  if (!ref || (ref.source !== "ADS" && !ref.ad_id)) return null;
+  const c = ref.ads_context_data || {};
+  return {
+    channel,
+    adId: ref.ad_id ? String(ref.ad_id) : null,
+    title: c.ad_title ? String(c.ad_title).slice(0, 200) : null,
+    body: null,
+    url: c.post_id ? `https://www.facebook.com/${String(c.post_id)}` : null,
+    photo: c.photo_url ? String(c.photo_url).slice(0, 800) : c.video_url ? String(c.video_url).slice(0, 800) : null,
+    at: new Date().toISOString(),
+  };
+}
+
+async function saveAdSource(conversationId: string, src: AdSource | null) {
+  if (!src) return;
+  await db.update(leads).set({ adSource: src }).where(eq(leads.conversationId, conversationId)).catch(() => {});
+}
+
+/** Linha "Veio do anúncio" para os avisos da equipe */
+function adLine(src: any): string | null {
+  if (!src) return null;
+  const where = src.channel === "INSTAGRAM" ? "Instagram" : src.channel === "MESSENGER" ? "Facebook" : "WhatsApp";
+  return `*Veio do anúncio (${where}):* ${src.title || (src.adId ? `ID ${src.adId}` : "anúncio")}`;
+}
+
 async function handleIncomingMessage(accountId: string, msg: any, slot = 1) {
   try {
     const phoneJid: string = msg.key.remoteJid;
@@ -841,6 +895,7 @@ async function handleIncomingMessage(accountId: string, msg: any, slot = 1) {
     }).returning({ id: messages.id });
     await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
     await db.update(leads).set({ updatedAt: new Date() }).where(eq(leads.conversationId, conversation.id));
+    await saveAdSource(conversation.id, waAdSource(msg.message));
 
     console.log(`[Mensagem ${accountId.slice(0, 8)}] ${phoneJid}: "${extracted.text.slice(0, 60)}"`);
 
@@ -1261,6 +1316,15 @@ async function handleMetaEvent(payload: any) {
 }
 
 async function handleMetaMessage(conn: typeof metaConnections.$inferSelect, channel: MetaChannel, ev: any) {
+  // Clique no anúncio de quem já tinha conversa: só um "referral", sem mensagem
+  if (!ev.message && !ev.postback && ev.referral && ev.sender?.id) {
+    const conv = await db.query.conversations.findFirst({
+      where: and(eq(conversations.accountId, conn.accountId), eq(conversations.phoneJid, CHANNEL_PREFIX[channel] + String(ev.sender.id))),
+      columns: { id: true },
+    });
+    if (conv) await saveAdSource(conv.id, metaAdSource(channel, ev));
+    return;
+  }
   // Botões do anúncio / perguntas prontas ("Quero saber o preço") chegam como postback, não como mensagem
   let msg = ev.message;
   if (!msg && ev.postback && (ev.postback.title || ev.postback.payload)) {
@@ -1390,6 +1454,7 @@ async function handleMetaMessage(conn: typeof metaConnections.$inferSelect, chan
     })
     .returning({ id: messages.id });
   await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
+  if (!echo) await saveAdSource(conversation.id, metaAdSource(channel, ev));
 
   if (echo && autoEcho) return; // boas-vindas automática: fica no histórico e a IA/chatbot continuam
   if (echo) {
@@ -2498,6 +2563,7 @@ async function handoffToSeller(
           .map((x) => `*${x.label}:* ${x.value}`),
         d.appointment ? `*Agendado:* ${d.appointment.subject} em ${d.appointment.date.split("-").reverse().join("/")} às ${d.appointment.time}` : null,
         `*Nota:* ${d.score}/100`,
+        adLine(current?.adSource),
         d.summary ? `\n${d.summary}` : null,
         !avail.open ? `\n⏰ Chegou fora do horário. O cliente foi avisado que você atende ${avail.nextOpen}.` : null,
         leadPhone ? `\nFalar com o cliente: https://wa.me/${leadPhone}` : `\nAbra o painel em Leads para continuar.`,
@@ -2619,9 +2685,10 @@ async function botAssignSeller(
           `🔔 *Novo lead para você* (chatbot)`,
           `*Cliente:* ${nome || "sem nome"}`,
           `*Escolheu:* ${label}`,
+          adLine(lead.adSource),
           leadPhone ? `\nFalar com o cliente: https://wa.me/${leadPhone}` : `\nAbra o painel em Leads para continuar.`,
         ];
-        const r = await sendText(accountId, jid, lines.join("\n"), "AUTO");
+        const r = await sendText(accountId, jid, lines.filter(Boolean).join("\n"), "AUTO");
         if ("error" in r) console.warn("[Chatbot] Não consegui avisar o vendedor:", r.error);
       }
     }

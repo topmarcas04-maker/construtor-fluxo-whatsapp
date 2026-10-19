@@ -52,6 +52,8 @@ export interface Lead {
   interest: string | null;
   saleType: "ANY" | "WHOLESALE" | "RETAIL";
   note: string | null;
+  /** Anúncio de onde o lead veio (Facebook, Instagram ou WhatsApp) */
+  adSource?: { channel: string; adId?: string | null; title?: string | null; body?: string | null; url?: string | null; photo?: string | null; at: string } | null;
   conversation: {
     phoneJid: string;
     /** WHATSAPP | INSTAGRAM | MESSENGER */

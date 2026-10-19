@@ -216,6 +216,36 @@ export function LeadPanel({
           Somente leitura: você não tem permissão para editar os cards.
         </p>
       )}
+      {lead.adSource && (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 p-3">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-sky-700">
+            📣 Veio do anúncio · {lead.adSource.channel === "INSTAGRAM" ? "Instagram" : lead.adSource.channel === "MESSENGER" ? "Facebook" : "WhatsApp"}
+          </span>
+          <div className="flex gap-3">
+            {lead.adSource.photo && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={lead.adSource.photo} alt="" className="h-14 w-14 shrink-0 rounded-lg object-cover" referrerPolicy="no-referrer" />
+            )}
+            <div className="min-w-0 text-sm">
+              <p className="font-semibold text-slate-800">{lead.adSource.title || "Anúncio sem título"}</p>
+              {lead.adSource.body && <p className="line-clamp-2 text-xs text-slate-600">{lead.adSource.body}</p>}
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                {new Date(lead.adSource.at).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                {lead.adSource.adId ? ` · ID ${lead.adSource.adId}` : ""}
+                {lead.adSource.url && (
+                  <>
+                    {" · "}
+                    <a href={lead.adSource.url} target="_blank" rel="noreferrer" className="font-semibold text-sky-700 underline">
+                      ver anúncio
+                    </a>
+                  </>
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div>
         <span className={labelCls}>Nome</span>
         <BlurInput

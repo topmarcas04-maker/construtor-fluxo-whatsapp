@@ -186,6 +186,7 @@ ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS notify_seller boolean NOT NULL 
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender varchar(20);
 
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_paused boolean NOT NULL DEFAULT false;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS ad_source jsonb;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_summary text;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS score integer;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS interest varchar(255);

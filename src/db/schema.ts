@@ -377,6 +377,8 @@ export const leads = pgTable(
     /** Data em que a venda foi fechada */
     closedAt: timestamp("closed_at", { withTimezone: true }),
     note: text("note"),
+    /** Anúncio de onde o lead veio (clique no anúncio do Facebook/Instagram/WhatsApp) */
+    adSource: jsonb("ad_source").$type<{ channel: string; adId?: string | null; title?: string | null; body?: string | null; url?: string | null; photo?: string | null; at: string } | null>(),
     /** Quando true a IA não responde mais este lead (vendedor assumiu) */
     aiPaused: boolean("ai_paused").notNull().default(false),
     /** Resumo da qualificação escrito pela IA */

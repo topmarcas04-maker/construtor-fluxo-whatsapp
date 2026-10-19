@@ -88,6 +88,7 @@ export async function GET() {
         interest: lead.interest,
         saleType: lead.saleType,
         note: lead.note,
+        adSource: lead.adSource || null,
         agentName: agentName(lead.agentId),
         conversation: {
           phoneJid: lead.conversation.phoneJid,

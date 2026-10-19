@@ -484,6 +484,11 @@ export function ConversationsView({
                           ⚡ {lead.lastAction}
                         </span>
                       )}
+                      {lead.adSource && (
+                        <span className="max-w-[160px] truncate rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700" title={`Veio do anúncio: ${lead.adSource.title || lead.adSource.adId || ""}`}>
+                          📣 {lead.adSource.title || "Anúncio"}
+                        </span>
+                      )}
                       {lead.product && (
                         <span className="max-w-[140px] truncate rounded-full bg-[var(--accent)]/10 px-2 py-0.5 text-[10px] font-semibold text-[var(--accent)]" title="Produto de interesse">
                           {lead.product.name}
