@@ -1261,7 +1261,11 @@ async function handleMetaEvent(payload: any) {
 }
 
 async function handleMetaMessage(conn: typeof metaConnections.$inferSelect, channel: MetaChannel, ev: any) {
-  const msg = ev.message;
+  // Botões do anúncio / perguntas prontas ("Quero saber o preço") chegam como postback, não como mensagem
+  let msg = ev.message;
+  if (!msg && ev.postback && (ev.postback.title || ev.postback.payload)) {
+    msg = { mid: ev.postback.mid, text: String(ev.postback.title || ev.postback.payload) };
+  }
   if (!msg || msg.is_deleted || msg.is_unsupported) return;
   const accountId = conn.accountId;
   const echo = Boolean(msg.is_echo);
@@ -1293,8 +1297,19 @@ async function handleMetaMessage(conn: typeof metaConnections.$inferSelect, chan
     } catch (err) {
       console.warn(`[Meta ${accountId.slice(0, 8)}] não baixei o anexo:`, (err as Error)?.message || err);
     }
+  } else if (att && att.type === "template") {
+    // Mensagem pronta do anúncio (boas-vindas com botões / cartão)
+    const pl = att.payload || {};
+    const el = Array.isArray(pl.elements) ? pl.elements[0] : null;
+    const btns = (Array.isArray(pl.buttons) ? pl.buttons : el && Array.isArray(el.buttons) ? el.buttons : []).map((b: any) => b?.title).filter(Boolean);
+    text = text || [pl.text, el?.title, el?.subtitle].filter(Boolean).join("\n") || "[mensagem do anúncio]";
+    if (btns.length) text += `\n${btns.map((b: string) => `▫️ ${b}`).join("\n")}`;
   } else if (att) {
     text = text || (att.type === "share" || att.type === "story_mention" || att.type === "ig_reel" ? "[compartilhou uma publicação]" : "[mensagem]");
+  }
+  if (echo && Array.isArray(msg.quick_replies) && msg.quick_replies.length) {
+    const qr = msg.quick_replies.map((q: any) => q?.title).filter(Boolean);
+    if (qr.length) text += `\n${qr.map((b: string) => `▫️ ${b}`).join("\n")}`;
   }
   if (!text && !media) return;
 
@@ -1302,10 +1317,34 @@ async function handleMetaMessage(conn: typeof metaConnections.$inferSelect, chan
   let conversation = await db.query.conversations.findFirst({
     where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
   });
-  const isNewConversation = !conversation;
-  const prevAt = conversation?.lastMessageAt || null;
+  // Conversa aberta só pela boas-vindas automática do anúncio ainda conta como nova na 1ª mensagem do cliente
+  let isNewConversation = !conversation;
+  let prevAt = conversation?.lastMessageAt || null;
+  if (conversation && !echo) {
+    const anyIn = await db.query.messages.findFirst({
+      where: and(eq(messages.conversationId, conversation.id), eq(messages.direction, "IN")),
+      columns: { id: true },
+    });
+    if (!anyIn) {
+      isNewConversation = true;
+      prevAt = null;
+    }
+  }
+  // Mensagem automática da página (boas-vindas do anúncio, resposta instantânea): não é um atendente assumindo.
+  // É automática quando a conversa ainda não existe ou acabou de começar (menos de 2 minutos).
+  let autoEcho = false;
+  if (echo) {
+    if (!conversation) autoEcho = true;
+    else {
+      const first = await db.query.messages.findFirst({
+        where: eq(messages.conversationId, conversation.id),
+        orderBy: (m, { asc }) => [asc(m.sentAt)],
+        columns: { sentAt: true },
+      });
+      autoEcho = !first || Date.now() - new Date(first.sentAt).getTime() < 2 * 60_000;
+    }
+  }
   if (!conversation) {
-    if (echo) return; // resposta da página para alguém que ainda não está no sistema
     const profile = token ? await metaProfile(token, userId, channel) : { name: null, handle: null };
     const [created] = await db
       .insert(conversations)
@@ -1344,14 +1383,15 @@ async function handleMetaMessage(conn: typeof metaConnections.$inferSelect, chan
       messageType,
       whatsappMessageId: mid || null,
       sentAt,
-      sender: echo ? "HUMAN" : "LEAD",
-      authorName: echo ? (channel === "INSTAGRAM" ? "Instagram da empresa" : "Página da empresa") : null,
+      sender: echo ? (autoEcho ? "AUTO" : "HUMAN") : "LEAD",
+      authorName: echo ? (autoEcho ? "Mensagem automática (Meta)" : channel === "INSTAGRAM" ? "Instagram da empresa" : "Página da empresa") : null,
       mediaDataUrl: media?.dataUrl || null,
       mediaMimeType: media?.mime || null,
     })
     .returning({ id: messages.id });
   await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
 
+  if (echo && autoEcho) return; // boas-vindas automática: fica no histórico e a IA/chatbot continuam
   if (echo) {
     // Alguém respondeu pelo app do Instagram/Facebook: a pessoa assumiu a conversa
     await db
