@@ -52,7 +52,7 @@ function friendly(code?: number, subcode?: number, message?: string) {
   return message || "Erro da Meta";
 }
 
-async function graph<T>(method: "GET" | "POST" | "DELETE", path: string, params: Record<string, string>, body?: unknown): Promise<T> {
+export async function graph<T>(method: "GET" | "POST" | "DELETE", path: string, params: Record<string, string>, body?: unknown): Promise<T> {
   const url = new URL(`${graphBase()}/${GRAPH_VERSION}/${path.replace(/^\//, "")}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   const res = await fetch(url, {
@@ -86,13 +86,16 @@ export function oauthRedirectUri() {
   return `${publicAppUrl()}/api/meta/callback`;
 }
 
-export function oauthDialogUrl(state: string) {
+/** Permissões extras para publicar (Postagens): pedidas só quando a pessoa libera as postagens */
+export const PUBLISH_SCOPES = ["instagram_content_publish", "pages_manage_posts", "pages_read_engagement"];
+
+export function oauthDialogUrl(state: string, withPublishing = false) {
   const u = new URL(`https://www.facebook.com/${GRAPH_VERSION}/dialog/oauth`);
   u.searchParams.set("client_id", process.env.META_APP_ID || "");
   u.searchParams.set("redirect_uri", oauthRedirectUri());
   u.searchParams.set("state", state);
   u.searchParams.set("response_type", "code");
-  u.searchParams.set("scope", OAUTH_SCOPES.join(","));
+  u.searchParams.set("scope", (withPublishing ? [...OAUTH_SCOPES, ...PUBLISH_SCOPES] : OAUTH_SCOPES).join(","));
   return u.toString();
 }
 

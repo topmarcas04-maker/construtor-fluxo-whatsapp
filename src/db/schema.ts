@@ -914,6 +914,41 @@ export const driveFiles = pgTable(
 );
 
 // ============================================================================
+// POSTAGENS (Instagram e Facebook)
+// ============================================================================
+
+/** Postagem agendada (ou publicada agora) no Instagram e/ou na página do Facebook */
+export const socialPosts = pgTable(
+  "social_posts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    /** Página do Facebook (com o Instagram ligado a ela) */
+    connectionId: uuid("connection_id").references(() => metaConnections.id, { onDelete: "set null" }),
+    /** REEL | FEED | CAROUSEL | STORY */
+    format: varchar("format", { length: 12 }).notNull(),
+    toInstagram: boolean("to_instagram").notNull().default(true),
+    toFacebook: boolean("to_facebook").notNull().default(false),
+    caption: text("caption").notNull().default(""),
+    /** Arquivos do Drive, na ordem: [{ fileId, kind, mime, name }] */
+    media: jsonb("media").$type<{ fileId: string; kind: string; mime: string; name: string }[]>().notNull().default([]),
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+    /** SCHEDULED | PUBLISHING | PUBLISHED | PARTIAL | ERROR | CANCELED */
+    status: varchar("status", { length: 12 }).notNull().default("SCHEDULED"),
+    /** Resultado por rede: { instagram: { id, permalink, error }, facebook: {...} } */
+    results: jsonb("results").$type<Record<string, { id?: string; permalink?: string; error?: string }>>().notNull().default({}),
+    attempts: integer("attempts").notNull().default(0),
+    createdBy: varchar("created_by", { length: 150 }),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("social_posts_account_idx").on(table.accountId, table.scheduledAt), index("social_posts_due_idx").on(table.status, table.scheduledAt)]
+);
+
+// ============================================================================
 // ÁREA DE MEMBROS (aulas gravadas)
 // ============================================================================
 

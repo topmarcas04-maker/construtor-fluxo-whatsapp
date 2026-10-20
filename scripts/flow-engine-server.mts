@@ -112,7 +112,9 @@ import { ensureAgents, pickAgent } from "../src/lib/agents/shared";
 import { agentSystemPrompt, restrictCatalogItem, restrictDecision, agentByKeyword, agentScope } from "../src/lib/agents/common";
 import { routeWithAi } from "../src/lib/ai/router";
 import type { Usage } from "../src/lib/ai/usage";
-import { storageReady, getObject, signedUrl } from "../src/lib/storage/s3";
+import { storageReady, getObject, signedUrl, putObject } from "../src/lib/storage/s3";
+import { publishInstagram, publishFacebook, publishError, type PublishDeps } from "../src/lib/social/publish";
+import type { PostMedia, PostResult } from "../src/lib/social/common";
 import { fromSpDateTime, formatSpDate, formatSpTime, fillTemplate } from "../src/lib/time";
 import * as dotenv from "dotenv";
 import { spawn } from "node:child_process";
@@ -1020,6 +1022,131 @@ async function sendText(accountId: string, phoneJid: string, text: string, sende
   } catch (error) {
     console.error("[Error] sendText:", error);
     return { error: String(error) };
+  }
+}
+
+// ----------------------------------------------------------------------------
+// POSTAGENS AGENDADAS (Instagram e Facebook)
+// ----------------------------------------------------------------------------
+
+/** Converte uma foto (PNG, WebP…) para JPEG — o Instagram só publica JPEG */
+function toJpeg(input: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const p = spawn(ffmpegPath(), ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-frames:v", "1", "-q:v", "2", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"]);
+    const out: Buffer[] = [];
+    let err = "";
+    p.stdout.on("data", (d) => out.push(d));
+    p.stderr.on("data", (d) => (err += d));
+    p.on("error", reject);
+    p.on("close", (code) => (code === 0 && out.length ? resolve(Buffer.concat(out)) : reject(new Error(err || `ffmpeg saiu com ${code}`))));
+    p.stdin.on("error", () => {});
+    p.stdin.end(input);
+  });
+}
+
+let socialBusy = false;
+
+/** Publica as postagens cujo horário chegou (roda a cada 30 segundos) */
+async function processSocialPosts() {
+  if (socialBusy) return;
+  socialBusy = true;
+  try {
+    const sp = schema.socialPosts;
+    // Publicação que travou (motor reiniciou no meio): marca como erro para a pessoa tentar de novo
+    await db
+      .update(sp)
+      .set({ status: "ERROR", updatedAt: new Date() })
+      .where(and(eq(sp.status, "PUBLISHING"), lt(sp.updatedAt, new Date(Date.now() - 25 * 60_000))));
+
+    const due = await db
+      .select()
+      .from(sp)
+      .where(and(eq(sp.status, "SCHEDULED"), lte(sp.scheduledAt, new Date())))
+      .orderBy(sp.scheduledAt)
+      .limit(3);
+    for (const row of due) {
+      const [post] = await db
+        .update(sp)
+        .set({ status: "PUBLISHING", attempts: row.attempts + 1, updatedAt: new Date() })
+        .where(and(eq(sp.id, row.id), eq(sp.status, "SCHEDULED")))
+        .returning();
+      if (!post) continue;
+      const tag = `[Postagem ${post.accountId.slice(0, 8)}]`;
+      const results: Record<string, PostResult> = { ...((post.results || {}) as Record<string, PostResult>) };
+      delete results._;
+      const finish = async (status: string, extra: Record<string, unknown> = {}) => {
+        await db.update(sp).set({ status, results, updatedAt: new Date(), ...extra }).where(eq(sp.id, post.id));
+      };
+      const conn = post.connectionId ? await db.query.metaConnections.findFirst({ where: eq(metaConnections.id, post.connectionId) }) : null;
+      if (!conn || conn.accountId !== post.accountId) {
+        results._ = { error: "A página do Facebook desta postagem foi desconectada. Conecte de novo e edite a postagem." };
+        await finish("ERROR");
+        continue;
+      }
+      if (!storageReady()) {
+        results._ = { error: "O armazenamento de arquivos (bucket) não está configurado no servidor." };
+        await finish("ERROR");
+        continue;
+      }
+      const urlCache = new Map<string, string>();
+      const deps: PublishDeps = {
+        mediaUrl: async (m: PostMedia, opts) => {
+          const ck = `${m.fileId}:${opts.jpeg ? "j" : "o"}`;
+          const hit = urlCache.get(ck);
+          if (hit) return hit;
+          const f = await db.query.driveFiles.findFirst({ where: and(eq(schema.driveFiles.id, m.fileId), eq(schema.driveFiles.accountId, post.accountId)) });
+          if (!f) throw new Error(`O arquivo "${m.name}" foi apagado do Drive.`);
+          let key = f.storageKey;
+          if (opts.jpeg && !/jpe?g/i.test(f.mimeType)) {
+            key = `acc/${post.accountId}/posts/${f.id}.jpg`;
+            await putObject(key, await toJpeg(await getObject(f.storageKey)), "image/jpeg");
+          }
+          const url = await signedUrl(key, 6 * 3600);
+          urlCache.set(ck, url);
+          return url;
+        },
+      };
+      const input = {
+        format: post.format as "REEL" | "FEED" | "CAROUSEL" | "STORY",
+        caption: post.caption || "",
+        media: (post.media || []) as PostMedia[],
+        pageId: conn.pageId,
+        pageToken: decryptSecret(conn.pageTokenEnc) || "",
+        igUserId: conn.igUserId,
+      };
+      if (!input.pageToken) {
+        results._ = { error: "Não consegui ler o token da página. Conecte a página de novo em Instagram e Facebook." };
+        await finish("ERROR");
+        continue;
+      }
+      const targets: ["instagram" | "facebook", boolean][] = [
+        ["instagram", post.toInstagram],
+        ["facebook", post.toFacebook],
+      ];
+      let ok = 0;
+      let want = 0;
+      for (const [net, on] of targets) {
+        if (!on) continue;
+        want++;
+        if (results[net]?.id) {
+          ok++; // já publicado numa tentativa anterior
+          continue;
+        }
+        try {
+          results[net] = net === "instagram" ? await publishInstagram(input, deps) : await publishFacebook(input, deps);
+          ok++;
+          console.log(`${tag} publicada no ${net}: ${results[net].id}`);
+        } catch (e) {
+          results[net] = { error: publishError(e) };
+          console.warn(`${tag} erro no ${net}:`, results[net].error);
+        }
+      }
+      await finish(ok === want ? "PUBLISHED" : ok ? "PARTIAL" : "ERROR", ok ? { publishedAt: new Date() } : {});
+    }
+  } catch (e) {
+    console.error("[Postagens]", (e as Error)?.message || e);
+  } finally {
+    socialBusy = false;
   }
 }
 
@@ -3622,6 +3749,7 @@ async function main() {
   setInterval(() => processCover(), SELFTEST ? 3_000 : 60_000);
   setInterval(() => processAiPending(), SELFTEST ? 3_000 : 5 * 60_000);
   setInterval(() => processBroadcasts(), SELFTEST ? 2_000 : 10_000);
+  setInterval(() => processSocialPosts(), SELFTEST ? 3_000 : 30_000);
 
   const shutdown = async () => {
     console.log("\n🛑 Encerrando motor...");

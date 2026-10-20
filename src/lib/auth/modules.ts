@@ -20,6 +20,7 @@ export const MODULES = [
   { key: "chatbot", label: "Chatbot", href: "/chatbot" },
   { key: "disparos", label: "Disparos", href: "/disparos" },
   { key: "drive", label: "Drive", href: "/drive" },
+  { key: "postagens", label: "Postagens", href: "/postagens" },
   { key: "aulas", label: "Área de membros", href: "/aulas" },
   { key: "calls", label: "Calls", href: "/calls" },
   { key: "configuracoes", label: "Configurações", href: "/configuracoes" },

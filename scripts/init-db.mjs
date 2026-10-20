@@ -736,6 +736,28 @@ CREATE TABLE IF NOT EXISTS drive_files (
 );
 CREATE INDEX IF NOT EXISTS drive_files_account_idx ON drive_files (account_id, folder_id);
 
+-- Postagens agendadas no Instagram e Facebook
+CREATE TABLE IF NOT EXISTS social_posts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  connection_id uuid REFERENCES meta_connections(id) ON DELETE SET NULL,
+  format varchar(12) NOT NULL,
+  to_instagram boolean NOT NULL DEFAULT true,
+  to_facebook boolean NOT NULL DEFAULT false,
+  caption text NOT NULL DEFAULT '',
+  media jsonb NOT NULL DEFAULT '[]'::jsonb,
+  scheduled_at timestamptz NOT NULL,
+  status varchar(12) NOT NULL DEFAULT 'SCHEDULED',
+  results jsonb NOT NULL DEFAULT '{}'::jsonb,
+  attempts integer NOT NULL DEFAULT 0,
+  created_by varchar(150),
+  published_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS social_posts_account_idx ON social_posts (account_id, scheduled_at);
+CREATE INDEX IF NOT EXISTS social_posts_due_idx ON social_posts (status, scheduled_at);
+
 -- Área de membros (aulas gravadas)
 CREATE TABLE IF NOT EXISTS member_courses (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

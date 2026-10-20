@@ -8,7 +8,7 @@ import { storageReady } from "@/lib/storage/s3";
 
 /** Pastas e arquivos da conta (também usado para escolher arquivo na conversa) */
 export async function GET() {
-  const auth = await requireUser(["drive", "leads", "disparos"]);
+  const auth = await requireUser(["drive", "leads", "disparos", "postagens"]);
   if (auth.error) return auth.error;
   const [folders, files] = await Promise.all([
     db.select().from(driveFolders).where(eq(driveFolders.accountId, auth.accountId)).orderBy(asc(driveFolders.name)),
