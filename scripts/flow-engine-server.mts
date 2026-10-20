@@ -994,6 +994,23 @@ async function signed(accountId: string, text: string, authorName?: string | nul
   return `*${authorName}:*\n${text}`;
 }
 
+/** Mensagem de erro legível (o drizzle esconde o erro real do Postgres em `cause`) */
+function errMsg(e: unknown) {
+  const err = e as { message?: string; cause?: { message?: string; code?: string } };
+  if (err?.cause?.message) return `${err.cause.message}${err.cause.code ? ` (${err.cause.code})` : ""}`;
+  return err?.message || String(e);
+}
+
+/** Grava no histórico uma mensagem que JÁ foi enviada: se o banco falhar, só registra no log */
+async function saveSentMessage(values: typeof messages.$inferInsert) {
+  try {
+    await db.insert(messages).values(values);
+    await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, values.conversationId));
+  } catch (e) {
+    console.error("[Error] histórico da mensagem enviada:", errMsg(e), e);
+  }
+}
+
 /** Envia texto pelo WhatsApp da conta e registra no histórico */
 async function sendText(accountId: string, phoneJid: string, text: string, sender: Sender, authorName?: string | null) {
   if (metaChannelOf(phoneJid)) return metaSendText(accountId, phoneJid, text, sender, authorName);
@@ -1006,7 +1023,7 @@ async function sendText(accountId: string, phoneJid: string, text: string, sende
       where: and(eq(conversations.accountId, accountId), eq(conversations.phoneJid, phoneJid)),
     });
     if (conv) {
-      await db.insert(messages).values({
+      await saveSentMessage({
         conversationId: conv.id,
         direction: "OUT",
         body: text,
@@ -1016,12 +1033,11 @@ async function sendText(accountId: string, phoneJid: string, text: string, sende
         sender,
         authorName: authorName || null,
       });
-      await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
     }
     return { success: true, messageId: response?.key?.id };
   } catch (error) {
     console.error("[Error] sendText:", error);
-    return { error: String(error) };
+    return { error: errMsg(error) };
   }
 }
 
@@ -1252,7 +1268,7 @@ async function sendMedia(accountId: string, phoneJid: string, media: MediaPayloa
     return { success: true, messageId: response?.key?.id };
   } catch (error) {
     console.error("[Error] sendMedia:", error);
-    return { error: (error as Error)?.message || String(error) };
+    return { error: errMsg(error) };
   }
 }
 
@@ -1288,7 +1304,7 @@ async function metaSendText(accountId: string, phoneJid: string, text: string, s
       if (lastId) rememberSent(lastId);
     }
     if (conv) {
-      await db.insert(messages).values({
+      await saveSentMessage({
         conversationId: conv.id,
         direction: "OUT",
         body: text,
@@ -1298,12 +1314,11 @@ async function metaSendText(accountId: string, phoneJid: string, text: string, s
         sender,
         authorName: authorName || null,
       });
-      await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conv.id));
     }
     if (conn.lastError) await markMetaError(conn.id, null);
     return { success: true, messageId: lastId };
   } catch (error) {
-    const msg = (error as Error)?.message || String(error);
+    const msg = errMsg(error);
     console.error(`[Meta ${accountId.slice(0, 8)}] envio de texto:`, msg);
     await markMetaError(conn.id, msg);
     return { error: msg };
@@ -2358,7 +2373,7 @@ async function sendDriveFile(
     return { success: true, messageId: response?.key?.id };
   } catch (error) {
     console.error("[Error] sendDriveFile:", error);
-    return { error: (error as Error)?.message || String(error) };
+    return { error: errMsg(error) };
   }
 }
 
@@ -2414,7 +2429,7 @@ async function sendProductVideo(accountId: string, phoneJid: string, productId: 
     return { success: true, messageId: response?.key?.id };
   } catch (error) {
     console.error("[Error] sendProductVideo:", error);
-    return { error: (error as Error)?.message || String(error) };
+    return { error: errMsg(error) };
   }
 }
 
@@ -3729,7 +3744,7 @@ function startApiServer() {
         return json(res, 404, { error: "not found" });
       } catch (err) {
         console.error("[API] erro:", err);
-        return json(res, 500, { error: String(err) });
+        return json(res, 500, { error: errMsg(err) });
       }
     })
     .listen(port, () => console.log(`[API] motor ouvindo na porta ${port}`));
