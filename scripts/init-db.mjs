@@ -974,6 +974,21 @@ DO $$ BEGIN
       AND NOT EXISTS (SELECT 1 FROM card_machines c WHERE c.account_id = a.id);
     INSERT INTO app_migrations (key) VALUES ('seed-card-machine-v1');
   END IF;
+  -- Taxas novas da Cielo (out/2026, Recebimento Automático, até 18x) na conta Master (tabela padrão)
+  IF NOT EXISTS (SELECT 1 FROM app_migrations WHERE key = 'cielo-rates-2026-10') THEN
+    UPDATE card_machines c SET name = 'Cielo Visa/Master', debit_rate = 0.99, rates = '[3.00,3.74,4.33,4.90,5.49,6.04,6.90,7.54,8.09,8.72,9.24,9.86,10.98,11.60,12.22,12.84,13.46,14.08]'::jsonb, updated_at = now()
+      FROM accounts a WHERE a.id = c.account_id AND a.type = 'MASTER' AND c.name IN ('Mastercard', 'Cielo Visa/Master');
+    INSERT INTO card_machines (account_id, name, color, debit_rate, rates, sort)
+    SELECT a.id, 'Cielo Visa/Master', '#0f172a', 0.99, '[3.00,3.74,4.33,4.90,5.49,6.04,6.90,7.54,8.09,8.72,9.24,9.86,10.98,11.60,12.22,12.84,13.46,14.08]'::jsonb, 0 FROM accounts a
+      WHERE a.type = 'MASTER' AND NOT EXISTS (SELECT 1 FROM card_machines c WHERE c.account_id = a.id AND c.name = 'Cielo Visa/Master');
+    INSERT INTO card_machines (account_id, name, color, debit_rate, rates, sort)
+    SELECT a.id, m.name, m.color, m.debit, m.rates::jsonb, m.sort FROM accounts a
+      CROSS JOIN (VALUES ('Cielo Elo', '#b45309', 2.00::double precision, '[4.43,5.39,5.98,6.55,7.14,7.69,8.55,9.19,9.74,10.37,10.89,11.51,12.63,13.25,13.87,14.49,15.11,15.73]', 1),
+                         ('Cielo Amex', '#1d4ed8', NULL::double precision, '[5.38,6.34,6.93,7.50,8.09,8.64,9.50,10.14,10.69,11.32,11.84,12.46,13.58,14.20,14.82,15.44,16.06,16.68]', 2),
+                         ('Cielo Diners', '#475569', NULL::double precision, '[4.88,7.25,7.84,8.41,9.00,9.55,10.13,10.77,11.32,11.95,12.47,13.09]', 3)) AS m(name, color, debit, rates, sort)
+      WHERE a.type = 'MASTER' AND NOT EXISTS (SELECT 1 FROM card_machines c WHERE c.account_id = a.id AND c.name = m.name);
+    INSERT INTO app_migrations (key) VALUES ('cielo-rates-2026-10');
+  END IF;
 END $$;
 `;
 
