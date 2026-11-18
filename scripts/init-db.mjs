@@ -943,6 +943,9 @@ ALTER TABLE funnels ADD COLUMN IF NOT EXISTS seller_ids jsonb NOT NULL DEFAULT '
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS seller_reminder_minutes integer NOT NULL DEFAULT 30;
 ALTER TABLE appointments ADD COLUMN IF NOT EXISTS seller_notified_at timestamptz;
 ALTER TABLE appointments ADD COLUMN IF NOT EXISTS seller_reminder_sent_at timestamptz;
+-- Repostar: repete a postagem a cada N dias, X vezes
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS repeat_days integer NOT NULL DEFAULT 0;
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS repeat_left integer NOT NULL DEFAULT 0;
 
 -- Migrações que rodam uma única vez
 CREATE TABLE IF NOT EXISTS app_migrations (key varchar(80) PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now());

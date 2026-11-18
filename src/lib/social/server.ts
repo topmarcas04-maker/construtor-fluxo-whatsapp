@@ -39,5 +39,8 @@ export async function readPostBody(accountId: string, body: Record<string, unkno
     if (d.getTime() > Date.now() + 75 * 86400_000) return { error: "Agende para no máximo 75 dias à frente." };
     scheduledAt = d;
   }
-  return { values: { connectionId: conn.id, format, toInstagram, toFacebook, caption, media, scheduledAt } };
+  // Repostar a cada N dias (1 a 90), X vezes (1 a 52)
+  const repeatDays = Math.max(0, Math.min(90, Math.round(Number(body.repeatDays) || 0)));
+  const repeatLeft = repeatDays ? Math.max(1, Math.min(52, Math.round(Number(body.repeatTimes) || 1))) : 0;
+  return { values: { connectionId: conn.id, format, toInstagram, toFacebook, caption, media, scheduledAt, repeatDays, repeatLeft } };
 }

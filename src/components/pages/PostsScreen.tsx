@@ -21,6 +21,7 @@ import {
   Ban,
   Info,
   Loader2,
+  Repeat,
 } from "lucide-react";
 import { Page, PageHeader, Card, Button, Field, Select, Textarea, Input, Modal, ErrorNote } from "@/components/ui";
 import {
@@ -49,6 +50,8 @@ interface Post {
   results: Record<string, PostResult>;
   createdBy: string | null;
   publishedAt: string | null;
+  repeatDays?: number;
+  repeatLeft?: number;
 }
 interface Conn {
   id: string;
@@ -92,7 +95,7 @@ export function PostsScreen() {
   });
   const [data, setData] = useState<{ posts: Post[]; connections: Conn[]; storageReady: boolean; canConnect: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ post: Post | null; date?: Date } | null>(null);
+  const [editing, setEditing] = useState<{ post: Post | null; date?: Date; copy?: Post } | null>(null);
 
   const load = useCallback(async () => {
     const from = new Date(month.getFullYear(), month.getMonth(), 1 - 7);
@@ -246,6 +249,7 @@ export function PostsScreen() {
                           title={`${FORMAT_LABEL[p.format]} · ${STATUS_LABEL[p.status]}`}
                         >
                           <Icon size={11} className="shrink-0" />
+                          {(p.repeatDays ?? 0) > 0 && <Repeat size={10} className="shrink-0" />}
                           {fmtTime(p.scheduledAt)}
                           <span className="truncate font-normal">{p.caption || FORMAT_LABEL[p.format]}</span>
                         </button>
@@ -295,6 +299,8 @@ export function PostsScreen() {
         <PostEditor
           post={editing.post}
           date={editing.date}
+          copy={editing.copy}
+          onRepost={(p) => setEditing({ post: null, copy: p })}
           connections={data.connections}
           onClose={() => setEditing(null)}
           onSaved={() => {
@@ -310,24 +316,32 @@ export function PostsScreen() {
 function PostEditor({
   post,
   date,
+  copy,
+  onRepost,
   connections,
   onClose,
   onSaved,
 }: {
   post: Post | null;
   date?: Date;
+  /** Repostar: nova postagem com os dados desta */
+  copy?: Post;
+  onRepost: (p: Post) => void;
   connections: Conn[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const locked = Boolean(post && (post.status === "PUBLISHING" || post.status === "PUBLISHED" || post.status === "PARTIAL"));
-  const [connectionId, setConnectionId] = useState(post?.connectionId || connections[0]?.id || "");
+  const src = post || copy || null;
+  const [connectionId, setConnectionId] = useState(src?.connectionId || connections[0]?.id || "");
   const conn = connections.find((c) => c.id === connectionId) || null;
-  const [format, setFormat] = useState<PostFormat>(post?.format || "REEL");
-  const [toInstagram, setToInstagram] = useState(post ? post.toInstagram : Boolean(connections[0]?.hasInstagram));
-  const [toFacebook, setToFacebook] = useState(post ? post.toFacebook : true);
-  const [caption, setCaption] = useState(post?.caption || "");
-  const [media, setMedia] = useState<PostMedia[]>(post?.media || []);
+  const [format, setFormat] = useState<PostFormat>(src?.format || "REEL");
+  const [toInstagram, setToInstagram] = useState(src ? src.toInstagram : Boolean(connections[0]?.hasInstagram));
+  const [toFacebook, setToFacebook] = useState(src ? src.toFacebook : true);
+  const [caption, setCaption] = useState(src?.caption || "");
+  const [media, setMedia] = useState<PostMedia[]>(src?.media || []);
+  const [repeatDays, setRepeatDays] = useState(post?.repeatDays || 0);
+  const [repeatTimes, setRepeatTimes] = useState(post?.repeatLeft || 4);
   const [now, setNow] = useState(false);
   const [when, setWhen] = useState(() => toLocalInput(post ? new Date(post.scheduledAt) : date || new Date(Date.now() + 60 * 60_000)));
   const [busy, setBusy] = useState("");
@@ -409,7 +423,7 @@ function PostEditor({
     setBusy("save");
     setErr(null);
     try {
-      const body = { connectionId, format, toInstagram, toFacebook, caption, media, now, scheduledAt: now ? null : new Date(when).toISOString() };
+      const body = { connectionId, format, toInstagram, toFacebook, caption, media, now, scheduledAt: now ? null : new Date(when).toISOString(), repeatDays, repeatTimes };
       const r = await fetch(post ? `/api/posts/${post.id}` : "/api/posts", {
         method: post ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
@@ -452,7 +466,7 @@ function PostEditor({
     <Modal
       open
       wide
-      title={post ? (locked ? "Postagem" : "Editar postagem") : "Nova postagem"}
+      title={post ? (locked ? "Postagem" : "Editar postagem") : copy ? "Repostar" : "Nova postagem"}
       onClose={onClose}
       footer={
         <div className="flex w-full flex-wrap items-center justify-between gap-2">
@@ -474,6 +488,11 @@ function PostEditor({
             )}
           </div>
           <div className="flex gap-2">
+            {post && post.status !== "PUBLISHING" && (
+              <Button variant="secondary" onClick={() => onRepost(post)} disabled={Boolean(busy)}>
+                <Repeat size={15} /> Repostar
+              </Button>
+            )}
             <Button variant="secondary" onClick={onClose}>
               Fechar
             </Button>
@@ -492,6 +511,11 @@ function PostEditor({
           <div className={`rounded-xl border px-3 py-2 text-sm ${STATUS_STYLE[post.status]}`}>
             <b>{STATUS_LABEL[post.status]}</b>
             {post.publishedAt ? ` em ${fmtDateTime(post.publishedAt)}` : ""}
+            {(post.repeatDays ?? 0) > 0 && (
+              <span className="mt-0.5 flex items-center gap-1 text-xs">
+                <Repeat size={12} /> Repete a cada {post.repeatDays} {post.repeatDays === 1 ? "dia" : "dias"} · {post.repeatLeft === 1 ? "falta 1 vez" : `faltam ${post.repeatLeft} vezes`}
+              </span>
+            )}
             {results.length > 0 && (
               <ul className="mt-1 space-y-0.5 text-xs">
                 {results.map(([net, r]) => (
@@ -666,6 +690,36 @@ function PostEditor({
               </label>
             </div>
             <p className="mt-1 text-xs text-slate-400">O sistema confere a fila a cada 30 segundos. Vídeos podem levar alguns minutos para a Meta processar.</p>
+          </div>
+        )}
+
+        {!locked && (
+          <div>
+            <span className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold text-slate-800">
+              <Repeat size={15} /> Repostar
+            </span>
+            <div className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
+              <Select value={String(repeatDays)} onChange={(e) => setRepeatDays(Number(e.target.value))} className="max-w-[200px]">
+                <option value="0">Não repetir</option>
+                {[1, 2, 3, 5, 7, 10, 14, 15, 21, 30].map((n) => (
+                  <option key={n} value={n}>
+                    A cada {n} {n === 1 ? "dia" : "dias"}
+                  </option>
+                ))}
+              </Select>
+              {repeatDays > 0 && (
+                <>
+                  <span>por mais</span>
+                  <Input type="number" min={1} max={52} value={repeatTimes} onChange={(e) => setRepeatTimes(Math.max(1, Math.min(52, Number(e.target.value) || 1)))} className="w-20" />
+                  <span>{repeatTimes === 1 ? "vez" : "vezes"}</span>
+                </>
+              )}
+            </div>
+            {repeatDays > 0 && (
+              <p className="mt-1 text-xs text-slate-400">
+                Depois de publicada, a mesma postagem é agendada de novo {repeatDays === 1 ? "no dia seguinte" : `${repeatDays} dias depois`}, no mesmo horário, até completar {repeatTimes} {repeatTimes === 1 ? "repostagem" : "repostagens"}.
+              </p>
+            )}
           </div>
         )}
 

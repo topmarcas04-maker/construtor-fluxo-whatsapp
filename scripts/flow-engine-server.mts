@@ -1158,6 +1158,27 @@ async function processSocialPosts() {
         }
       }
       await finish(ok === want ? "PUBLISHED" : ok ? "PARTIAL" : "ERROR", ok ? { publishedAt: new Date() } : {});
+      // Repostar: agenda a próxima vez (mesma página, formato, arquivos e legenda)
+      if (ok && post.repeatDays > 0 && post.repeatLeft > 0) {
+        const step = post.repeatDays * 86400_000;
+        let next = new Date(post.scheduledAt).getTime() + step;
+        while (next < Date.now() + 60_000) next += step;
+        await db.insert(sp).values({
+          accountId: post.accountId,
+          connectionId: post.connectionId,
+          format: post.format,
+          toInstagram: post.toInstagram,
+          toFacebook: post.toFacebook,
+          caption: post.caption,
+          media: post.media,
+          scheduledAt: new Date(next),
+          status: "SCHEDULED",
+          repeatDays: post.repeatDays,
+          repeatLeft: post.repeatLeft - 1,
+          createdBy: post.createdBy,
+        });
+        console.log(`${tag} repostagem agendada para ${new Date(next).toISOString()} (faltam ${post.repeatLeft - 1})`);
+      }
     }
   } catch (e) {
     console.error("[Postagens]", (e as Error)?.message || e);

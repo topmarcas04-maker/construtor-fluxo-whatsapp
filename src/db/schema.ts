@@ -940,6 +940,9 @@ export const socialPosts = pgTable(
     /** Resultado por rede: { instagram: { id, permalink, error }, facebook: {...} } */
     results: jsonb("results").$type<Record<string, { id?: string; permalink?: string; error?: string }>>().notNull().default({}),
     attempts: integer("attempts").notNull().default(0),
+    /** Repostar: a cada quantos dias (0 = não repete) e quantas vezes ainda faltam */
+    repeatDays: integer("repeat_days").notNull().default(0),
+    repeatLeft: integer("repeat_left").notNull().default(0),
     createdBy: varchar("created_by", { length: 150 }),
     publishedAt: timestamp("published_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
